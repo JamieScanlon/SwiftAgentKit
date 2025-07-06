@@ -1,0 +1,88 @@
+// swift-tools-version: 6.0
+// The swift-tools-version declares the minimum version of Swift required to build this package.
+
+import PackageDescription
+
+let package = Package(
+    name: "SwiftAgentKit",
+    platforms: [
+        .macOS(.v13),
+        .iOS(.v16)
+    ],
+    products: [
+        // Core library - always included
+        .library(
+            name: "SwiftAgentKit",
+            targets: ["SwiftAgentKit"]),
+        
+        // Optional sub-packages
+        .library(
+            name: "SwiftAgentKitA2A",
+            targets: ["SwiftAgentKitA2A"]),
+        .library(
+            name: "SwiftAgentKitMCP",
+            targets: ["SwiftAgentKitMCP"]),
+        .library(
+            name: "SwiftAgentKitIntercom",
+            targets: ["SwiftAgentKitIntercom"]),
+    ],
+    dependencies: [
+        // Core dependencies
+        .package(url: "https://github.com/vapor/vapor.git", from: "4.0.0"),
+        .package(url: "https://github.com/JamieScanlon/EasyJSON.git", from: "1.0.0"),
+        
+        // Optional dependencies for specific modules
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
+    ],
+    targets: [
+        // Core target - minimal functionality
+        .target(
+            name: "SwiftAgentKit",
+            dependencies: []),
+        
+        // A2A (Agent-to-Agent) module
+        .target(
+            name: "SwiftAgentKitA2A",
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "Vapor", package: "vapor"),
+                .product(name: "EasyJSON", package: "EasyJSON"),
+            ]),
+        
+        // MCP (Model Context Protocol) module
+        .target(
+            name: "SwiftAgentKitMCP",
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "NIO", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+            ]),
+        
+        // Intercommunication module
+        .target(
+            name: "SwiftAgentKitIntercom",
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "Vapor", package: "vapor"),
+                .product(name: "NIO", package: "swift-nio"),
+            ]),
+        
+        // Test targets
+        .testTarget(
+            name: "SwiftAgentKitTests",
+            dependencies: ["SwiftAgentKit"]
+        ),
+        .testTarget(
+            name: "SwiftAgentKitA2ATests",
+            dependencies: ["SwiftAgentKitA2A"]
+        ),
+        .testTarget(
+            name: "SwiftAgentKitMCPTests",
+            dependencies: ["SwiftAgentKitMCP"]
+        ),
+        .testTarget(
+            name: "SwiftAgentKitIntercomTests",
+            dependencies: ["SwiftAgentKitIntercom"]
+        ),
+    ]
+) 
