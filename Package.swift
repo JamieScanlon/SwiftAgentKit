@@ -23,9 +23,6 @@ let package = Package(
         .library(
             name: "SwiftAgentKitMCP",
             targets: ["SwiftAgentKitMCP"]),
-        .library(
-            name: "SwiftAgentKitIntercom",
-            targets: ["SwiftAgentKitIntercom"]),
         
         // Example executable
         .executable(
@@ -69,15 +66,6 @@ let package = Package(
                 .product(name: "EasyJSON", package: "EasyJSON"),
             ]),
         
-        // Intercommunication module
-        .target(
-            name: "SwiftAgentKitIntercom",
-            dependencies: [
-                "SwiftAgentKit",
-                .product(name: "Vapor", package: "vapor"),
-                .product(name: "NIO", package: "swift-nio"),
-            ]),
-        
         // Example executable
         .executableTarget(
             name: "BasicExample",
@@ -96,10 +84,6 @@ let package = Package(
         .testTarget(
             name: "SwiftAgentKitMCPTests",
             dependencies: ["SwiftAgentKitMCP"]
-        ),
-        .testTarget(
-            name: "SwiftAgentKitIntercomTests",
-            dependencies: ["SwiftAgentKitIntercom"]
         ),
     ]
 ) 

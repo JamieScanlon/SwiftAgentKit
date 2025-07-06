@@ -9,7 +9,6 @@ SwiftAgentKit is designed as a modular package that allows you to choose which c
 - **Core Module** (`SwiftAgentKit`) - Basic functionality and logging
 - **A2A Module** (`SwiftAgentKitA2A`) - Agent-to-Agent communication
 - **MCP Module** (`SwiftAgentKitMCP`) - Model Context Protocol support
-- **Intercom Module** (`SwiftAgentKitIntercom`) - Inter-agent communication
 
 ## Installation
 
@@ -74,21 +73,6 @@ let manager = SwiftAgentKitManager(config: config)
 // MCP functionality is now available
 ```
 
-#### Intercom Module
-
-```swift
-import SwiftAgentKit
-import SwiftAgentKitIntercom
-
-let config = SwiftAgentKitConfig(
-    enableLogging: true,
-    enableIntercom: true
-)
-
-let manager = SwiftAgentKitManager(config: config)
-// Intercom functionality is now available
-```
-
 ### Using Multiple Modules
 
 You can enable multiple modules at once:
@@ -97,18 +81,78 @@ You can enable multiple modules at once:
 import SwiftAgentKit
 import SwiftAgentKitA2A
 import SwiftAgentKitMCP
-import SwiftAgentKitIntercom
 
 let config = SwiftAgentKitConfig(
     enableLogging: true,
     logLevel: .debug,
     enableA2A: true,
-    enableMCP: true,
-    enableIntercom: true
+    enableMCP: true
 )
 
 let manager = SwiftAgentKitManager(config: config)
 // All modules are now available
+```
+
+---
+
+## MCP Module: Model Context Protocol
+
+The MCP module provides support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.org), enabling your agent to connect to and interact with MCP-compliant model servers, tools, and resources.
+
+### Key Types
+- **MCPClient**: Manages the connection to an MCP server, tool invocation, and resource access.
+- **MCPConfig**: Loads and parses configuration for MCP servers and environments.
+
+### Example: Loading MCP Config and Starting a Client
+
+```swift
+import SwiftAgentKitMCP
+
+// Load MCP config from a JSON file
+let configURL = URL(fileURLWithPath: "./mcp-config.json")
+let mcpConfig = try MCPConfigHelper.parseMCPConfig(fileURL: configURL)
+
+// Start a client for the first configured server
+let bootCall = mcpConfig.serverBootCalls.first!
+let client = MCPClient(bootCall: bootCall, version: "1.0.0")
+
+Task {
+    try await client.initializeMCPClient(config: mcpConfig)
+    print("MCP client connected!")
+}
+```
+
+### Example: Listing Tools and Calling a Tool
+
+```swift
+Task {
+    try await client.getTools()
+    print("Available tools: \(client.tools.map(\.name))")
+    
+    if let toolName = client.tools.first?.name {
+        let result = try await client.callTool(toolName)
+        print("Tool result: \(result ?? [])")
+    }
+}
+```
+
+### Example: Subscribing to Resource Updates
+
+```swift
+Task {
+    try await client.getResources()
+    if let resource = client.resources.first {
+        try await client.subscribeToResource(resource.uri)
+        print("Subscribed to resource: \(resource.uri)")
+    }
+}
+```
+
+### Logging
+All MCP operations use Swift's cross-platform `os.Logger` for structured logging. You can view logs using the macOS Console app or with:
+
+```
+log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact
 ```
 
 ---
@@ -211,13 +255,11 @@ SwiftAgentKit/
 ├── Sources/
 │   ├── SwiftAgentKit/           # Core functionality
 │   ├── SwiftAgentKitA2A/        # Agent-to-Agent communication
-│   ├── SwiftAgentKitMCP/        # Model Context Protocol
-│   └── SwiftAgentKitIntercom/   # Inter-agent communication
+│   └── SwiftAgentKitMCP/        # Model Context Protocol
 ├── Tests/
 │   ├── SwiftAgentKitTests/
 │   ├── SwiftAgentKitA2ATests/
-│   ├── SwiftAgentKitMCPTests/
-│   └── SwiftAgentKitIntercomTests/
+│   └── SwiftAgentKitMCPTests/
 └── Package.swift
 ```
 
@@ -225,8 +267,7 @@ SwiftAgentKit/
 
 - **Core**: No external dependencies
 - **A2A**: Vapor, EasyJSON
-- **MCP**: SwiftNIO
-- **Intercom**: Vapor, SwiftNIO
+- **MCP**: SwiftNIO, MCP SDK
 
 ## Requirements
 
