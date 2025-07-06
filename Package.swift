@@ -26,6 +26,11 @@ let package = Package(
         .library(
             name: "SwiftAgentKitIntercom",
             targets: ["SwiftAgentKitIntercom"]),
+        
+        // Example executable
+        .executable(
+            name: "BasicExample",
+            targets: ["BasicExample"]),
     ],
     dependencies: [
         // Core dependencies
@@ -67,6 +72,12 @@ let package = Package(
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "NIO", package: "swift-nio"),
             ]),
+        
+        // Example executable
+        .executableTarget(
+            name: "BasicExample",
+            dependencies: ["SwiftAgentKit"],
+            path: "Examples"),
         
         // Test targets
         .testTarget(
