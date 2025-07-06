@@ -111,6 +111,99 @@ let manager = SwiftAgentKitManager(config: config)
 // All modules are now available
 ```
 
+---
+
+## Networking Module
+
+SwiftAgentKit provides a modular networking layer for making HTTP requests, handling streaming responses, and working with Server-Sent Events (SSE). The networking code is organized under `Sources/SwiftAgentKit/Networking/` and is composed of the following main classes:
+
+- **RestAPIManager**: High-level interface for making requests, streaming, and SSE.
+- **RequestBuilder**: Constructs URLRequests from endpoints, parameters, and headers.
+- **ResponseValidator**: Validates HTTP responses and decodes data.
+- **StreamClient**: Handles streaming HTTP responses using Swift concurrency.
+- **SSEClient**: Handles Server-Sent Events (SSE) connections and event parsing.
+
+### Example: Basic Request
+
+```swift
+import SwiftAgentKit
+// If needed: import SwiftAgentKit.Networking
+
+let manager = RestAPIManager(baseURL: URL(string: "https://api.example.com")!)
+
+Task {
+    do {
+        let result: MyDecodableType = try await manager.request(
+            endpoint: "/data",
+            method: .get,
+            parameters: ["foo": "bar"],
+            headers: ["Authorization": "Bearer ..."]
+        )
+        print(result)
+    } catch {
+        print("Request failed: \(error)")
+    }
+}
+```
+
+### Example: Streaming Response
+
+```swift
+Task {
+    do {
+        for try await chunk in manager.stream(
+            endpoint: "/stream",
+            method: .get,
+            parameters: nil,
+            headers: nil
+        ) {
+            print("Received chunk: \(chunk)")
+        }
+    } catch {
+        print("Streaming failed: \(error)")
+    }
+}
+```
+
+### Example: Server-Sent Events (SSE)
+
+```swift
+Task {
+    do {
+        for try await event in manager.sse(
+            endpoint: "/sse",
+            parameters: nil,
+            headers: nil
+        ) {
+            print("Received SSE event: \(event)")
+        }
+    } catch {
+        print("SSE failed: \(error)")
+    }
+}
+```
+
+### Customizing Requests
+
+You can use `RequestBuilder` and `ResponseValidator` directly for advanced scenarios:
+
+```swift
+let builder = RequestBuilder(baseURL: URL(string: "https://api.example.com")!)
+let validator = ResponseValidator()
+
+let request = try builder.buildRequest(
+    endpoint: "/custom",
+    method: .post,
+    parameters: ["foo": "bar"],
+    headers: nil
+)
+
+let (data, response) = try await URLSession.shared.data(for: request)
+let decoded: MyDecodableType = try validator.validateAndDecode(data: data, response: response)
+```
+
+---
+
 ## Package Structure
 
 ```
