@@ -7,6 +7,7 @@
 
 import EasyJSON
 import Foundation
+import Logging
 import MCP
 import System
 import SwiftAgentKit
@@ -34,6 +35,7 @@ actor MCPClient {
     private(set) var tools: [Tool] = []
     private(set) var resources: [Resource] = []
     private(set) var prompts: [Prompt] = []
+    private let logger = Logger(label: "MCPClient")
     
     init(bootCall: MCPConfig.ServerBootCall, version: String, isStrict: Bool = false) {
         self.bootCall = bootCall
@@ -75,19 +77,19 @@ actor MCPClient {
         for item in content {
             switch item {
             case .text(let text):
-                print("Generated text: \(text)")
+                logger.info("Generated text: \(text)")
             case .image(_, let mimeType, let metadata):
                 if let width = metadata?["width"] as? Int,
                    let height = metadata?["height"] as? Int {
-                    print("Generated \(width)x\(height) image of type \(mimeType)")
+                    logger.info("Generated \(width)x\(height) image of type \(mimeType)")
                     // Save or display the image data
                 }
             case .audio(_, let mimeType):
-                print("Received audio data of type \(mimeType)")
+                logger.info("Received audio data of type \(mimeType)")
             case .resource(let uri, let mimeType, let text):
-                print("Received resource from \(uri) of type \(mimeType)")
+                logger.info("Received resource from \(uri) of type \(mimeType)")
                 if let text = text {
-                    print("Resource text: \(text)")
+                    logger.info("Resource text: \(text)")
                 }
             }
         }
@@ -113,11 +115,11 @@ actor MCPClient {
         // Register notification handler
         await client.onNotification(ResourceUpdatedNotification.self) { message in
             let uri = message.params.uri
-            print("Resource \(uri) updated with new content")
+            self.logger.info("Resource \(uri) updated with new content")
             
             // Fetch the updated resource content
             _ = try await self.client.readResource(uri: uri)
-            print("Updated resource content received")
+            self.logger.info("Updated resource content received")
         }
     }
     
@@ -215,7 +217,7 @@ actor ClientTransport: Transport {
         
         outPipe.fileHandleForReading.readabilityHandler = { pipeHandle in
             let data = pipeHandle.availableData
-            print(String(data: data, encoding: .utf8)!)
+            self.logger.debug("Received data: \(String(data: data, encoding: .utf8) ?? "")")
             self.messageContinuation.yield(data)
         }
     }

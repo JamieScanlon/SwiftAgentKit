@@ -1,5 +1,5 @@
 import Testing
-import os
+import Logging
 @testable import SwiftAgentKit
 
 @Suite("SwiftAgentKit Tests")
@@ -17,18 +17,16 @@ struct SwiftAgentKitTests {
             enableLogging: true,
             logLevel: .info,
             enableA2A: false,
-            enableMCP: false,
-            enableIntercom: false
+            enableMCP: false
         )
         let manager = SwiftAgentKitManager(config: config)
         #expect(manager.getConfig().enableA2A == false)
         #expect(manager.getConfig().enableMCP == false)
-        #expect(manager.getConfig().enableIntercom == false)
     }
     
     @Test("Logger Functionality")
     func testLoggerFunctionality() throws {
-        let logger = os.Logger(subsystem: "com.swiftagentkit", category: "TestLogger")
+        let logger = Logger(label: "TestLogger")
         // Logging output is not checked, just ensure no crash
         logger.info("Test info message")
         logger.debug("Test debug message")

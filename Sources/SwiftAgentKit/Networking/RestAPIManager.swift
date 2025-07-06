@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Logging
 
 public actor RestAPIManager {
     
@@ -16,6 +17,7 @@ public actor RestAPIManager {
     private let responseValidator: ResponseValidator
     private let streamClient: StreamClient
     private let sseClient: SSEClient
+    private let logger = Logger(label: "RestAPIManager")
     
     // MARK: - Initialization
     public init(baseURL: URL, configuration: URLSessionConfiguration = .default) {
@@ -162,9 +164,9 @@ public actor RestAPIManager {
  Task {
  do {
  let user: User = try await apiManager.request("/users/1")
- print("User: \(user)")
+ logger.info("User: \(user)")
  } catch {
- print("Error: \(error)")
+ logger.error("Error: \(error)")
  }
  }
  
@@ -172,9 +174,9 @@ public actor RestAPIManager {
  Task {
  let userStream = apiManager.streamRequest<User>("/users/stream")
  for await user in userStream {
- print("Received user: \(user)")
+ logger.info("Received user: \(user)")
  }
- print("Stream completed")
+ logger.info("Stream completed")
  }
  */
 

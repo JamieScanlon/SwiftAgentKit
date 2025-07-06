@@ -7,6 +7,7 @@
 
 import EasyJSON
 import Foundation
+import Logging
 import SwiftAgentKit
 
 // MARK: - Client Implementation
@@ -14,6 +15,7 @@ import SwiftAgentKit
 actor A2AClient {
     
     var agentCard: AgentCard?
+    private let logger = Logger(label: "A2AClient")
     
     // MARK: Lifecylce
     
@@ -41,13 +43,13 @@ actor A2AClient {
             Task.detached {
                 outPipe.fileHandleForReading.readabilityHandler = { pipeHandle in
                     let data = pipeHandle.availableData
-                    print(String(data: data, encoding: .utf8)!)
+                    self.logger.debug("Boot process output: \(String(data: data, encoding: .utf8) ?? "")")
                 }
             }
         }
         
         apiManager = RestAPIManager(baseURL: server.url)
-        print("A2A Server \(server.name) at \(server.url)")
+        logger.info("A2A Server \(server.name) at \(server.url)")
         
         if shouldWait {
             var secondsToWait = 30
@@ -55,7 +57,7 @@ actor A2AClient {
                 do {
                     agentCard = try await getAgentCard()
                 } catch {
-                    print("Waiting for A2A server to come up... \(secondsToWait)")
+                    logger.debug("Waiting for A2A server to come up... \(secondsToWait)")
                 }
                 secondsToWait -= 1
                 try? await Task.sleep(for: .seconds(1))
@@ -434,11 +436,11 @@ enum A2AClientError: Error, LocalizedError {
  Task {
      do {
          let agentCard = try await client.getAgentCard()
-         print("Agent: \(agentCard.name)")
-         print("Description: \(agentCard.description)")
-         print("Skills: \(agentCard.skills.map { $0.name })")
+         logger.info("Agent: \(agentCard.name)")
+         logger.info("Description: \(agentCard.description)")
+         logger.info("Skills: \(agentCard.skills.map { $0.name })")
      } catch {
-         print("Error getting agent card: \(error)")
+         logger.error("Error getting agent card: \(error)")
      }
  }
  
@@ -455,16 +457,16 @@ enum A2AClientError: Error, LocalizedError {
          let result = try await client.sendMessage(params: params)
          switch result {
          case .message(let message):
-             print("Received message: \(message)")
+             logger.info("Received message: \(message)")
          case .task(let task):
-             print("Task created: \(task.id)")
+             logger.info("Task created: \(task.id)")
          case .taskStatusUpdate(let update):
-             print("Status update: \(update.status.state)")
+             logger.info("Status update: \(update.status.state)")
          case .taskArtifactUpdate(let update):
-             print("Artifact update: \(update.artifact.name ?? "unnamed")")
+             logger.info("Artifact update: \(update.artifact.name ?? "unnamed")")
          }
      } catch {
-         print("Error sending message: \(error)")
+         logger.error("Error sending message: \(error)")
      }
  }
  
@@ -480,10 +482,10 @@ enum A2AClientError: Error, LocalizedError {
          
          let stream = try await client.streamMessage(params: params)
          for await response in stream {
-             print("Stream response: \(response.result)")
+             logger.info("Stream response: \(response.result)")
          }
      } catch {
-         print("Error streaming: \(error)")
+         logger.error("Error streaming: \(error)")
      }
  }
  */

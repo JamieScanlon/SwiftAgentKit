@@ -315,7 +315,7 @@ The A2A module uses a JSON configuration file to define servers and boot calls:
 ```
 
 ### Logging
-All A2A operations use Swift's cross-platform `os.Logger` for structured logging. You can view logs using the macOS Console app or with:
+All A2A operations use Swift Logging for structured logging. You can view logs using the macOS Console app or with:
 
 ```
 log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact
@@ -377,7 +377,7 @@ Task {
 ```
 
 ### Logging
-All MCP operations use Swift's cross-platform `os.Logger` for structured logging. You can view logs using the macOS Console app or with:
+All MCP operations use Swift Logging for structured logging. You can view logs using the macOS Console app or with:
 
 ```
 log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact

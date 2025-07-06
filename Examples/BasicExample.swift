@@ -1,9 +1,11 @@
 import Foundation
+import Logging
 import SwiftAgentKit
 
 // Example: Basic SwiftAgentKit usage
 func basicExample() {
-    print("=== SwiftAgentKit Basic Example ===")
+    let logger = Logger(label: "BasicExample")
+    logger.info("=== SwiftAgentKit Basic Example ===")
     
     // Initialize with default configuration
     let manager = SwiftAgentKitManager()
@@ -15,28 +17,27 @@ func basicExample() {
     
     // Get configuration
     let config = manager.getConfig()
-    print("A2A enabled: \(config.enableA2A)")
-    print("MCP enabled: \(config.enableMCP)")
-    print("Intercom enabled: \(config.enableIntercom)")
+    logger.info("A2A enabled: \(config.enableA2A)")
+    logger.info("MCP enabled: \(config.enableMCP)")
 }
 
 // Example: Custom configuration
 func customConfigExample() {
-    print("\n=== SwiftAgentKit Custom Configuration Example ===")
+    let logger = Logger(label: "CustomConfigExample")
+    logger.info("=== SwiftAgentKit Custom Configuration Example ===")
     
     let config = SwiftAgentKitConfig(
         enableLogging: true,
         logLevel: .debug,
         enableA2A: true,
-        enableMCP: false,
-        enableIntercom: true
+        enableMCP: false
     )
     
     let manager = SwiftAgentKitManager(config: config)
-    let logger = manager.getLogger()
+    let managerLogger = manager.getLogger()
     
-    logger.info("Custom configuration applied")
-    logger.debug("Debug logging is enabled")
+    managerLogger.info("Custom configuration applied")
+    managerLogger.debug("Debug logging is enabled")
 }
 
 // Run examples

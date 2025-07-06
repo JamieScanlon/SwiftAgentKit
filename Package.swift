@@ -34,6 +34,9 @@ let package = Package(
         .package(url: "https://github.com/vapor/vapor.git", from: "4.0.0"),
         .package(url: "https://github.com/JamieScanlon/EasyJSON.git", from: "1.0.0"),
         
+        // Logging dependency
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.0.0"),
+        
         // Optional dependencies for specific modules
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
         
@@ -44,7 +47,9 @@ let package = Package(
         // Core target - minimal functionality
         .target(
             name: "SwiftAgentKit",
-            dependencies: []),
+            dependencies: [
+                .product(name: "Logging", package: "swift-log"),
+            ]),
         
         // A2A (Agent-to-Agent) module
         .target(
@@ -53,6 +58,7 @@ let package = Package(
                 "SwiftAgentKit",
                 .product(name: "Vapor", package: "vapor"),
                 .product(name: "EasyJSON", package: "EasyJSON"),
+                .product(name: "Logging", package: "swift-log"),
             ]),
         
         // MCP (Model Context Protocol) module
@@ -64,12 +70,16 @@ let package = Package(
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "EasyJSON", package: "EasyJSON"),
+                .product(name: "Logging", package: "swift-log"),
             ]),
         
         // Example executable
         .executableTarget(
             name: "BasicExample",
-            dependencies: ["SwiftAgentKit"],
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "Logging", package: "swift-log"),
+            ],
             path: "Examples"),
         
         // Test targets

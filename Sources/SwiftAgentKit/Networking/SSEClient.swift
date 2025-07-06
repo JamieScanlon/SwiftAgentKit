@@ -1,7 +1,10 @@
 import Foundation
+import Logging
 
 public struct SSEClient {
     private let baseURL: URL
+    private let logger = Logger(label: "SSEClient")
+    
     public init(baseURL: URL) {
         self.baseURL = baseURL
     }
@@ -23,15 +26,16 @@ public struct SSEClient {
                 do {
                     request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
                 } catch {
-                    print("SSE Error: Failed to serialize parameters: \(error)")
+                    self.logger.error("SSE Error: Failed to serialize parameters: \(error)")
                     continuation.finish()
                     return
                 }
             }
             let session = URLSession.shared
+            let logger = self.logger
             let task = session.dataTask(with: request) { data, response, error in
                 if let error = error {
-                    print("SSE Error: \(error)")
+                    logger.error("SSE Error: \(error)")
                     continuation.finish()
                     return
                 }
