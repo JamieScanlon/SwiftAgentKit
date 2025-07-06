@@ -7,7 +7,8 @@ let package = Package(
     name: "SwiftAgentKit",
     platforms: [
         .macOS(.v13),
-        .iOS(.v16)
+        .iOS(.v16),
+        .visionOS(.v1)
     ],
     products: [
         // Core library - always included

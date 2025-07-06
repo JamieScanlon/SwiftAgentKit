@@ -19,7 +19,7 @@ Add SwiftAgentKit to your `Package.swift` dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/yourusername/SwiftAgentKit.git", from: "1.0.0")
+    .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "1.0.0")
 ]
 ```
 
@@ -139,6 +139,7 @@ SwiftAgentKit/
 
 - macOS 13.0+
 - iOS 16.0+
+- visionOS 1.0+
 - Swift 6.0+
 
 ## License

@@ -7,9 +7,9 @@
 
 import Foundation
 
-struct Shell {
+public struct Shell {
     
-    static func shell(_ command: String, environment: [String: String] = [:]) -> (inPipe: Pipe, outPipe: Pipe) {
+    public static func shell(_ command: String, environment: [String: String] = [:]) -> (inPipe: Pipe, outPipe: Pipe) {
         let task = Process()
         let inPipe = Pipe()
         let outPipe = Pipe()
@@ -30,7 +30,7 @@ struct Shell {
         return (inPipe: inPipe, outPipe: outPipe)
     }
     
-    static func shell(_ command: String, arguments: [String] = [], environment: [String: String] = [:]) -> (inPipe: Pipe, outPipe: Pipe) {
+    public static func shell(_ command: String, arguments: [String] = [], environment: [String: String] = [:]) -> (inPipe: Pipe, outPipe: Pipe) {
         let task = Process()
         let inPipe = Pipe()
         let outPipe = Pipe()

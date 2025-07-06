@@ -7,6 +7,7 @@
 
 import EasyJSON
 import Foundation
+import SwiftAgentKit
 
 // MARK: - Client Implementation
 
