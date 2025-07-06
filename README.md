@@ -97,7 +97,7 @@ let manager = SwiftAgentKitManager(config: config)
 
 ## A2A Module: Agent-to-Agent Communication
 
-The A2A module provides support for the [Agent-to-Agent (A2A) protocol](https://github.com/modelcontextprotocol/a2a), enabling your agent to communicate with other A2A-compliant agents and servers. This module includes both client and server implementations.
+The A2A module provides support for the [Agent-to-Agent (A2A) protocol](https://a2aproject.github.io/A2A/v0.2.5/specification/), enabling your agent to communicate with other A2A-compliant agents and servers. This module includes both client and server implementations.
 
 ### Key Types
 - **A2AClient**: Connects to and communicates with A2A servers
