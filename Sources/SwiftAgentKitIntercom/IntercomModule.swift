@@ -3,10 +3,10 @@ import os
 
 /// Intercommunication module for SwiftAgentKit
 public struct IntercomModule {
-    private let logger: Logger
+    private let logger: os.Logger
     
-    public init(logger: Logger? = nil) {
-        self.logger = logger ?? Logger(subsystem: "com.swiftagentkit", category: "IntercomModule")
+    public init(logger: os.Logger? = nil) {
+        self.logger = logger ?? os.Logger(subsystem: "com.swiftagentkit", category: "IntercomModule")
         self.logger.info("Intercom module initialized")
     }
     

@@ -3,65 +3,23 @@ import os
 
 /// SwiftAgentKit - A comprehensive toolkit for building local AI agents in Swift
 public struct SwiftAgentKit {
-    private let logger: Logger
+    private let logger: os.Logger
     
-    public init(logger: Logger? = nil) {
-        self.logger = logger ?? Logger(subsystem: "com.swiftagentkit", category: "SwiftAgentKit")
+    public init(logger: os.Logger? = nil) {
+        self.logger = logger ?? os.Logger(subsystem: "com.swiftagentkit", category: "SwiftAgentKit")
     }
     
     /// Get the version of SwiftAgentKit
     public static let version = "1.0.0"
     
     /// Get the logger instance
-    public func getLogger() -> Logger {
+    public func getLogger() -> os.Logger {
         return logger
     }
     
     /// Log a message with the default logger
     public func log(_ message: String, level: OSLogType = .info) {
         logger.log(level: level, "\(message)")
-    }
-}
-
-/// Logger wrapper using os.Logger for better system integration
-public struct Logger {
-    private let osLogger: os.Logger
-    
-    public init(subsystem: String, category: String) {
-        self.osLogger = os.Logger(subsystem: subsystem, category: category)
-    }
-    
-    public init(label: String) {
-        // For backward compatibility, create a logger with a default subsystem
-        self.osLogger = os.Logger(subsystem: "com.swiftagentkit", category: label)
-    }
-    
-    public func log(level: OSLogType, _ message: String) {
-        osLogger.log(level: level, "\(message)")
-    }
-    
-    public func info(_ message: String) {
-        osLogger.info("\(message)")
-    }
-    
-    public func debug(_ message: String) {
-        osLogger.debug("\(message)")
-    }
-    
-    public func warning(_ message: String) {
-        osLogger.warning("\(message)")
-    }
-    
-    public func error(_ message: String) {
-        osLogger.error("\(message)")
-    }
-    
-    public func notice(_ message: String) {
-        osLogger.notice("\(message)")
-    }
-    
-    public func critical(_ message: String) {
-        osLogger.critical("\(message)")
     }
 }
 
@@ -91,12 +49,12 @@ public struct SwiftAgentKitConfig {
 /// Main SwiftAgentKit manager class
 public class SwiftAgentKitManager {
     private let config: SwiftAgentKitConfig
-    private let logger: Logger
+    private let logger: os.Logger
     private let core: SwiftAgentKit
     
     public init(config: SwiftAgentKitConfig = SwiftAgentKitConfig()) {
         self.config = config
-        self.logger = Logger(label: "SwiftAgentKitManager")
+        self.logger = os.Logger(subsystem: "com.swiftagentkit", category: "SwiftAgentKitManager")
         self.core = SwiftAgentKit(logger: logger)
         
         logger.info("SwiftAgentKit initialized with version \(SwiftAgentKit.version)")
@@ -125,7 +83,7 @@ public class SwiftAgentKitManager {
     }
     
     /// Get the logger
-    public func getLogger() -> Logger {
+    public func getLogger() -> os.Logger {
         return logger
     }
 } 

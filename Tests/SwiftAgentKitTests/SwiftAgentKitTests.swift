@@ -1,4 +1,5 @@
 import Testing
+import os
 @testable import SwiftAgentKit
 
 @Suite("SwiftAgentKit Tests")
@@ -27,8 +28,7 @@ struct SwiftAgentKitTests {
     
     @Test("Logger Functionality")
     func testLoggerFunctionality() throws {
-        let logger = Logger(label: "TestLogger")
-        #expect(logger != nil)
+        let logger = os.Logger(subsystem: "com.swiftagentkit", category: "TestLogger")
         // Logging output is not checked, just ensure no crash
         logger.info("Test info message")
         logger.debug("Test debug message")

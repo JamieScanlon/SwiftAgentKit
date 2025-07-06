@@ -39,6 +39,9 @@ let package = Package(
         
         // Optional dependencies for specific modules
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
+        
+        // MCP dependency
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
     ],
     targets: [
         // Core target - minimal functionality
@@ -62,6 +65,8 @@ let package = Package(
                 "SwiftAgentKit",
                 .product(name: "NIO", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "MCP", package: "swift-sdk"),
+                .product(name: "EasyJSON", package: "EasyJSON"),
             ]),
         
         // Intercommunication module
