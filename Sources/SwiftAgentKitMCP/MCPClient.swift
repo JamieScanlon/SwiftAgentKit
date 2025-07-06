@@ -1,6 +1,6 @@
 //
 //  MCPClient.swift
-//  SileniaAIServer
+//  SwiftAgentKit
 //
 //  Created by Marvin Scanlon on 5/17/25.
 //
@@ -11,7 +11,7 @@ import MCP
 import System
 import SwiftAgentKit
 
-/// `SileniaAIServer` acts as a MCP host. As defined in the MCP spec, MCP clients maintain 1:1 connections with servers, inside the MCP host application
+/// MCP clients maintain 1:1 connections with servers, inside the MCP host application
 actor MCPClient {
     
     enum Transport {

@@ -1,6 +1,6 @@
 //
 //  A2AModels.swift
-//  SileniaAIServer
+//  SwiftAgentKit
 //
 //  Created by Marvin Scanlon on 6/13/25.
 //

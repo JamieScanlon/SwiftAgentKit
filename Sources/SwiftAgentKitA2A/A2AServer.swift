@@ -14,7 +14,7 @@ public protocol AgentAdapter: Sendable {
 }
 //
 //  A2AServer.swift
-//  SileniaAIServer
+//  SwiftAgentKit
 //
 //  Created by Marvin Scanlon on 6/13/25.
 //
@@ -72,7 +72,7 @@ public actor A2AServer {
         app.routes.defaultMaxBodySize = "100mb"
         
         // Enable TLS.
-        //        let resourcesURL = Bundle(for: Self.self).resourceURL?.appending(path: "SileniaAIServer_SileniaAIServer.bundle/Contents/Resources/")
+        //        let resourcesURL = Bundle(for: Self.self).resourceURL?.appending(path: "SwiftAgentKit_SwiftAgentKit.bundle/Contents/Resources/")
         //        app.http.server.configuration.tlsConfiguration = .makeServerConfiguration(
         //            certificateChain: try NIOSSLCertificate.fromPEMFile(resourcesURL!.appending(path: "myCA.pem").path()).map { .certificate($0) },
         //            privateKey: .privateKey(try NIOSSLPrivateKey(file: resourcesURL!.appending(path: "converted.pem").path(), format: .pem))
