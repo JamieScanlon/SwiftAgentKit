@@ -18,8 +18,51 @@ Add SwiftAgentKit to your `Package.swift` dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.1.0")
+    .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.1.1")
 ]
+```
+
+## Importing SwiftAgentKit Modules
+
+SwiftAgentKit is modular. You can import only the modules you need in your own project. Here's how to set up your `Package.swift` and import each module:
+
+### 1. Add the Package Dependency
+
+Add this to your dependencies (replace the version with the latest tag, e.g. `0.1.1`):
+
+```swift
+.package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.1.1")
+```
+
+### 2. Add Module Products to Your Target
+
+In your target's dependencies, add the products you want to use:
+
+| Module Name         | Product Dependency Example                        | Import Statement         |
+|---------------------|---------------------------------------------------|--------------------------|
+| Core                | .product(name: "SwiftAgentKit", package: "SwiftAgentKit")   | import SwiftAgentKit     |
+| A2A                 | .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit") | import SwiftAgentKitA2A  |
+| MCP                 | .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit") | import SwiftAgentKitMCP  |
+
+Example target configuration:
+
+```swift
+.target(
+    name: "YourTarget",
+    dependencies: [
+        .product(name: "SwiftAgentKit", package: "SwiftAgentKit"),      // Core
+        .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit"),  // A2A (optional)
+        .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit"),  // MCP (optional)
+    ]
+)
+```
+
+### 3. Import in Your Swift Files
+
+```swift
+import SwiftAgentKit         // Always needed for core
+import SwiftAgentKitA2A      // If using A2A features
+import SwiftAgentKitMCP      // If using MCP features
 ```
 
 ## Usage
