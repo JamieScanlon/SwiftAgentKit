@@ -18,7 +18,7 @@ Add SwiftAgentKit to your `Package.swift` dependencies:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.1.1")
+    .package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.1.2")
 ]
 ```
 
@@ -28,10 +28,10 @@ SwiftAgentKit is modular. You can import only the modules you need in your own p
 
 ### 1. Add the Package Dependency
 
-Add this to your dependencies (replace the version with the latest tag, e.g. `0.1.1`):
+Add this to your dependencies (replace the version with the latest tag, e.g. `0.1.2`):
 
 ```swift
-.package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.1.1")
+.package(url: "https://github.com/JamieScanlon/SwiftAgentKit.git", from: "0.1.2")
 ```
 
 ### 2. Add Module Products to Your Target
@@ -206,6 +206,47 @@ Task {
     }
 }
 ```
+
+### Configuration File Format
+
+The MCP module uses a JSON configuration file to define MCP servers and environments:
+
+```json
+{
+  "mcpServers": {
+    "example-server": {
+      "command": "/usr/local/bin/example-mcp-server",
+      "args": ["--port", "4242"],
+      "env": {
+        "API_KEY": "your-api-key",
+        "MODEL": "gpt-4",
+        "LOG_LEVEL": "info"
+      }
+    },
+    "another-server": {
+      "command": "/path/to/another/server",
+      "args": ["--config", "/path/to/config.json"],
+      "env": {
+        "DATABASE_URL": "postgresql://localhost:5432/mcp",
+        "CACHE_ENABLED": "true"
+      }
+    }
+  },
+  "globalEnv": {
+    "LOG_LEVEL": "info",
+    "ENVIRONMENT": "development",
+    "TIMEOUT": "30"
+  }
+}
+```
+
+### Configuration Fields
+
+- **mcpServers**: Object containing server configurations
+  - **command**: Path to the MCP server executable
+  - **args**: Array of command-line arguments for the server
+  - **env**: Environment variables specific to this server
+- **globalEnv**: Environment variables shared across all servers
 
 ### Logging
 All MCP operations use Swift Logging for structured logging. You can view logs using the macOS Console app or with:
