@@ -1,6 +1,6 @@
 //
 //  Shell.swift
-//  SileniaAI
+//  SwiftAgentKit
 //
 //  Created by Marvin Scanlon on 4/12/25.
 //

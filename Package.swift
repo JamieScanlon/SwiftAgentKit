@@ -24,10 +24,16 @@ let package = Package(
             name: "SwiftAgentKitMCP",
             targets: ["SwiftAgentKitMCP"]),
         
-        // Example executable
+        // Example executables
         .executable(
             name: "BasicExample",
             targets: ["BasicExample"]),
+        .executable(
+            name: "MCPExample",
+            targets: ["MCPExample"]),
+        .executable(
+            name: "A2AExample",
+            targets: ["A2AExample"]),
     ],
     dependencies: [
         // Core dependencies
@@ -73,14 +79,32 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ]),
         
-        // Example executable
+        // Example executables
         .executableTarget(
             name: "BasicExample",
             dependencies: [
                 "SwiftAgentKit",
                 .product(name: "Logging", package: "swift-log"),
             ],
-            path: "Examples"),
+            path: "Examples/BasicExample"),
+        
+        .executableTarget(
+            name: "MCPExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitMCP",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/MCPExample"),
+        
+        .executableTarget(
+            name: "A2AExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitA2A",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/A2AExample"),
         
         // Test targets
         .testTarget(

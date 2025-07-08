@@ -9,11 +9,10 @@ func basicExample() {
     
     // Initialize with default configuration
     let manager = SwiftAgentKitManager()
-    let core = manager.getCore()
     
     // Log some messages
-    core.log("Hello from SwiftAgentKit!")
-    core.log("Version: \(SwiftAgentKit.version)")
+    manager.log("Hello from SwiftAgentKit!")
+    manager.log("Version: \(swiftAgentKitVersion)")
     
     // Get configuration
     let config = manager.getConfig()

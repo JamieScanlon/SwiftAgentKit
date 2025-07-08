@@ -80,8 +80,7 @@ let config = SwiftAgentKitConfig(
 )
 
 let manager = SwiftAgentKitManager(config: config)
-let core = manager.getCore()
-core.log("SwiftAgentKit initialized!")
+manager.log("SwiftAgentKit initialized!")
 ```
 
 ### Using Optional Modules
@@ -138,17 +137,113 @@ let manager = SwiftAgentKitManager(config: config)
 
 ---
 
+## MCP Module: Model Context Protocol
+
+The MCP module provides support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.org), enabling your agent to connect to and interact with MCP-compliant model servers, tools, and resources.
+
+### Key Types
+- **MCPManager**: Manages multiple MCP clients and tool calls. Now requires a config file URL provided by the consumer.
+- **MCPClient**: Manages the connection to an MCP server, tool invocation, and resource access.
+- **MCPConfig**: Loads and parses configuration for MCP servers and environments.
+
+### Example: Loading MCP Config and Using MCPManager
+
+```swift
+import SwiftAgentKitMCP
+
+// Load MCP config from a JSON file (consumer provides the file URL)
+let configURL = URL(fileURLWithPath: "./mcp-config.json")
+
+let mcpManager = MCPManager()
+
+Task {
+    try await mcpManager.initialize(configFileURL: configURL)
+    // Now you can use mcpManager to call tools, etc.
+}
+```
+
+### Example: Loading MCP Config and Starting a Client (Direct)
+
+```swift
+import SwiftAgentKitMCP
+
+// Load MCP config from a JSON file
+let configURL = URL(fileURLWithPath: "./mcp-config.json")
+let mcpConfig = try MCPConfigHelper.parseMCPConfig(fileURL: configURL)
+
+// Start a client for the first configured server
+let bootCall = mcpConfig.serverBootCalls.first!
+let client = MCPClient(bootCall: bootCall, version: "1.0.0")
+
+Task {
+    try await client.initializeMCPClient(config: mcpConfig)
+    print("MCP client connected!")
+}
+```
+
+### Example: Listing Tools and Calling a Tool
+
+```swift
+Task {
+    try await client.getTools()
+    print("Available tools: \(client.tools.map(\.name))")
+    
+    if let toolName = client.tools.first?.name {
+        let result = try await client.callTool(toolName)
+        print("Tool result: \(result ?? [])")
+    }
+}
+```
+
+### Example: Subscribing to Resource Updates
+
+```swift
+Task {
+    try await client.getResources()
+    if let resource = client.resources.first {
+        try await client.subscribeToResource(resource.uri)
+        print("Subscribed to resource: \(resource.uri)")
+    }
+}
+```
+
+### Logging
+All MCP operations use Swift Logging for structured logging. You can view logs using the macOS Console app or with:
+
+```
+log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact
+```
+
+---
+
 ## A2A Module: Agent-to-Agent Communication
 
 The A2A module provides support for the [Agent-to-Agent (A2A) protocol](https://a2aproject.github.io/A2A/v0.2.5/specification/), enabling your agent to communicate with other A2A-compliant agents and servers. This module includes both client and server implementations.
 
 ### Key Types
+- **A2AManager**: Manages multiple A2A clients and agent calls. Now requires a config file URL provided by the consumer.
 - **A2AClient**: Connects to and communicates with A2A servers
 - **A2AServer**: Creates an A2A-compliant server that other agents can connect to
 - **A2AConfig**: Configuration for A2A servers and boot calls
 - **AgentAdapter**: Protocol for implementing custom agent behavior
 
-### Example: Setting up an A2A Client
+### Example: Loading A2A Config and Using A2AManager
+
+```swift
+import SwiftAgentKitA2A
+
+// Load A2A config from a JSON file (consumer provides the file URL)
+let configURL = URL(fileURLWithPath: "./a2a-config.json")
+
+let a2aManager = A2AManager()
+
+Task {
+    try await a2aManager.initialize(configFileURL: configURL)
+    // Now you can use a2aManager to call agents, etc.
+}
+```
+
+### Example: Setting up an A2A Client (Direct)
 
 ```swift
 import SwiftAgentKitA2A
@@ -168,7 +263,32 @@ Task {
 }
 ```
 
-### Example: Sending a Message to an Agent
+### Example: Making Agent Calls with A2AManager
+
+```swift
+Task {
+    // Create a tool call for an A2A agent
+    let toolCall = ToolCall(
+        name: "text_generation",
+        arguments: [
+            "instructions": "Write a short story about a robot learning to paint"
+        ],
+        instructions: "Generate creative text based on the provided prompt"
+    )
+    
+    // Execute the agent call
+    if let messages = try await a2aManager.agentCall(toolCall) {
+        print("Agent call successful! Received \(messages.count) messages:")
+        for (index, message) in messages.enumerated() {
+            print("Message \(index + 1): \(message.content)")
+        }
+    } else {
+        print("Agent call returned no messages")
+    }
+}
+```
+
+### Example: Sending a Message to an Agent (Direct Client)
 
 ```swift
 Task {
@@ -359,68 +479,6 @@ The A2A module uses a JSON configuration file to define servers and boot calls:
 
 ### Logging
 All A2A operations use Swift Logging for structured logging. You can view logs using the macOS Console app or with:
-
-```
-log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact
-```
-
----
-
-## MCP Module: Model Context Protocol
-
-The MCP module provides support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.org), enabling your agent to connect to and interact with MCP-compliant model servers, tools, and resources.
-
-### Key Types
-- **MCPClient**: Manages the connection to an MCP server, tool invocation, and resource access.
-- **MCPConfig**: Loads and parses configuration for MCP servers and environments.
-
-### Example: Loading MCP Config and Starting a Client
-
-```swift
-import SwiftAgentKitMCP
-
-// Load MCP config from a JSON file
-let configURL = URL(fileURLWithPath: "./mcp-config.json")
-let mcpConfig = try MCPConfigHelper.parseMCPConfig(fileURL: configURL)
-
-// Start a client for the first configured server
-let bootCall = mcpConfig.serverBootCalls.first!
-let client = MCPClient(bootCall: bootCall, version: "1.0.0")
-
-Task {
-    try await client.initializeMCPClient(config: mcpConfig)
-    print("MCP client connected!")
-}
-```
-
-### Example: Listing Tools and Calling a Tool
-
-```swift
-Task {
-    try await client.getTools()
-    print("Available tools: \(client.tools.map(\.name))")
-    
-    if let toolName = client.tools.first?.name {
-        let result = try await client.callTool(toolName)
-        print("Tool result: \(result ?? [])")
-    }
-}
-```
-
-### Example: Subscribing to Resource Updates
-
-```swift
-Task {
-    try await client.getResources()
-    if let resource = client.resources.first {
-        try await client.subscribeToResource(resource.uri)
-        print("Subscribed to resource: \(resource.uri)")
-    }
-}
-```
-
-### Logging
-All MCP operations use Swift Logging for structured logging. You can view logs using the macOS Console app or with:
 
 ```
 log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact
