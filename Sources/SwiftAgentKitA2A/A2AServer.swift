@@ -46,7 +46,7 @@ public actor A2AServer {
             name: "Generic A2A Server",
             description: "Auto‑generated agent exposing \(adapter.skills.map{$0.name}.joined(separator:",")).",
             url: "http://localhost:\(port)",
-            version: "1.0.0",
+            version: "0.1.3",
             capabilities: adapter.cardCapabilities,
             defaultInputModes: adapter.defaultInputModes,
             defaultOutputModes: adapter.defaultOutputModes,

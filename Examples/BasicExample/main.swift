@@ -7,38 +7,32 @@ func basicExample() {
     let logger = Logger(label: "BasicExample")
     logger.info("=== SwiftAgentKit Basic Example ===")
     
-    // Initialize with default configuration
-    let manager = SwiftAgentKitManager()
+    // Access version
+    logger.info("SwiftAgentKit version: \(swiftAgentKitVersion)")
     
-    // Log some messages
-    manager.log("Hello from SwiftAgentKit!")
-    manager.log("Version: \(swiftAgentKitVersion)")
-    
-    // Get configuration
-    let config = manager.getConfig()
-    logger.info("A2A enabled: \(config.enableA2A)")
-    logger.info("MCP enabled: \(config.enableMCP)")
+    // Demonstrate logging
+    logger.info("Hello from SwiftAgentKit!")
+    logger.debug("Debug message")
+    logger.warning("Warning message")
+    logger.error("Error message")
 }
 
-// Example: Custom configuration
-func customConfigExample() {
-    let logger = Logger(label: "CustomConfigExample")
-    logger.info("=== SwiftAgentKit Custom Configuration Example ===")
+// Example: Custom logger configuration
+func customLoggerExample() {
+    let logger = Logger(label: "CustomLogger")
+    logger.info("=== SwiftAgentKit Custom Logger Example ===")
     
-    let config = SwiftAgentKitConfig(
-        enableLogging: true,
-        logLevel: .debug,
-        enableA2A: true,
-        enableMCP: false
-    )
+    // Configure logging level
+    LoggingSystem.bootstrap { label in
+        var handler = StreamLogHandler.standardOutput(label: label)
+        handler.logLevel = .debug
+        return handler
+    }
     
-    let manager = SwiftAgentKitManager(config: config)
-    let managerLogger = manager.getLogger()
-    
-    managerLogger.info("Custom configuration applied")
-    managerLogger.debug("Debug logging is enabled")
+    let debugLogger = Logger(label: "DebugLogger")
+    debugLogger.debug("This debug message should now be visible")
 }
 
 // Run examples
 basicExample()
-customConfigExample() 
+customLoggerExample() 

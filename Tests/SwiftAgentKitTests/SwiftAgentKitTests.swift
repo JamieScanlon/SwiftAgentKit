@@ -4,24 +4,9 @@ import Logging
 
 @Suite("SwiftAgentKit Tests")
 struct SwiftAgentKitTests {
-    @Test("Initialization")
-    func testSwiftAgentKitInitialization() throws {
-        let kit = SwiftAgentKit()
-        #expect(kit != nil)
-        #expect(SwiftAgentKit.version == "1.0.0")
-    }
-    
-    @Test("Manager Initialization")
-    func testSwiftAgentKitManagerInitialization() throws {
-        let config = SwiftAgentKitConfig(
-            enableLogging: true,
-            logLevel: .info,
-            enableA2A: false,
-            enableMCP: false
-        )
-        let manager = SwiftAgentKitManager(config: config)
-        #expect(manager.getConfig().enableA2A == false)
-        #expect(manager.getConfig().enableMCP == false)
+    @Test("Version")
+    func testSwiftAgentKitVersion() throws {
+        #expect(swiftAgentKitVersion == "0.1.3")
     }
     
     @Test("Logger Functionality")
