@@ -17,7 +17,7 @@ The framework is designed with a simple, direct API - no unnecessary abstraction
 
 | Module | Description | Documentation |
 |--------|-------------|---------------|
-| **SwiftAgentKitFoundation** | Core networking and utilities | [Foundation.md](docs/Foundation.md) |
+| **SwiftAgentKit** | Core networking and utilities | [SwiftAgentKit.md](docs/SwiftAgentKit.md) |
 | **SwiftAgentKitMCP** | Model Context Protocol support | [MCP.md](docs/MCP.md) |
 | **SwiftAgentKitA2A** | Agent-to-Agent communication | [A2A.md](docs/A2A.md) |
 
@@ -41,7 +41,7 @@ Add the products you want to use to your target dependencies:
 .target(
     name: "YourTarget",
     dependencies: [
-        .product(name: "SwiftAgentKitFoundation", package: "SwiftAgentKit"),
+        .product(name: "SwiftAgentKit", package: "SwiftAgentKit"),
         .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit"),  // Optional
         .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit"),  // Optional
     ]
@@ -51,7 +51,7 @@ Add the products you want to use to your target dependencies:
 ### Basic Usage
 
 ```swift
-import SwiftAgentKitFoundation
+import SwiftAgentKit
 import SwiftAgentKitMCP
 import SwiftAgentKitA2A
 
@@ -81,7 +81,7 @@ swift run A2AExample
 ## Documentation
 
 For detailed documentation on each module, see:
-- [Foundation Module](docs/Foundation.md) - Core networking and utilities
+- [SwiftAgentKit Module](docs/SwiftAgentKit.md) - Core networking and utilities
 - [MCP Module](docs/MCP.md) - Model Context Protocol support
 - [A2A Module](docs/A2A.md) - Agent-to-Agent communication
 
