@@ -13,7 +13,6 @@ The Foundation module provides core networking capabilities and utilities that a
 
 ### Utilities
 - **Shell**: Executes shell commands and manages subprocesses
-- **Logger**: Structured logging using Swift Logging framework
 
 ## Example: Basic REST API Usage
 
@@ -135,33 +134,7 @@ for try await chunk in stream {
 
 ## Logging
 
-All Foundation operations use Swift Logging for structured logging. You can create loggers directly:
-
-```swift
-import Logging
-
-// Create a logger for your application
-let logger = Logger(label: "MyApp")
-
-// Configure logging level globally
-LoggingSystem.bootstrap { label in
-    var handler = StreamLogHandler.standardOutput(label: label)
-    handler.logLevel = .debug
-    return handler
-}
-
-// Use the logger
-logger.info("Application started")
-logger.debug("Debug information")
-logger.warning("Warning message")
-logger.error("Error occurred")
-```
-
-You can view logs using the macOS Console app or with:
-
-```
-log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact
-```
+The Foundation module uses Swift Logging for structured logging across all operations, providing cross-platform logging capabilities for debugging and monitoring.
 
 ## Architecture
 

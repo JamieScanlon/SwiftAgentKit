@@ -9,7 +9,7 @@ SwiftAgentKit provides a modular foundation for building AI agents that can:
 - Communicate with other A2A-compliant agents
 - Make HTTP requests and handle streaming responses
 - Execute shell commands and manage subprocesses
-- Use structured logging throughout
+- Use structured logging for debugging and monitoring
 
 The framework is designed with a simple, direct API - no unnecessary abstractions or configuration objects.
 
@@ -54,17 +54,13 @@ Add the products you want to use to your target dependencies:
 import SwiftAgentKitFoundation
 import SwiftAgentKitMCP
 import SwiftAgentKitA2A
-import Logging
-
-// Create loggers directly
-let logger = Logger(label: "MyApp")
 
 // Use the modules as needed
 let apiManager = RestAPIManager()
 let mcpManager = MCPManager()
 let a2aManager = A2AManager()
 
-logger.info("SwiftAgentKit initialized")
+print("SwiftAgentKit initialized")
 ```
 
 ## Examples
@@ -91,11 +87,7 @@ For detailed documentation on each module, see:
 
 ## Logging
 
-All modules use Swift Logging for structured logging. View logs with:
-
-```bash
-log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact
-```
+All modules use Swift Logging for structured logging, providing cross-platform logging capabilities for debugging and monitoring.
 
 ## Requirements
 

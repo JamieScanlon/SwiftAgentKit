@@ -110,8 +110,5 @@ The MCP module uses a JSON configuration file to define MCP servers and environm
 - **globalEnv**: Environment variables shared across all servers
 
 ## Logging
-All MCP operations use Swift Logging for structured logging. You can view logs using the macOS Console app or with:
 
-```
-log stream --predicate 'subsystem == "com.swiftagentkit"' --style compact
-``` 
+The MCP module uses Swift Logging for structured logging across all operations, providing cross-platform logging capabilities for debugging and monitoring. 

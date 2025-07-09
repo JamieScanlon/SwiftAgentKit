@@ -17,7 +17,6 @@ public actor RestAPIManager {
     private let responseValidator: ResponseValidator
     private let streamClient: StreamClient
     private let sseClient: SSEClient
-    private let logger = Logger(label: "RestAPIManager")
     
     // MARK: - Initialization
     public init(baseURL: URL, configuration: URLSessionConfiguration = .default) {
@@ -148,36 +147,5 @@ public actor RestAPIManager {
     // Remove the old validateResponse and decoder logic, now handled by ResponseValidator
 }
 
-// MARK: - Usage Example
-
-/* Example usage:
- 
- struct User: Decodable {
- let id: Int
- let name: String
- }
- 
- // Create API manager
- let apiManager = APIManager(baseURL: "https://api.example.com")
- 
- // Regular request
- Task {
- do {
- let user: User = try await apiManager.request("/users/1")
- logger.info("User: \(user)")
- } catch {
- logger.error("Error: \(error)")
- }
- }
- 
- // Streaming request
- Task {
- let userStream = apiManager.streamRequest<User>("/users/stream")
- for await user in userStream {
- logger.info("Received user: \(user)")
- }
- logger.info("Stream completed")
- }
- */
 
 
