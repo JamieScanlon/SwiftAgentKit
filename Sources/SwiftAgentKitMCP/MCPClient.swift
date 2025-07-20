@@ -33,8 +33,8 @@ public actor MCPClient {
     var state: State = .notConnected
     
     public private(set) var tools: [Tool] = []
-    private(set) var resources: [Resource] = []
-    private(set) var prompts: [Prompt] = []
+    public private(set) var resources: [Resource] = []
+    public private(set) var prompts: [Prompt] = []
     private let logger = Logger(label: "MCPClient")
     
     init(bootCall: MCPConfig.ServerBootCall, version: String, isStrict: Bool = false) {
@@ -66,7 +66,7 @@ public actor MCPClient {
         self.tools = tools
     }
     
-    func callTool(_ toolName: String, arguments: [String: Value]? = nil) async throws -> [Tool.Content]? {
+    public func callTool(_ toolName: String, arguments: [String: Value]? = nil) async throws -> [Tool.Content]? {
         
         guard tools.map(\.name).firstIndex(of: toolName) != nil else {
             return nil

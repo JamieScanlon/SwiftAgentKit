@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import SwiftAgentKit
+import SwiftAgentKitA2A
 import SwiftAgentKitAdapters
 
 // Example: Using Tool-Aware Adapters with A2A and MCP capabilities
@@ -86,8 +87,8 @@ func toolAwareExample() async {
 struct CustomToolProvider: ToolProvider {
     public var name: String { "Custom Tools" }
     
-    public var availableTools: [ToolDefinition] {
-        [
+    public func availableTools() async -> [ToolDefinition] {
+        return [
             ToolDefinition(
                 name: "custom_function",
                 description: "A custom function that does something",
@@ -129,7 +130,17 @@ func customToolProviderExample() async {
 }
 
 // Run examples
-Task {
-    await toolAwareExample()
-    await customToolProviderExample()
-} 
+print("Starting ToolAwareExample...")
+
+// Set up logging
+LoggingSystem.bootstrap { label in
+    var handler = StreamLogHandler.standardOutput(label: label)
+    handler.logLevel = .info
+    return handler
+}
+
+// Run examples synchronously
+await toolAwareExample()
+await customToolProviderExample()
+
+print("ToolAwareExample completed!") 

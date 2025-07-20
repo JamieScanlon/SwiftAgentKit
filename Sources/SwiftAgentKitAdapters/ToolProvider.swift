@@ -12,7 +12,7 @@ import SwiftAgentKit
 /// Protocol for any system that can provide tools (A2A agents or MCP tools)
 public protocol ToolProvider: Sendable {
     var name: String { get }
-    var availableTools: [ToolDefinition] { get }
+    func availableTools() async -> [ToolDefinition]
     func executeTool(_ toolCall: ToolCall) async throws -> ToolResult
 }
 
@@ -58,8 +58,12 @@ public struct ToolManager: Sendable {
         self.providers = providers
     }
     
-    public var allTools: [ToolDefinition] {
-        providers.flatMap { $0.availableTools }
+    public func allToolsAsync() async -> [ToolDefinition] {
+        var allTools: [ToolDefinition] = []
+        for provider in providers {
+            allTools.append(contentsOf: await provider.availableTools())
+        }
+        return allTools
     }
     
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {

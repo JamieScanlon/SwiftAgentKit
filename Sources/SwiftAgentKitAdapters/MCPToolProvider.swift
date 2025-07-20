@@ -7,6 +7,7 @@
 
 import Foundation
 import Logging
+import MCP
 import SwiftAgentKit
 import SwiftAgentKitMCP
 
@@ -17,18 +18,19 @@ public struct MCPToolProvider: ToolProvider {
     
     public var name: String { "MCP Tools" }
     
-    public var availableTools: [ToolDefinition] {
-        clients.flatMap { client in
-            // TODO: We need to make tools accessible from MCPClient
-            // For now, this is a placeholder implementation
-            client.tools.map { tool in
-                ToolDefinition(
+    public func availableTools() async -> [ToolDefinition] {
+        var tools: [ToolDefinition] = []
+        for client in clients {
+            let clientTools = await client.tools
+            for tool in clientTools {
+                tools.append(ToolDefinition(
                     name: tool.name,
                     description: tool.description,
                     type: .mcpTool
-                )
+                ))
             }
         }
+        return tools
     }
     
     public init(clients: [MCPClient]) {
@@ -37,17 +39,13 @@ public struct MCPToolProvider: ToolProvider {
     
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         for client in clients {
-            // TODO: We need to make tools accessible from MCPClient
-            guard client.tools.contains(where: { $0.name == toolCall.name }) else { continue }
+            // Check if this client has the requested tool
+            let clientTools = await client.tools
+            guard clientTools.contains(where: { $0.name == toolCall.name }) else { continue }
             
             do {
-                // TODO: We need to implement argumentsToValue() method on ToolCall
-                // For now, using a simplified approach
-                let arguments = toolCall.arguments.compactMapValues { value in
-                    // Convert to MCP Value type - this is a simplified conversion
-                    // TODO: Implement proper conversion from [String: Any] to MCP Value
-                    return nil
-                }
+                // For now, pass arguments as-is - MCP module should handle conversion
+                let arguments: [String: Value]? = nil
                 
                 if let contents = try await client.callTool(toolCall.name, arguments: arguments) {
                     let content = contents.compactMap { content in

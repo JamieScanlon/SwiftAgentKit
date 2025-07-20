@@ -9,6 +9,8 @@ import Foundation
 import Testing
 import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
+import SwiftAgentKit
+import EasyJSON
 
 @Suite struct SwiftAgentKitAdaptersTests {
     
@@ -455,5 +457,44 @@ import SwiftAgentKitA2A
         #expect(analysisSkill?.name == "Text Analysis")
         #expect(analysisSkill?.tags.contains("analysis") == true)
         #expect(analysisSkill?.tags.contains("text") == true)
+    }
+    
+    // MARK: - A2AToolProvider Tests
+    
+    @Test("A2AToolProvider should have correct name")
+    func testA2AToolProviderName() throws {
+        let provider = A2AToolProvider(clients: [])
+        #expect(provider.name == "A2A Agents")
+    }
+    
+    @Test("A2AToolProvider should handle empty clients list")
+    func testA2AToolProviderEmptyClients() async throws {
+        let provider = A2AToolProvider(clients: [])
+        let tools = await provider.availableTools()
+        
+        #expect(tools.isEmpty)
+    }
+    
+    @Test("A2AToolProvider should implement ToolProvider protocol")
+    func testA2AToolProviderProtocolConformance() throws {
+        let provider = A2AToolProvider(clients: [])
+        
+        // Test that it conforms to ToolProvider
+        #expect(provider.name == "A2A Agents")
+        
+        // Test that it has the required methods (compile-time check)
+        let _: ToolProvider = provider
+    }
+    
+    @Test("A2AToolProvider should handle tool execution with empty clients")
+    func testA2AToolProviderExecuteToolWithEmptyClients() async throws {
+        let provider = A2AToolProvider(clients: [])
+        let toolCall = ToolCall(name: "test", arguments: ["input": "test"])
+        
+        let result = try await provider.executeTool(toolCall)
+        
+        #expect(result.success == false)
+        #expect(result.content.isEmpty)
+        #expect(result.error == "A2A agent not found or failed")
     }
 } 

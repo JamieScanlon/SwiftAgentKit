@@ -17,17 +17,18 @@ public struct A2AToolProvider: ToolProvider {
     
     public var name: String { "A2A Agents" }
     
-    public var availableTools: [ToolDefinition] {
-        clients.compactMap { client in
-            // TODO: We need to make agentCard accessible from A2AClient
-            // For now, this is a placeholder implementation
-            guard let agentCard = await client.agentCard else { return nil }
-            return ToolDefinition(
-                name: agentCard.name,
-                description: agentCard.description,
-                type: .a2aAgent
-            )
+    public func availableTools() async -> [ToolDefinition] {
+        var tools: [ToolDefinition] = []
+        for client in clients {
+            if let agentCard = await client.agentCard {
+                tools.append(ToolDefinition(
+                    name: agentCard.name,
+                    description: agentCard.description,
+                    type: .a2aAgent
+                ))
+            }
         }
+        return tools
     }
     
     public init(clients: [A2AClient]) {
@@ -36,7 +37,7 @@ public struct A2AToolProvider: ToolProvider {
     
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         for client in clients {
-            // TODO: We need to make agentCard accessible from A2AClient
+            // Check if this client has the requested agent
             guard let agentCard = await client.agentCard,
                   agentCard.name == toolCall.name else { continue }
             

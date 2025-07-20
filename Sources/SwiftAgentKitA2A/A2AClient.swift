@@ -75,7 +75,7 @@ public actor A2AClient {
     
     /// Sends a message to the agent and returns the result
     /// Implements the message/send RPC method from A2A spec
-    func sendMessage(params: MessageSendParams) async throws -> MessageResult {
+    public func sendMessage(params: MessageSendParams) async throws -> MessageResult {
         
         guard let apiManager else {
             throw A2AClientError.notInitialized
@@ -385,7 +385,7 @@ extension JSON {
 
 // MARK: - Types
 
-enum MessageResult: Encodable, Sendable {
+public enum MessageResult: Encodable, Sendable {
     case message(A2AMessage)
     case task(A2ATask)
     case taskStatusUpdate(TaskStatusUpdateEvent)

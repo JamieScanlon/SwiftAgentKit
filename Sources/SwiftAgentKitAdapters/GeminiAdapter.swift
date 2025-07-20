@@ -436,7 +436,7 @@ public struct GeminiAdapter: AgentAdapter {
                 parts.append([
                     "text": text
                 ])
-            case .file(let data, let url):
+            case .file(let data, _):
                 // For Gemini, we need to encode file data as base64
                 if let imageData = data {
                     let base64Data = imageData.base64EncodedString()

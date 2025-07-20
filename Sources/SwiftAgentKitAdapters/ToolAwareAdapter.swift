@@ -45,7 +45,7 @@ public struct ToolAwareAdapter: AgentAdapter {
         
         // TODO: Implement enhanced handling with tool support
         // For now, just use the base adapter
-        logger.info("Tool manager available with \(toolManager.allTools.count) tools, but tool integration not yet implemented")
+        logger.info("Tool manager available, but tool integration not yet implemented")
         return try await baseAdapter.handleSend(params, store: store)
     }
     
@@ -58,7 +58,7 @@ public struct ToolAwareAdapter: AgentAdapter {
         
         // TODO: Implement enhanced streaming with tool support
         // For now, just use the base adapter
-        logger.info("Tool manager available with \(toolManager.allTools.count) tools, but streaming tool integration not yet implemented")
+        logger.info("Tool manager available, but streaming tool integration not yet implemented")
         try await baseAdapter.handleStream(params, store: store, eventSink: eventSink)
     }
 } 

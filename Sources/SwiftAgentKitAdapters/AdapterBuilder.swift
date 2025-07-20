@@ -56,7 +56,7 @@ public struct AdapterBuilder {
         let toolManager = providers.isEmpty ? nil : ToolManager(providers: providers)
         
         if let toolManager = toolManager {
-            logger.info("Building tool-aware adapter with \(toolManager.allTools.count) available tools")
+            logger.info("Building tool-aware adapter with tool manager")
         } else {
             logger.info("Building basic adapter without tools")
         }
