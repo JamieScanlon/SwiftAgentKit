@@ -23,6 +23,9 @@ let package = Package(
         .library(
             name: "SwiftAgentKitMCP",
             targets: ["SwiftAgentKitMCP"]),
+        .library(
+            name: "SwiftAgentKitAdapters",
+            targets: ["SwiftAgentKitAdapters"]),
         
         // Example executables
         .executable(
@@ -34,6 +37,12 @@ let package = Package(
         .executable(
             name: "A2AExample",
             targets: ["A2AExample"]),
+        .executable(
+            name: "AdaptersExample",
+            targets: ["AdaptersExample"]),
+        .executable(
+            name: "ToolAwareExample",
+            targets: ["ToolAwareExample"]),
     ],
     dependencies: [
         // Core dependencies
@@ -79,6 +88,16 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ]),
         
+        // Adapters module - Standard agent adapters
+        .target(
+            name: "SwiftAgentKitAdapters",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitA2A",
+                "SwiftAgentKitMCP",
+                .product(name: "Logging", package: "swift-log"),
+            ]),
+        
         // Example executables
         .executableTarget(
             name: "BasicExample",
@@ -106,6 +125,25 @@ let package = Package(
             ],
             path: "Examples/A2AExample"),
         
+        .executableTarget(
+            name: "AdaptersExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitA2A",
+                "SwiftAgentKitAdapters",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/AdaptersExample"),
+        
+        .executableTarget(
+            name: "ToolAwareExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitAdapters",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/ToolAwareExample"),
+        
         // Test targets
         .testTarget(
             name: "SwiftAgentKitTests",
@@ -118,6 +156,10 @@ let package = Package(
         .testTarget(
             name: "SwiftAgentKitMCPTests",
             dependencies: ["SwiftAgentKitMCP"]
+        ),
+        .testTarget(
+            name: "SwiftAgentKitAdaptersTests",
+            dependencies: ["SwiftAgentKitAdapters"]
         ),
     ]
 ) 

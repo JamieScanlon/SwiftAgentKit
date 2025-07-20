@@ -13,7 +13,7 @@ import System
 import SwiftAgentKit
 
 /// MCP clients maintain 1:1 connections with servers, inside the MCP host application
-actor MCPClient {
+public actor MCPClient {
     
     enum Transport {
         case stdio
@@ -32,7 +32,7 @@ actor MCPClient {
     var version: String
     var state: State = .notConnected
     
-    private(set) var tools: [Tool] = []
+    public private(set) var tools: [Tool] = []
     private(set) var resources: [Resource] = []
     private(set) var prompts: [Prompt] = []
     private let logger = Logger(label: "MCPClient")

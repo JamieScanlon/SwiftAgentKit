@@ -12,9 +12,9 @@ import SwiftAgentKit
 
 // MARK: - Client Implementation
 
-actor A2AClient {
+public actor A2AClient {
     
-    var agentCard: AgentCard?
+    public var agentCard: AgentCard?
     private let logger = Logger(label: "A2AClient")
     
     // MARK: Lifecylce
