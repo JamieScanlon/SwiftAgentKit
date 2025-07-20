@@ -9,6 +9,7 @@ import Foundation
 import SwiftAgentKitA2A
 import SwiftAgentKit
 import Logging
+import OpenAI
 
 /// OpenAI API adapter for A2A protocol
 public struct OpenAIAdapter: AgentAdapter {
@@ -59,7 +60,7 @@ public struct OpenAIAdapter: AgentAdapter {
     
     private let config: Configuration
     private let logger = Logger(label: "OpenAIAdapter")
-    private let apiManager: RestAPIManager
+    private let openAI: OpenAI
     
     // MARK: - AgentAdapter Implementation
     
@@ -110,7 +111,9 @@ public struct OpenAIAdapter: AgentAdapter {
     
     public init(configuration: Configuration) {
         self.config = configuration
-        self.apiManager = RestAPIManager(baseURL: configuration.baseURL)
+        self.openAI = OpenAI(
+            apiToken: configuration.apiKey
+        )
     }
     
     public init(apiKey: String, model: String = "gpt-4o", systemPrompt: String? = nil) {
@@ -290,7 +293,7 @@ public struct OpenAIAdapter: AgentAdapter {
             
             var accumulatedText = ""
             
-            for await chunk in stream {
+            for try await chunk in stream {
                 accumulatedText += chunk
                 
                 // Create artifact update event
@@ -422,44 +425,7 @@ public struct OpenAIAdapter: AgentAdapter {
     
     // MARK: - Private Methods
     
-    // OpenAI API request/response structures
-    private struct OpenAIRequest: Codable {
-        let model: String
-        let messages: [Message]
-        let maxTokens: Int?
-        let temperature: Double?
-        let topP: Double?
-        let frequencyPenalty: Double?
-        let presencePenalty: Double?
-        let stop: [String]?
-        let user: String?
-        
-        struct Message: Codable {
-            let role: String
-            let content: String
-        }
-        
-        enum CodingKeys: String, CodingKey {
-            case model, messages
-            case maxTokens = "max_tokens"
-            case temperature, topP
-            case frequencyPenalty = "frequency_penalty"
-            case presencePenalty = "presence_penalty"
-            case stop, user
-        }
-    }
-    
-    private struct OpenAIResponse: Codable {
-        let choices: [Choice]
-        
-        struct Choice: Codable {
-            let message: Message
-            
-            struct Message: Codable {
-                let content: String
-            }
-        }
-    }
+
     
     private func extractTextFromParts(_ parts: [A2AMessagePart]) -> String {
         return parts.compactMap { part in
@@ -470,74 +436,105 @@ public struct OpenAIAdapter: AgentAdapter {
         }.joined(separator: " ")
     }
     
-    private func buildConversationHistory(from messageParts: [A2AMessagePart], taskHistory: [A2AMessage]?) -> [OpenAIRequest.Message] {
-        var history: [OpenAIRequest.Message] = []
+    private func buildConversationHistory(from messageParts: [A2AMessagePart], taskHistory: [A2AMessage]?) -> [ChatQuery.ChatCompletionMessageParam] {
+        var history: [ChatQuery.ChatCompletionMessageParam] = []
         
         // Add conversation history from previous messages
         if let taskHistory = taskHistory {
             for message in taskHistory {
                 let content = extractTextFromParts(message.parts)
-                let role = message.role == "user" ? "user" : "assistant"
-                history.append(OpenAIRequest.Message(role: role, content: content))
+                let role: ChatQuery.ChatCompletionMessageParam.Role = message.role == "user" ? .user : .assistant
+                if let messageParam = ChatQuery.ChatCompletionMessageParam(role: role, content: content) {
+                    history.append(messageParam)
+                }
             }
         }
         
         return history
     }
     
-    private func callOpenAI(prompt: String, conversationHistory: [OpenAIRequest.Message] = []) async throws -> String {
+    private func callOpenAI(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = []) async throws -> String {
         // Build messages array
-        var messages: [OpenAIRequest.Message] = []
+        var messages: [ChatQuery.ChatCompletionMessageParam] = []
         
         // Add system message if configured
         if let systemPrompt = config.systemPrompt {
-            messages.append(OpenAIRequest.Message(role: "system", content: systemPrompt))
+            if let systemMessage = ChatQuery.ChatCompletionMessageParam(role: .system, content: systemPrompt) {
+                messages.append(systemMessage)
+            }
         }
         
         // Add conversation history
         messages.append(contentsOf: conversationHistory)
         
         // Add current user message
-        messages.append(OpenAIRequest.Message(role: "user", content: prompt))
+        if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
+            messages.append(userMessage)
+        }
         
-        let request = OpenAIRequest(
-            model: config.model,
+        let query = ChatQuery(
             messages: messages,
-            maxTokens: config.maxTokens,
-            temperature: config.temperature,
-            topP: config.topP,
+            model: .init(stringLiteral: config.model),
             frequencyPenalty: config.frequencyPenalty,
             presencePenalty: config.presencePenalty,
-            stop: config.stopSequences,
+            stop: config.stopSequences.map { .init(stringList: $0) },
+            temperature: config.temperature,
+            topP: config.topP,
             user: config.user
         )
         
-        let headers = [
-            "Authorization": "Bearer \(config.apiKey)",
-            "Content-Type": "application/json"
-        ]
-        
-        let response: OpenAIResponse = try await apiManager.decodableRequest(
-            "chat/completions",
-            method: .post,
-            headers: headers,
-            body: try JSONEncoder().encode(request)
-        )
+        let response = try await openAI.chats(query: query)
         
         guard let firstChoice = response.choices.first else {
             throw OpenAIAdapterError.invalidResponse
         }
         
-        return firstChoice.message.content
+        return firstChoice.message.content ?? ""
     }
     
-    private func streamFromOpenAI(prompt: String, conversationHistory: [OpenAIRequest.Message] = []) async throws -> AsyncStream<String> {
-        // For now, return a simple stream that yields the full response
-        // TODO: Implement proper streaming when SSE issues are resolved
-        let response = try await callOpenAI(prompt: prompt, conversationHistory: conversationHistory)
-        return AsyncStream { continuation in
-            continuation.yield(response)
-            continuation.finish()
+    private func streamFromOpenAI(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = []) async throws -> AsyncThrowingStream<String, Error> {
+        // Build messages array
+        var messages: [ChatQuery.ChatCompletionMessageParam] = []
+        
+        // Add system message if configured
+        if let systemPrompt = config.systemPrompt {
+            if let systemMessage = ChatQuery.ChatCompletionMessageParam(role: .system, content: systemPrompt) {
+                messages.append(systemMessage)
+            }
+        }
+        
+        // Add conversation history
+        messages.append(contentsOf: conversationHistory)
+        
+        // Add current user message
+        if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
+            messages.append(userMessage)
+        }
+        
+        let query = ChatQuery(
+            messages: messages,
+            model: .init(stringLiteral: config.model),
+            frequencyPenalty: config.frequencyPenalty,
+            presencePenalty: config.presencePenalty,
+            stop: config.stopSequences.map { .init(stringList: $0) },
+            temperature: config.temperature,
+            topP: config.topP,
+            user: config.user
+        )
+        
+        return AsyncThrowingStream<String, Error> { continuation in
+            Task {
+                do {
+                    for try await result in openAI.chatsStream(query: query) {
+                        if let content = result.choices.first?.delta.content {
+                            continuation.yield(content)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
         }
     }
 }

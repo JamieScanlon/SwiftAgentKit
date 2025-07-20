@@ -43,6 +43,9 @@ let package = Package(
         .executable(
             name: "ToolAwareExample",
             targets: ["ToolAwareExample"]),
+        .executable(
+            name: "OpenAIAdapterExample",
+            targets: ["OpenAIAdapterExample"]),
     ],
     dependencies: [
         // Core dependencies
@@ -58,6 +61,9 @@ let package = Package(
         
         // MCP dependency
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
+        
+        // OpenAI dependency
+        .package(url: "https://github.com/MacPaw/OpenAI.git", from: "0.2.0"),
     ],
     targets: [
         // Core target - minimal functionality
@@ -97,6 +103,7 @@ let package = Package(
                 "SwiftAgentKitA2A",
                 "SwiftAgentKitMCP",
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "OpenAI", package: "OpenAI"),
             ]),
         
         // Example executables
@@ -144,6 +151,16 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ],
             path: "Examples/ToolAwareExample"),
+        
+        .executableTarget(
+            name: "OpenAIAdapterExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitAdapters",
+                "SwiftAgentKitA2A",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/OpenAIAdapterExample"),
         
         // Test targets
         .testTarget(
