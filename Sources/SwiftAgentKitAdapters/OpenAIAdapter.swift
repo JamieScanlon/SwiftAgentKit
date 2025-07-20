@@ -29,6 +29,12 @@ public struct OpenAIAdapter: AgentAdapter {
         public let stopSequences: [String]?
         public let user: String?
         
+        // Additional OpenAI configuration options
+        public let organizationIdentifier: String?
+        public let timeoutInterval: TimeInterval
+        public let customHeaders: [String: String]
+        public let parsingOptions: ParsingOptions
+        
         public init(
             apiKey: String,
             model: String = "gpt-4o",
@@ -40,7 +46,11 @@ public struct OpenAIAdapter: AgentAdapter {
             frequencyPenalty: Double? = nil,
             presencePenalty: Double? = nil,
             stopSequences: [String]? = nil,
-            user: String? = nil
+            user: String? = nil,
+            organizationIdentifier: String? = nil,
+            timeoutInterval: TimeInterval = 60.0,
+            customHeaders: [String: String] = [:],
+            parsingOptions: ParsingOptions = []
         ) {
             self.apiKey = apiKey
             self.model = model
@@ -53,6 +63,10 @@ public struct OpenAIAdapter: AgentAdapter {
             self.presencePenalty = presencePenalty
             self.stopSequences = stopSequences
             self.user = user
+            self.organizationIdentifier = organizationIdentifier
+            self.timeoutInterval = timeoutInterval
+            self.customHeaders = customHeaders
+            self.parsingOptions = parsingOptions
         }
     }
     
@@ -111,13 +125,49 @@ public struct OpenAIAdapter: AgentAdapter {
     
     public init(configuration: Configuration) {
         self.config = configuration
-        self.openAI = OpenAI(
-            apiToken: configuration.apiKey
+        
+        // Extract host, port, and scheme from baseURL
+        let host = configuration.baseURL.host ?? "api.openai.com"
+        let port = configuration.baseURL.port ?? (configuration.baseURL.scheme == "https" ? 443 : 80)
+        let scheme = configuration.baseURL.scheme ?? "https"
+        let basePath = configuration.baseURL.path.isEmpty ? "/v1" : configuration.baseURL.path
+        
+        // Create OpenAI Configuration
+        let openAIConfig = OpenAI.Configuration(
+            token: configuration.apiKey,
+            organizationIdentifier: configuration.organizationIdentifier,
+            host: host,
+            port: port,
+            scheme: scheme,
+            basePath: basePath,
+            timeoutInterval: configuration.timeoutInterval,
+            customHeaders: configuration.customHeaders,
+            parsingOptions: configuration.parsingOptions
         )
+        
+        self.openAI = OpenAI(configuration: openAIConfig)
     }
     
-    public init(apiKey: String, model: String = "gpt-4o", systemPrompt: String? = nil) {
-        self.init(configuration: Configuration(apiKey: apiKey, model: model, systemPrompt: systemPrompt))
+    public init(
+        apiKey: String, 
+        model: String = "gpt-4o", 
+        systemPrompt: String? = nil,
+        baseURL: URL = URL(string: "https://api.openai.com/v1")!,
+        organizationIdentifier: String? = nil,
+        timeoutInterval: TimeInterval = 60.0,
+        customHeaders: [String: String] = [:],
+        parsingOptions: ParsingOptions = []
+    ) {
+        self.init(configuration: Configuration(
+            apiKey: apiKey, 
+            model: model, 
+            baseURL: baseURL,
+            systemPrompt: systemPrompt,
+            organizationIdentifier: organizationIdentifier,
+            timeoutInterval: timeoutInterval,
+            customHeaders: customHeaders,
+            parsingOptions: parsingOptions
+        ))
     }
     
     // MARK: - AgentAdapter Methods

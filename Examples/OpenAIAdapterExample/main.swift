@@ -16,11 +16,27 @@ struct OpenAIAdapterExample {
         let logger = Logger(label: "OpenAIAdapterExample")
         logger.info("Starting OpenAI Adapter Example")
         
-        // Create OpenAI adapter with MacPaw OpenAI package
+        // Create OpenAI adapter with MacPaw OpenAI package and custom configuration
+        // This demonstrates the full configuration options available:
+        // - apiKey: Your OpenAI API key
+        // - model: The model to use (gpt-4o, gpt-4, etc.)
+        // - systemPrompt: Optional system prompt to set behavior
+        // - baseURL: Custom API endpoint (useful for proxies or custom deployments)
+        // - organizationIdentifier: OpenAI organization ID for billing
+        // - timeoutInterval: Request timeout in seconds
+        // - customHeaders: Additional HTTP headers
+        // - parsingOptions: Response parsing behavior (.relaxed for better compatibility)
         let openAIAdapter = OpenAIAdapter(
             apiKey: "your-api-key-here", // Replace with your actual API key
             model: "gpt-4o",
-            systemPrompt: "You are a helpful AI assistant."
+            systemPrompt: "You are a helpful AI assistant.",
+            baseURL: URL(string: "https://api.openai.com/v1")!,
+            organizationIdentifier: "your-org-id", // Optional: Add your OpenAI organization ID
+            timeoutInterval: 120.0, // 2 minutes timeout
+            customHeaders: [
+                "X-Custom-Header": "CustomValue"
+            ],
+            parsingOptions: .relaxed // Use relaxed parsing for better compatibility
         )
         
         // Create a simple task store
