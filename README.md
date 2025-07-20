@@ -10,6 +10,8 @@ SwiftAgentKit provides a modular foundation for building AI agents that can:
 - Make HTTP requests and handle streaming responses
 - Execute shell commands and manage subprocesses
 - Use structured logging for debugging and monitoring
+- Integrate with popular AI providers (OpenAI, Anthropic, Gemini)
+- Build composable tool-aware adapters with A2A and MCP capabilities
 
 The framework is designed with a simple, direct API - no unnecessary abstractions or configuration objects.
 
@@ -20,6 +22,7 @@ The framework is designed with a simple, direct API - no unnecessary abstraction
 | **SwiftAgentKit** | Core networking and utilities | [SwiftAgentKit.md](docs/SwiftAgentKit.md) |
 | **SwiftAgentKitMCP** | Model Context Protocol support | [MCP.md](docs/MCP.md) |
 | **SwiftAgentKitA2A** | Agent-to-Agent communication | [A2A.md](docs/A2A.md) |
+| **SwiftAgentKitAdapters** | AI provider adapters and tool-aware architecture | [SwiftAgentKitAdapters.md](docs/SwiftAgentKitAdapters.md) |
 
 ## Quick Start
 
@@ -44,6 +47,7 @@ Add the products you want to use to your target dependencies:
         .product(name: "SwiftAgentKit", package: "SwiftAgentKit"),
         .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit"),  // Optional
         .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit"),  // Optional
+        .product(name: "SwiftAgentKitAdapters", package: "SwiftAgentKit"),  // Optional
     ]
 )
 ```
@@ -54,11 +58,17 @@ Add the products you want to use to your target dependencies:
 import SwiftAgentKit
 import SwiftAgentKitMCP
 import SwiftAgentKitA2A
+import SwiftAgentKitAdapters
 
 // Use the modules as needed
 let apiManager = RestAPIManager()
 let mcpManager = MCPManager()
 let a2aManager = A2AManager()
+
+// Create AI adapters with tool capabilities
+let adapter = AdapterBuilder()
+    .withLLM(OpenAIAdapter(apiKey: "your-key"))
+    .build()
 
 print("SwiftAgentKit initialized")
 ```
@@ -76,6 +86,12 @@ swift run MCPExample
 
 # A2A client example
 swift run A2AExample
+
+# AI adapters example
+swift run AdaptersExample
+
+# Tool-aware adapters example
+swift run ToolAwareExample
 ```
 
 ## Documentation
@@ -84,6 +100,7 @@ For detailed documentation on each module, see:
 - [SwiftAgentKit Module](docs/SwiftAgentKit.md) - Core networking and utilities
 - [MCP Module](docs/MCP.md) - Model Context Protocol support
 - [A2A Module](docs/A2A.md) - Agent-to-Agent communication
+- [SwiftAgentKitAdapters Module](docs/SwiftAgentKitAdapters.md) - AI provider adapters and tool-aware architecture
 
 ## Logging
 
