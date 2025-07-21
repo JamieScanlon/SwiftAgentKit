@@ -50,6 +50,40 @@ func adaptersExample() async {
     
     let geminiServer = A2AServer(port: 4248, adapter: geminiAdapter)
     
+    // --- GeminiAdapter direct usage example ---
+    let geminiTaskStore = TaskStore()
+    let geminiMessage = A2AMessage(
+        role: "user",
+        parts: [
+            .text(text: "Describe this image and write a short story about it."),
+            // .file(data: imageData, url: nil) // Uncomment and provide imageData for multimodal
+        ],
+        messageId: UUID().uuidString,
+        taskId: UUID().uuidString,
+        contextId: UUID().uuidString
+    )
+    let geminiParams = MessageSendParams(message: geminiMessage)
+    logger.info("Sending message to GeminiAdapter (non-streaming)...")
+    do {
+        let task = try await geminiAdapter.handleSend(geminiParams, store: geminiTaskStore)
+        if let firstPart = task.status.message?.parts.first, case .text(let text) = firstPart {
+            logger.info("GeminiAdapter response: \(text)")
+        } else {
+            logger.info("GeminiAdapter response: No content")
+        }
+    } catch {
+        logger.error("GeminiAdapter non-streaming error: \(error)")
+    }
+    logger.info("Sending message to GeminiAdapter (streaming)...")
+    do {
+        try await geminiAdapter.handleStream(geminiParams, store: geminiTaskStore) { @Sendable event in
+            logger.info("GeminiAdapter stream event: \(type(of: event))")
+        }
+    } catch {
+        logger.error("GeminiAdapter streaming error: \(error)")
+    }
+    // --- End GeminiAdapter direct usage example ---
+    
     // Start all servers concurrently
     logger.info("Starting A2A servers...")
     

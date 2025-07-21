@@ -449,12 +449,63 @@ public struct AnthropicAdapter: AgentAdapter {
     }
     
     private func streamFromAnthropic(prompt: String) async throws -> AsyncStream<String> {
-        // For now, return a simple stream that yields the full response
-        // TODO: Implement proper streaming when SSE issues are resolved
-        let response = try await callAnthropic(prompt: prompt)
+        let requestBody: [String: Sendable] = [
+            "model": config.model,
+            "max_tokens": config.maxTokens ?? 1000,
+            "temperature": config.temperature ?? 0.7,
+            "messages": [
+                ["role": "user", "content": prompt]
+            ],
+            "stream": true
+        ]
+        
+        let headers = [
+            "x-api-key": config.apiKey,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream"
+        ]
+        
         return AsyncStream { continuation in
-            continuation.yield(response)
-            continuation.finish()
+            Task {
+                do {
+                    let sseStream = await apiManager.sseRequest(
+                        "messages",
+                        method: .post,
+                        parameters: requestBody,
+                        headers: headers
+                    )
+                    
+                    for await event in sseStream {
+                        // Parse SSE event
+                        if let type = event["type"] as? String {
+                            switch type {
+                            case "content_block_delta":
+                                if let delta = event["delta"] as? [String: Any],
+                                   let text = delta["text"] as? String {
+                                    continuation.yield(text)
+                                }
+                            case "message_stop":
+                                continuation.finish()
+                                return
+                            case "error":
+                                if let error = event["error"] as? [String: Any],
+                                   let message = error["message"] as? String {
+                                    throw AnthropicAdapterError.streamingError(message)
+                                }
+                                throw AnthropicAdapterError.streamingError("Unknown streaming error occurred")
+                            default:
+                                // Ignore other event types
+                                break
+                            }
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    logger.error("Streaming error: \(error)")
+                    continuation.finish()
+                }
+            }
         }
     }
 }
@@ -464,6 +515,7 @@ public struct AnthropicAdapter: AgentAdapter {
 enum AnthropicAdapterError: Error, LocalizedError {
     case invalidResponse
     case apiError(String)
+    case streamingError(String)
     
     var errorDescription: String? {
         switch self {
@@ -471,6 +523,8 @@ enum AnthropicAdapterError: Error, LocalizedError {
             return "Invalid response from Anthropic API"
         case .apiError(let message):
             return "Anthropic API error: \(message)"
+        case .streamingError(let message):
+            return "Anthropic streaming error: \(message)"
         }
     }
 } 

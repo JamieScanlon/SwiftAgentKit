@@ -44,8 +44,8 @@ public struct MCPToolProvider: ToolProvider {
             guard clientTools.contains(where: { $0.name == toolCall.name }) else { continue }
             
             do {
-                // For now, pass arguments as-is - MCP module should handle conversion
-                let arguments: [String: Value]? = nil
+                // Convert ToolCall arguments to MCP Value format
+                let arguments = toolCall.argumentsToValue()
                 
                 if let contents = try await client.callTool(toolCall.name, arguments: arguments) {
                     let content = contents.compactMap { content in

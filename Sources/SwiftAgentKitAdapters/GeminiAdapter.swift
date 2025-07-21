@@ -147,8 +147,11 @@ public struct GeminiAdapter: AgentAdapter {
         )
         
         do {
-            // Call Gemini API
-            let response = try await callGemini(messageParts: params.message.parts)
+            // Get conversation history from task store
+            let conversationHistory = await store.getTask(id: taskId)?.history
+            
+            // Call Gemini API with conversation history
+            let response = try await callGemini(messageParts: params.message.parts, conversationHistory: conversationHistory)
             
             // Create response message
             let responseMessage = A2AMessage(
@@ -264,8 +267,11 @@ public struct GeminiAdapter: AgentAdapter {
         eventSink(workingResponse)
         
         do {
-            // Stream from Gemini API
-            let stream = try await streamFromGemini(messageParts: params.message.parts)
+            // Get conversation history from task store
+            let conversationHistory = await store.getTask(id: taskId)?.history
+            
+            // Stream from Gemini API with conversation history
+            let stream = try await streamFromGemini(messageParts: params.message.parts, conversationHistory: conversationHistory)
             
             var accumulatedText = ""
             
@@ -410,25 +416,156 @@ public struct GeminiAdapter: AgentAdapter {
         }.joined(separator: " ")
     }
     
-    private func callGemini(messageParts: [A2AMessagePart]) async throws -> String {
-        // For now, return a simple response
-        // TODO: Implement proper Gemini API integration
-        let prompt = extractTextFromParts(messageParts)
-        return "Gemini response to: \(prompt)"
-    }
-    
-    private func streamFromGemini(messageParts: [A2AMessagePart]) async throws -> AsyncStream<String> {
-        // For now, return a simple stream that yields the full response
-        // TODO: Implement proper streaming when SSE issues are resolved
-        let response = try await callGemini(messageParts: messageParts)
-        return AsyncStream { continuation in
-            continuation.yield(response)
-            continuation.finish()
+    private func callGemini(messageParts: [A2AMessagePart], conversationHistory: [A2AMessage]? = nil) async throws -> String {
+        var contents: [[String: Sendable]] = []
+        
+        // Add conversation history if available
+        if let history = conversationHistory {
+            for message in history {
+                let messageContents = try buildGeminiContents(from: message.parts)
+                contents.append(contentsOf: messageContents)
+            }
+        }
+        
+        // Add current message
+        let currentContents = try buildGeminiContents(from: messageParts)
+        contents.append(contentsOf: currentContents)
+        
+        var requestBody: [String: Sendable] = [
+            "contents": contents
+        ]
+        
+        // Add optional parameters if configured
+        if let maxTokens = config.maxTokens {
+            requestBody["maxOutputTokens"] = maxTokens
+        }
+        
+        if let temperature = config.temperature {
+            requestBody["temperature"] = temperature
+        }
+        
+        let headers = [
+            "x-goog-api-key": config.apiKey,
+            "Content-Type": "application/json"
+        ]
+        
+        let endpoint = "/models/\(config.model):generateContent"
+        
+        do {
+            let response = try await apiManager.jsonRequest(
+                endpoint,
+                method: .post,
+                parameters: requestBody,
+                headers: headers
+            )
+            
+            guard let candidates = response["candidates"] as? [[String: Any]],
+                  let firstCandidate = candidates.first,
+                  let content = firstCandidate["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]],
+                  let firstPart = parts.first,
+                  let text = firstPart["text"] as? String else {
+                throw GeminiAdapterError.invalidResponse
+            }
+            
+            return text
+            
+        } catch let error as APIError {
+            switch error {
+            case .serverError(let statusCode, let message):
+                if statusCode == 400 {
+                    throw GeminiAdapterError.apiError("Bad request: \(message ?? "Invalid request format")")
+                } else if statusCode == 401 {
+                    throw GeminiAdapterError.invalidApiKey
+                } else if statusCode == 403 {
+                    throw GeminiAdapterError.apiError("API key doesn't have permission to access this model")
+                } else if statusCode == 429 {
+                    throw GeminiAdapterError.rateLimitExceeded
+                } else if statusCode == 404 {
+                    throw GeminiAdapterError.modelNotFound
+                } else {
+                    throw GeminiAdapterError.apiError("Server error \(statusCode): \(message ?? "Unknown error")")
+                }
+            case .requestFailed(let underlyingError):
+                throw GeminiAdapterError.apiError("Request failed: \(underlyingError.localizedDescription)")
+            default:
+                throw GeminiAdapterError.apiError("API error: \(error.localizedDescription)")
+            }
         }
     }
     
-    private func buildGeminiContents(from messageParts: [A2AMessagePart]) throws -> [[String: Any]] {
-        var parts: [[String: Any]] = []
+    private func streamFromGemini(messageParts: [A2AMessagePart], conversationHistory: [A2AMessage]? = nil) async throws -> AsyncStream<String> {
+        var contents: [[String: Sendable]] = []
+        
+        // Add conversation history if available
+        if let history = conversationHistory {
+            for message in history {
+                let messageContents = try buildGeminiContents(from: message.parts)
+                contents.append(contentsOf: messageContents)
+            }
+        }
+        
+        // Add current message
+        let currentContents = try buildGeminiContents(from: messageParts)
+        contents.append(contentsOf: currentContents)
+        
+        var requestBody: [String: Sendable] = [
+            "contents": contents
+        ]
+        
+        // Add optional parameters if configured
+        if let maxTokens = config.maxTokens {
+            requestBody["maxOutputTokens"] = maxTokens
+        }
+        
+        if let temperature = config.temperature {
+            requestBody["temperature"] = temperature
+        }
+        
+        let headers = [
+            "x-goog-api-key": config.apiKey,
+            "Content-Type": "application/json"
+        ]
+        
+        let endpoint = "/models/\(config.model):streamGenerateContent"
+        
+        let sseStream = await apiManager.sseRequest(
+            endpoint,
+            method: .post,
+            parameters: requestBody,
+            headers: headers
+        )
+        
+        return AsyncStream { continuation in
+            Task {
+                for await event in sseStream {
+                    if let candidates = event["candidates"] as? [[String: Any]],
+                       let firstCandidate = candidates.first {
+                        if let finishReason = firstCandidate["finishReason"] as? String, finishReason == "STOP" {
+                            continuation.finish()
+                            return
+                        }
+                        if let content = firstCandidate["content"] as? [String: Any],
+                           let parts = content["parts"] as? [[String: Any]],
+                           let firstPart = parts.first,
+                           let text = firstPart["text"] as? String {
+                            continuation.yield(text)
+                        }
+                    }
+                    if let error = event["error"] as? [String: Any],
+                       let message = error["message"] as? String {
+                        logger.error("Gemini streaming error: \(message)")
+                        continuation.finish()
+                        return
+                    }
+                }
+                continuation.finish()
+            }
+        }
+    }
+    
+    private func buildGeminiContents(from messageParts: [A2AMessagePart]) throws -> [[String: Sendable]] {
+        var parts: [[String: Sendable]] = []
         
         for part in messageParts {
             switch part {
@@ -440,9 +577,10 @@ public struct GeminiAdapter: AgentAdapter {
                 // For Gemini, we need to encode file data as base64
                 if let imageData = data {
                     let base64Data = imageData.base64EncodedString()
+                    let mimeType = detectMimeType(from: imageData)
                     parts.append([
                         "inlineData": [
-                            "mimeType": "image/jpeg", // Default, could be made configurable
+                            "mimeType": mimeType,
                             "data": base64Data
                         ]
                     ])
@@ -450,9 +588,10 @@ public struct GeminiAdapter: AgentAdapter {
             case .data(let imageData):
                 // For Gemini, we need to encode data as base64
                 let base64Data = imageData.base64EncodedString()
+                let mimeType = detectMimeType(from: imageData)
                 parts.append([
                     "inlineData": [
-                        "mimeType": "image/jpeg", // Default, could be made configurable
+                        "mimeType": mimeType,
                         "data": base64Data
                     ]
                 ])
@@ -465,6 +604,33 @@ public struct GeminiAdapter: AgentAdapter {
             ]
         ]
     }
+    
+    private func detectMimeType(from data: Data) -> String {
+        // Simple MIME type detection based on file signatures
+        if data.count >= 2 {
+            let bytes = [UInt8](data.prefix(2))
+            if bytes == [0xFF, 0xD8] {
+                return "image/jpeg"
+            }
+        }
+        
+        if data.count >= 8 {
+            let bytes = [UInt8](data.prefix(8))
+            if bytes == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+                return "image/png"
+            }
+        }
+        
+        if data.count >= 4 {
+            let bytes = [UInt8](data.prefix(4))
+            if bytes == [0x47, 0x49, 0x46, 0x38] {
+                return "image/gif"
+            }
+        }
+        
+        // Default to JPEG if we can't determine the type
+        return "image/jpeg"
+    }
 }
 
 // MARK: - Errors
@@ -473,6 +639,12 @@ enum GeminiAdapterError: Error, LocalizedError {
     case invalidResponse
     case apiError(String)
     case unsupportedContentType
+    case invalidApiKey
+    case rateLimitExceeded
+    case quotaExceeded
+    case modelNotFound
+    case contentFiltered
+    case safetyFiltered
     
     var errorDescription: String? {
         switch self {
@@ -482,6 +654,18 @@ enum GeminiAdapterError: Error, LocalizedError {
             return "Gemini API error: \(message)"
         case .unsupportedContentType:
             return "Unsupported content type for Gemini API"
+        case .invalidApiKey:
+            return "Invalid API key. Please check your Gemini API key."
+        case .rateLimitExceeded:
+            return "Rate limit exceeded. Please try again later."
+        case .quotaExceeded:
+            return "API quota exceeded. Please check your Gemini account."
+        case .modelNotFound:
+            return "Model not found. Please check the model name."
+        case .contentFiltered:
+            return "Content was filtered by Gemini's safety filters."
+        case .safetyFiltered:
+            return "Response was blocked by Gemini's safety filters."
         }
     }
 } 

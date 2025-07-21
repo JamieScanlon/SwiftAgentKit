@@ -63,7 +63,7 @@ let package = Package(
         .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
         
         // OpenAI dependency
-        .package(url: "https://github.com/MacPaw/OpenAI.git", from: "0.2.0"),
+        .package(url: "https://github.com/MacPaw/OpenAI.git", from: "0.4.5"),
     ],
     targets: [
         // Core target - minimal functionality

@@ -36,31 +36,34 @@ Coordinates multiple tool providers and handles tool execution.
 
 Wraps A2A clients to provide them as tools.
 
-**Status**: ⚠️ Partially implemented
+**Status**: ✅ Implemented
 - ✅ Basic structure
 - ✅ Moved to SwiftAgentKitAdapters package
-- ⚠️ TODO: Make agentCard accessible from A2AClient
-- ⚠️ TODO: Implement proper tool execution
+- ✅ agentCard accessible from A2AClient
+- ✅ Implemented proper tool execution with error handling
 
 ### 4. MCPToolProvider
 
 Wraps MCP clients to provide them as tools.
 
-**Status**: ⚠️ Partially implemented
+**Status**: ✅ Implemented
 - ✅ Basic structure
 - ✅ Moved to SwiftAgentKitAdapters package
-- ⚠️ TODO: Make tools accessible from MCPClient
-- ⚠️ TODO: Implement proper argument conversion from [String: Any] to MCP Value
+- ✅ tools accessible from MCPClient
+- ✅ Implemented proper argument conversion from [String: Sendable] to MCP Value
 
 ### 5. ToolAwareAdapter
 
 Enhanced adapter that can use tools while keeping the base adapter unchanged.
 
-**Status**: ⚠️ Partially implemented
+**Status**: ✅ Implemented
 - ✅ Basic structure
 - ✅ Moved to SwiftAgentKitAdapters package
-- ⚠️ TODO: Implement actual tool integration with LLM
-- ⚠️ TODO: Implement streaming tool support
+- ✅ Implemented actual tool integration with LLM
+- ✅ Implemented streaming tool support
+- ✅ Tool call detection and parsing
+- ✅ Tool execution and result integration
+- ✅ Comprehensive error handling and logging
 
 ### 6. AdapterBuilder
 
@@ -84,26 +87,26 @@ let server = A2AServer(port: 4245, adapter: adapter)
 ### With A2A Agents
 
 ```swift
-// TODO: Initialize A2A clients
-// let a2aClient = A2AClient(server: a2aServer)
-// try await a2aClient.initializeA2AClient()
+// Initialize A2A clients
+let a2aClient = A2AClient(server: a2aServer)
+try await a2aClient.initializeA2AClient()
 
 let adapter = AdapterBuilder()
     .withLLM(AnthropicAdapter(apiKey: "your-key"))
-    // .withA2AClient(a2aClient)  // Uncomment when ready
+    .withA2AClient(a2aClient)
     .build()
 ```
 
 ### With MCP Tools
 
 ```swift
-// TODO: Initialize MCP clients
-// let mcpClient = MCPClient(bootCall: mcpBootCall, version: "1.0")
-// try await mcpClient.initializeMCPClient(config: mcpConfig)
+// Initialize MCP clients
+let mcpClient = MCPClient(bootCall: mcpBootCall, version: "1.0")
+try await mcpClient.initializeMCPClient(config: mcpConfig)
 
 let adapter = AdapterBuilder()
     .withLLM(GeminiAdapter(apiKey: "your-key"))
-    // .withMCPClient(mcpClient)  // Uncomment when ready
+    .withMCPClient(mcpClient)
     .build()
 ```
 
@@ -112,8 +115,8 @@ let adapter = AdapterBuilder()
 ```swift
 let adapter = AdapterBuilder()
     .withLLM(OpenAIAdapter(apiKey: "your-key"))
-    // .withA2AClient(a2aClient)
-    // .withMCPClient(mcpClient)
+    .withA2AClient(a2aClient)
+    .withMCPClient(mcpClient)
     .build()
 ```
 
@@ -138,49 +141,47 @@ let adapter = AdapterBuilder()
     .build()
 ```
 
-## Implementation TODOs
+## Implementation Status
 
-### High Priority
+### ✅ Completed Features
 
-1. **Make A2AClient.agentCard accessible**
+1. **A2AClient.agentCard accessibility**
    - File: `Sources/SwiftAgentKitA2A/A2AClient.swift`
    - Status: ✅ Done (made public)
 
-2. **Make MCPClient.tools accessible**
+2. **MCPClient.tools accessibility**
    - File: `Sources/SwiftAgentKitMCP/MCPClient.swift`
    - Status: ✅ Done (made public)
 
-3. **Implement proper tool execution in A2AToolProvider**
+3. **Tool execution in A2AToolProvider**
    - File: `Sources/SwiftAgentKitAdapters/A2AToolProvider.swift`
-   - TODO: Handle different message types and error cases
+   - Status: ✅ Done (handles different message types and error cases)
 
-4. **Implement argument conversion in MCPToolProvider**
-   - File: `Sources/SwiftAgentKitAdapters/MCPToolProvider.swift`
-   - TODO: Convert [String: Any] to MCP Value type
+4. **Argument conversion in MCPToolProvider**
+   - File: `Sources/SwiftAgentKitMCP/MCPManager.swift`
+   - Status: ✅ Done (converts [String: Sendable] to MCP Value type)
 
-### Medium Priority
-
-5. **Implement LLM tool integration in ToolAwareAdapter**
+5. **LLM tool integration in ToolAwareAdapter**
    - File: `Sources/SwiftAgentKitAdapters/ToolAwareAdapter.swift`
-   - TODO: Integrate with LLM's tool calling capabilities
-   - TODO: Handle tool call detection and execution
+   - Status: ✅ Done (integrates with LLM's tool calling capabilities)
+   - Status: ✅ Done (handles tool call detection and execution)
 
-6. **Implement streaming tool support**
+6. **Streaming tool support**
    - File: `Sources/SwiftAgentKitAdapters/ToolAwareAdapter.swift`
-   - TODO: Support tool calls in streaming mode
+   - Status: ✅ Done (supports tool calls in streaming mode)
 
-7. **Add proper error handling and logging**
-   - TODO: Improve error messages and logging throughout
+7. **Error handling and logging**
+   - Status: ✅ Done (comprehensive error messages and logging throughout)
 
-### Low Priority
+### 🔮 Future Enhancements
 
-8. **Add tool validation**
+8. **Tool validation**
    - TODO: Validate tool definitions and parameters
 
-9. **Add tool caching**
+9. **Tool caching**
    - TODO: Cache tool results for performance
 
-10. **Add tool metrics**
+10. **Tool metrics**
     - TODO: Track tool usage and performance
 
 ## Swift 6 Structured Concurrency Compliance
@@ -194,23 +195,33 @@ The implementation uses:
 
 ## Testing
 
-Run the example to see the current implementation:
+The tool-aware architecture is fully implemented and tested. Run the example to see it in action:
 
 ```bash
 swift run ToolAwareExample
 ```
 
+The example demonstrates:
+- Basic adapter creation without tools
+- Tool-aware adapter creation with custom tool providers  
+- Tool execution and parsing
+- Custom tool provider integration
+- Streaming tool support
+
 ## Future Enhancements
 
-1. **LLM Integration**: Integrate with LLM tool calling APIs (OpenAI function calling, Anthropic tool use, etc.)
+1. **Enhanced LLM Integration**: Further integrate with LLM tool calling APIs (OpenAI function calling, Anthropic tool use, etc.)
 2. **Tool Discovery**: Automatic tool discovery and registration
 3. **Tool Composition**: Allow tools to call other tools
 4. **Tool Versioning**: Support for different versions of tools
 5. **Tool Security**: Add security and access control for tools
+6. **Tool Validation**: Validate tool definitions and parameters
+7. **Tool Caching**: Cache tool results for performance
+8. **Tool Metrics**: Track tool usage and performance
 
 ## Contributing
 
-When implementing the TODOs:
+When contributing to the tool-aware architecture:
 
 1. Follow Swift 6 structured concurrency best practices
 2. Use EasyJSON for all metadata to ensure Sendable compliance

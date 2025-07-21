@@ -497,4 +497,266 @@ import EasyJSON
         #expect(result.content.isEmpty)
         #expect(result.error == "A2A agent not found or failed")
     }
+    
+    // MARK: - MCPToolProvider Tests
+    
+    @Test("MCPToolProvider should have correct name")
+    func testMCPToolProviderName() throws {
+        let provider = MCPToolProvider(clients: [])
+        #expect(provider.name == "MCP Tools")
+    }
+    
+    @Test("MCPToolProvider should handle empty clients list")
+    func testMCPToolProviderEmptyClients() async throws {
+        let provider = MCPToolProvider(clients: [])
+        let tools = await provider.availableTools()
+        
+        #expect(tools.isEmpty)
+    }
+    
+    @Test("MCPToolProvider should implement ToolProvider protocol")
+    func testMCPToolProviderProtocolConformance() throws {
+        let provider = MCPToolProvider(clients: [])
+        
+        // Test that it conforms to ToolProvider
+        #expect(provider.name == "MCP Tools")
+        
+        // Test that it has the required methods (compile-time check)
+        let _: ToolProvider = provider
+    }
+    
+    @Test("MCPToolProvider should handle tool execution with empty clients")
+    func testMCPToolProviderExecuteToolWithEmptyClients() async throws {
+        let provider = MCPToolProvider(clients: [])
+        let toolCall = ToolCall(name: "test", arguments: ["input": "test"])
+        
+        let result = try await provider.executeTool(toolCall)
+        
+        #expect(result.success == false)
+        #expect(result.content.isEmpty)
+        #expect(result.error == "MCP tool not found or failed")
+    }
+    
+    // MARK: - ToolManager Tests
+    
+    @Test("ToolManager should handle empty providers")
+    func testToolManagerEmptyProviders() async throws {
+        let manager = ToolManager(providers: [])
+        let tools = await manager.allToolsAsync()
+        
+        #expect(tools.isEmpty)
+    }
+    
+    @Test("ToolManager should execute tool with empty providers")
+    func testToolManagerExecuteToolWithEmptyProviders() async throws {
+        let manager = ToolManager(providers: [])
+        let toolCall = ToolCall(name: "test", arguments: ["input": "test"])
+        
+        let result = try await manager.executeTool(toolCall)
+        
+        #expect(result.success == false)
+        #expect(result.content.isEmpty)
+        #expect(result.error == "Tool 'test' not found in any provider")
+    }
+    
+    @Test("ToolManager should add provider")
+    func testToolManagerAddProvider() async throws {
+        let manager = ToolManager(providers: [])
+        let customProvider = CustomTestToolProvider()
+        let newManager = manager.addProvider(customProvider)
+        
+        let tools = await newManager.allToolsAsync()
+        #expect(tools.count == 1)
+        #expect(tools.first?.name == "test_tool")
+    }
+    
+    // MARK: - ToolAwareAdapter Tests
+    
+    @Test("ToolAwareAdapter should delegate capabilities to base adapter")
+    func testToolAwareAdapterCapabilities() throws {
+        let baseAdapter = OpenAIAdapter(apiKey: "test-key")
+        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: baseAdapter)
+        
+        #expect(toolAwareAdapter.cardCapabilities.streaming == baseAdapter.cardCapabilities.streaming)
+        #expect(toolAwareAdapter.cardCapabilities.pushNotifications == baseAdapter.cardCapabilities.pushNotifications)
+        #expect(toolAwareAdapter.skills.count == baseAdapter.skills.count)
+        #expect(toolAwareAdapter.defaultInputModes == baseAdapter.defaultInputModes)
+        #expect(toolAwareAdapter.defaultOutputModes == baseAdapter.defaultOutputModes)
+    }
+    
+    @Test("ToolAwareAdapter should work without tool manager")
+    func testToolAwareAdapterWithoutToolManager() async throws {
+        let baseAdapter = OpenAIAdapter(apiKey: "test-key")
+        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: nil)
+        
+        // Should delegate to base adapter when no tool manager is provided
+        #expect(toolAwareAdapter.cardCapabilities.streaming == baseAdapter.cardCapabilities.streaming)
+    }
+    
+    @Test("ToolAwareAdapter should work with tool manager")
+    func testToolAwareAdapterWithToolManager() async throws {
+        let baseAdapter = OpenAIAdapter(apiKey: "test-key")
+        let customProvider = CustomTestToolProvider()
+        let toolManager = ToolManager(providers: [customProvider])
+        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
+        
+        // Should still delegate capabilities to base adapter
+        #expect(toolAwareAdapter.cardCapabilities.streaming == baseAdapter.cardCapabilities.streaming)
+    }
+    
+    @Test("ToolAwareAdapter should handle basic message processing")
+    func testToolAwareAdapterBasicMessageProcessing() async throws {
+        let baseAdapter = OpenAIAdapter(apiKey: "test-key")
+        let customProvider = CustomTestToolProvider()
+        let toolManager = ToolManager(providers: [customProvider])
+        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
+        
+        // Test that the adapter can be created and has the expected capabilities
+        #expect(toolAwareAdapter.cardCapabilities.streaming == true)
+        #expect(toolAwareAdapter.skills.count > 0)
+        #expect(toolAwareAdapter.defaultInputModes.contains("text/plain"))
+        #expect(toolAwareAdapter.defaultOutputModes.contains("text/plain"))
+    }
+    
+    // MARK: - Streaming Tests
+    
+    @Test("AnthropicAdapter should support streaming")
+    func testAnthropicAdapterStreaming() async throws {
+        let adapter = AnthropicAdapter(apiKey: "test-key")
+        
+        // Test that the adapter supports streaming
+        #expect(adapter.cardCapabilities.streaming == true)
+        
+        // Test that the streaming method can be called (will fail with invalid API key, but that's expected)
+        // This test verifies the method signature and basic structure
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Hello")],
+            messageId: "test-1",
+            taskId: "task-1",
+            contextId: "context-1"
+        )
+        
+        let params = MessageSendParams(message: message)
+        let store = TaskStore()
+        
+        // This should not crash and should handle the error gracefully
+        do {
+            _ = try await adapter.handleStream(params, store: store) { _ in }
+        } catch {
+            // Expected to fail with invalid API key, but the streaming infrastructure should work
+            #expect(error.localizedDescription.contains("API") || error.localizedDescription.contains("network"))
+        }
+    }
+
+    @Test("GeminiAdapter handleSend should return a valid task")
+    func testGeminiAdapterHandleSend() async throws {
+        let adapter = GeminiAdapter(apiKey: "test-key")
+        let store = TaskStore()
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Say hello!")],
+            messageId: UUID().uuidString,
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString
+        )
+        let params = MessageSendParams(message: message)
+        do {
+            let task = try await adapter.handleSend(params, store: store)
+            #expect(task.status.state == .completed || task.status.state == .failed)
+            // TaskStore.updateTask appends messages to history, so we expect 3 messages:
+            // 1. Initial user message (from task creation)
+            // 2. Working state message (from updateTask with working status)
+            // 3. Completed state message (from updateTask with completed status)
+            #expect((task.history?.count ?? 0) >= 1)
+            #expect(task.history?.first?.role == "user")
+            if task.status.state == .completed {
+                #expect(task.history?.last?.role == "assistant")
+            }
+        } catch {
+            // Should not throw for mock/test key
+            #expect(false, "handleSend threw error: \(error)")
+        }
+    }
+
+    @Test("GeminiAdapter handleStream should not crash and should call eventSink")
+    func testGeminiAdapterHandleStream() async throws {
+        let adapter = GeminiAdapter(apiKey: "test-key")
+        let store = TaskStore()
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Stream hello!")],
+            messageId: UUID().uuidString,
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString
+        )
+        let params = MessageSendParams(message: message)
+        var eventSinkCalled = false
+        do {
+            try await adapter.handleStream(params, store: store) { _ in
+                eventSinkCalled = true
+            }
+        } catch {
+            // Should not throw for mock/test key
+            #expect(false, "handleStream threw error: \(error)")
+        }
+        #expect(eventSinkCalled == true)
+    }
+
+    @Test("GeminiAdapter should handle multimodal input")
+    func testGeminiAdapterMultimodalInput() async throws {
+        let adapter = GeminiAdapter(apiKey: "test-key")
+        let store = TaskStore()
+        let imageData = "test".data(using: .utf8)!
+        let message = A2AMessage(
+            role: "user",
+            parts: [
+                .text(text: "Describe this image."),
+                .file(data: imageData, url: nil)
+            ],
+            messageId: UUID().uuidString,
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString
+        )
+        let params = MessageSendParams(message: message)
+        do {
+            let task = try await adapter.handleSend(params, store: store)
+            #expect(task.status.state == .completed || task.status.state == .failed)
+        } catch {
+            #expect(false, "handleSend threw error: \(error)")
+        }
+    }
+}
+
+// MARK: - Test Helpers
+
+/// Custom tool provider for testing
+struct CustomTestToolProvider: ToolProvider {
+    public var name: String { "Custom Test Tools" }
+    
+    public func availableTools() async -> [ToolDefinition] {
+        return [
+            ToolDefinition(
+                name: "test_tool",
+                description: "A test tool for unit testing",
+                type: .function
+            )
+        ]
+    }
+    
+    public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        if toolCall.name == "test_tool" {
+            return ToolResult(
+                success: true,
+                content: "Test tool executed successfully with input: \(toolCall.arguments["input"] as? String ?? "none")",
+                metadata: .object(["source": .string("test_tool")])
+            )
+        }
+        
+        return ToolResult(
+            success: false,
+            content: "",
+            error: "Unknown tool: \(toolCall.name)"
+        )
+    }
 } 

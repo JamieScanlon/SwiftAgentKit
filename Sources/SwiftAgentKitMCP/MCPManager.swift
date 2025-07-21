@@ -120,7 +120,7 @@ extension Tool {
 }
 
 extension ToolCall {
-    func argumentsToValue() -> [String: Value] {
+    public func argumentsToValue() -> [String: Value] {
         func convertSendableToValue(value: Sendable) -> Value {
             if let boolValue = value as? Bool {
                 return Value.bool(boolValue)
