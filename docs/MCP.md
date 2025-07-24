@@ -2,69 +2,169 @@
 
 The MCP module provides support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.org), enabling your agent to connect to and interact with MCP-compliant model servers, tools, and resources.
 
-## Key Types
-- **MCPManager**: Manages multiple MCP clients and tool calls. Now requires a config file URL provided by the consumer.
-- **MCPClient**: Manages the connection to an MCP server, tool invocation, and resource access.
-- **MCPConfig**: Loads and parses configuration for MCP servers and environments.
+## Architecture Overview
 
-## Example: Loading MCP Config and Using MCPManager
+The MCP module follows a **separation of concerns** architecture:
+
+- **MCPServerManager**: Handles server process bootup and management
+- **MCPClient**: Manages communication with MCP servers (transport-agnostic)
+- **ClientTransport**: Provides transport layer abstraction (stdio pipes)
+- **MCPManager**: High-level manager that orchestrates multiple clients (backward compatible)
+
+## Key Types
+
+- **MCPServerManager**: Boots and manages MCP server processes, returns communication pipes
+- **MCPClient**: Manages the connection to an MCP server, tool invocation, and resource access
+- **ClientTransport**: Implements the Transport protocol for stdio-based communication
+- **MCPManager**: Manages multiple MCP clients and tool calls (uses new architecture internally)
+- **MCPConfig**: Configuration for MCP servers and environments
+
+## New Architecture: Step-by-Step Usage
+
+### Step 1: Create MCP Configuration
 
 ```swift
 import SwiftAgentKitMCP
 
-// Load MCP config from a JSON file (consumer provides the file URL)
-let configURL = URL(fileURLWithPath: "./mcp-config.json")
+// Create server configuration programmatically
+let serverBootCall = MCPConfig.ServerBootCall(
+    name: "example-server",
+    command: "/usr/local/bin/example-mcp-server",
+    arguments: ["--port", "4242"],
+    environment: .object([
+        "API_KEY": .string("your-api-key"),
+        "MODEL": .string("gpt-4")
+    ])
+)
 
+var config = MCPConfig()
+config.serverBootCalls = [serverBootCall]
+config.globalEnvironment = .object([
+    "LOG_LEVEL": .string("info"),
+    "ENVIRONMENT": .string("development")
+])
+```
+
+### Step 2: Boot Servers with MCPServerManager
+
+```swift
+// Use MCPServerManager to boot servers
+let serverManager = MCPServerManager()
+let serverPipes = try await serverManager.bootServers(config: config)
+
+// serverPipes is a dictionary: [String: (inPipe: Pipe, outPipe: Pipe)]
+for (serverName, pipes) in serverPipes {
+    print("Server \(serverName) is ready for connection")
+}
+```
+
+### Step 3: Create and Connect MCPClient Instances
+
+```swift
+var clients: [MCPClient] = []
+
+for (serverName, pipes) in serverPipes {
+    // Create client with name and version
+    let client = MCPClient(name: serverName, version: "1.0.0")
+    
+    // Connect using the new transport-based approach
+    try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+    
+    clients.append(client)
+}
+```
+
+### Step 4: Use Connected Clients
+
+```swift
+for client in clients {
+    // Check client state
+    let state = await client.state
+    print("Client \(await client.name) state: \(state)")
+    
+    // Call tools (tools will be populated on first call)
+    if let result = try await client.callTool("example_tool", arguments: ["input": "Hello"]) {
+        print("Tool call successful with \(result.count) content items")
+    }
+}
+```
+
+## Direct MCPClient Usage with Custom Transport
+
+```swift
+// Create a custom transport (e.g., for testing or custom protocols)
+let customTransport = MyCustomTransport()
+
+// Create and connect client
+let client = MCPClient(name: "custom-client", version: "1.0.0")
+try await client.connect(transport: customTransport)
+
+// Use the connected client
+let state = await client.state
+print("Client connected: \(state == .connected)")
+```
+
+## Backward Compatibility: Using MCPManager
+
+The `MCPManager` continues to work with the new architecture internally:
+
+```swift
+// Load MCP config from a JSON file
+let configURL = URL(fileURLWithPath: "./mcp-config.json")
 let mcpManager = MCPManager()
 
 Task {
     try await mcpManager.initialize(configFileURL: configURL)
-    // Now you can use mcpManager to call tools, etc.
-}
-```
-
-## Example: Loading MCP Config and Starting a Client (Direct)
-
-```swift
-import SwiftAgentKitMCP
-
-// Load MCP config from a JSON file
-let configURL = URL(fileURLWithPath: "./mcp-config.json")
-let mcpConfig = try MCPConfigHelper.parseMCPConfig(fileURL: configURL)
-
-// Start a client for the first configured server
-let bootCall = mcpConfig.serverBootCalls.first!
-let client = MCPClient(bootCall: bootCall, version: "0.1.3")
-
-Task {
-    try await client.initializeMCPClient(config: mcpConfig)
-    print("MCP client connected!")
-}
-```
-
-## Example: Listing Tools and Calling a Tool
-
-```swift
-Task {
-    try await client.getTools()
-    print("Available tools: \(client.tools.map(\.name))")
     
-    if let toolName = client.tools.first?.name {
-        let result = try await client.callTool(toolName)
-        print("Tool result: \(result ?? [])")
+    // Create a tool call
+    let toolCall = ToolCall(
+        name: "example_tool",
+        arguments: ["input": "Hello from MCPManager"],
+        instructions: "Process this input"
+    )
+    
+    // Execute the tool call
+    if let messages = try await mcpManager.toolCall(toolCall) {
+        print("Tool call successful with \(messages.count) messages")
     }
 }
 ```
 
-## Example: Subscribing to Resource Updates
+## Error Handling
+
+### MCPClient Errors
 
 ```swift
-Task {
-    try await client.getResources()
-    if let resource = client.resources.first {
-        try await client.subscribeToResource(resource.uri)
-        print("Subscribed to resource: \(resource.uri)")
-    }
+let client = MCPClient(name: "test-client", version: "1.0.0")
+
+do {
+    // This will throw MCPClientError.notConnected
+    let _ = try await client.callTool("test_tool")
+} catch MCPClient.MCPClientError.notConnected {
+    print("Client is not connected")
+} catch {
+    print("Other error: \(error)")
+}
+```
+
+### MCPServerManager Errors
+
+```swift
+let serverManager = MCPServerManager()
+
+do {
+    let invalidBootCall = MCPConfig.ServerBootCall(
+        name: "non-existent",
+        command: "/path/to/nonexistent/server",
+        arguments: [],
+        environment: .object([:])
+    )
+    
+    let _ = try await serverManager.bootServer(bootCall: invalidBootCall)
+} catch MCPServerManager.MCPServerManagerError.serverStartupFailed {
+    print("Server failed to start")
+} catch {
+    print("Other error: \(error)")
 }
 ```
 
@@ -74,26 +174,28 @@ The MCP module uses a JSON configuration file to define MCP servers and environm
 
 ```json
 {
-  "mcpServers": {
-    "example-server": {
+  "serverBootCalls": [
+    {
+      "name": "example-server",
       "command": "/usr/local/bin/example-mcp-server",
-      "args": ["--port", "4242"],
-      "env": {
+      "arguments": ["--port", "4242"],
+      "environment": {
         "API_KEY": "your-api-key",
         "MODEL": "gpt-4",
         "LOG_LEVEL": "info"
       }
     },
-    "another-server": {
+    {
+      "name": "another-server",
       "command": "/path/to/another/server",
-      "args": ["--config", "/path/to/config.json"],
-      "env": {
+      "arguments": ["--config", "/path/to/config.json"],
+      "environment": {
         "DATABASE_URL": "postgresql://localhost:5432/mcp",
         "CACHE_ENABLED": "true"
       }
     }
-  },
-  "globalEnv": {
+  ],
+  "globalEnvironment": {
     "LOG_LEVEL": "info",
     "ENVIRONMENT": "development",
     "TIMEOUT": "30"
@@ -103,11 +205,35 @@ The MCP module uses a JSON configuration file to define MCP servers and environm
 
 ## Configuration Fields
 
-- **mcpServers**: Object containing server configurations
+- **serverBootCalls**: Array of server configurations
+  - **name**: Unique identifier for the server
   - **command**: Path to the MCP server executable
-  - **args**: Array of command-line arguments for the server
-  - **env**: Environment variables specific to this server
-- **globalEnv**: Environment variables shared across all servers
+  - **arguments**: Array of command-line arguments for the server
+  - **environment**: Environment variables specific to this server
+- **globalEnvironment**: Environment variables shared across all servers
+
+## Architecture Benefits
+
+### Separation of Concerns
+- **MCPServerManager**: Focuses solely on server process management
+- **MCPClient**: Focuses solely on MCP protocol communication
+- **ClientTransport**: Provides transport layer abstraction
+- **MCPManager**: Provides high-level orchestration
+
+### Transport Agnostic
+- `MCPClient` can work with any transport that implements the `Transport` protocol
+- Easy to test with mock transports
+- Support for different communication protocols (stdio, TCP, etc.)
+
+### Improved Testability
+- Each component can be tested independently
+- Mock transports enable unit testing without real servers
+- Clear interfaces make mocking straightforward
+
+### Better Error Handling
+- Specific error types for different failure modes
+- Clear separation between server startup errors and communication errors
+- Proper error propagation through the stack
 
 ## Logging
 

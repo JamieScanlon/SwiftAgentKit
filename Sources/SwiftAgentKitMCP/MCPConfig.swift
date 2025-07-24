@@ -11,14 +11,23 @@ import Foundation
 public struct MCPConfig: Decodable, Sendable {
     
     public struct ServerBootCall: Decodable, Sendable {
-        let name: String
-        let command: String
-        let arguments: [String]
-        let environment: JSON
+        public let name: String
+        public let command: String
+        public let arguments: [String]
+        public let environment: JSON
+        
+        public init(name: String, command: String, arguments: [String], environment: JSON) {
+            self.name = name
+            self.command = command
+            self.arguments = arguments
+            self.environment = environment
+        }
     }
     
     public var serverBootCalls: [ServerBootCall] = []
     public var globalEnvironment: JSON = .object([:])
+    
+    public init() {}
 }
 
 public struct MCPConfigHelper {

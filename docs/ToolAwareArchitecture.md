@@ -100,13 +100,20 @@ let adapter = AdapterBuilder()
 ### With MCP Tools
 
 ```swift
-// Initialize MCP clients
-let mcpClient = MCPClient(bootCall: mcpBootCall, version: "1.0")
-try await mcpClient.initializeMCPClient(config: mcpConfig)
+// Initialize MCP clients using the new architecture
+let serverManager = MCPServerManager()
+let serverPipes = try await serverManager.bootServers(config: mcpConfig)
+
+var mcpClients: [MCPClient] = []
+for (serverName, pipes) in serverPipes {
+    let client = MCPClient(name: serverName, version: "1.0")
+    try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+    mcpClients.append(client)
+}
 
 let adapter = AdapterBuilder()
     .withLLM(GeminiAdapter(apiKey: "your-key"))
-    .withMCPClient(mcpClient)
+    .withMCPClients(mcpClients)
     .build()
 ```
 
@@ -116,7 +123,7 @@ let adapter = AdapterBuilder()
 let adapter = AdapterBuilder()
     .withLLM(OpenAIAdapter(apiKey: "your-key"))
     .withA2AClient(a2aClient)
-    .withMCPClient(mcpClient)
+    .withMCPClients(mcpClients)
     .build()
 ```
 

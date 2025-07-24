@@ -68,9 +68,14 @@ public actor MCPManager {
     }
     
     private func createClients(_ config: MCPConfig) async throws {
-        for server in config.serverBootCalls {
-            let client = MCPClient(bootCall: server, version: "0.1.3")
-            try await client.initializeMCPClient(config: config)
+        // Use MCPServerManager to boot servers
+        let serverManager = MCPServerManager()
+        let serverPipes = try await serverManager.bootServers(config: config)
+        
+        // Create clients for each server
+        for (serverName, pipes) in serverPipes {
+            let client = MCPClient(name: serverName, version: "0.1.3")
+            try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
             try await client.getTools()
             clients.append(client)
         }

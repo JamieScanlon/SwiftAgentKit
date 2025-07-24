@@ -192,13 +192,20 @@ let adapter = AdapterBuilder()
 ### With MCP Tools
 
 ```swift
-// Initialize MCP clients
-let mcpClient = MCPClient(bootCall: mcpBootCall, version: "1.0")
-try await mcpClient.initializeMCPClient(config: mcpConfig)
+// Initialize MCP clients using the new architecture
+let serverManager = MCPServerManager()
+let serverPipes = try await serverManager.bootServers(config: mcpConfig)
+
+var mcpClients: [MCPClient] = []
+for (serverName, pipes) in serverPipes {
+    let client = MCPClient(name: serverName, version: "1.0")
+    try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+    mcpClients.append(client)
+}
 
 let adapter = AdapterBuilder()
     .withLLM(GeminiAdapter(apiKey: "your-key"))
-    .withMCPClient(mcpClient)
+    .withMCPClients(mcpClients)
     .build()
 ```
 
@@ -208,7 +215,7 @@ let adapter = AdapterBuilder()
 let adapter = AdapterBuilder()
     .withLLM(OpenAIAdapter(apiKey: "your-key"))
     .withA2AClient(a2aClient)
-    .withMCPClient(mcpClient)
+    .withMCPClients(mcpClients)
     .build()
 ```
 
@@ -261,7 +268,7 @@ You can also create tool-aware adapters manually:
 ```swift
 // Create tool providers
 let a2aProvider = A2AToolProvider(clients: [a2aClient])
-let mcpProvider = MCPToolProvider(clients: [mcpClient])
+let mcpProvider = MCPToolProvider(clients: mcpClients)
 let toolManager = ToolManager(providers: [a2aProvider, mcpProvider])
 
 // Create enhanced adapter
@@ -345,7 +352,7 @@ Mix and match A2A agents and MCP tools as needed:
 let adapter = AdapterBuilder()
     .withLLM(OpenAIAdapter(apiKey: "your-key"))
     .withA2AClient(weatherAgent)
-    .withMCPClient(fileTools)
+    .withMCPClients(fileTools)
     .withToolProvider(CustomToolProvider())
     .build()
 ```
@@ -378,7 +385,7 @@ let adapter1 = AdapterBuilder()
 // Anthropic with MCP tools
 let adapter2 = AdapterBuilder()
     .withLLM(AnthropicAdapter(apiKey: "your-key"))
-    .withMCPClient(webTools)
+    .withMCPClients(webTools)
     .build()
 ```
 

@@ -3,246 +3,289 @@ import Logging
 import SwiftAgentKit
 import SwiftAgentKitMCP
 
-// Example: MCP (Model Context Protocol) usage with MCPManager
-func mcpManagerExample() async {
-    let logger = Logger(label: "MCPExample")
-    logger.info("=== SwiftAgentKit MCP Manager Example ===")
+// Example: New MCP Architecture with MCPServerManager and MCPClient
+func newMCPArchitectureExample() async {
+    let logger = Logger(label: "NewMCPExample")
+    logger.info("=== SwiftAgentKit New MCP Architecture Example ===")
     
-    // Create a sample MCP config file for demonstration
+    // Step 1: Create MCP configuration programmatically
+    let serverBootCall = MCPConfig.ServerBootCall(
+        name: "example-server",
+        command: "echo",
+        arguments: ["hello from MCP server"],
+        environment: .object([
+            "API_KEY": .string("your-api-key"),
+            "MODEL": .string("gpt-4")
+        ])
+    )
+    
+    var config = MCPConfig()
+    config.serverBootCalls = [serverBootCall]
+    config.globalEnvironment = .object([
+        "LOG_LEVEL": .string("info"),
+        "ENVIRONMENT": .string("development")
+    ])
+    
+    logger.info("Created MCP configuration with server: \(serverBootCall.name)")
+    
+    // Step 2: Use MCPServerManager to boot servers
+    let serverManager = MCPServerManager()
+    
+    do {
+        logger.info("Booting MCP servers using MCPServerManager...")
+        let serverPipes = try await serverManager.bootServers(config: config)
+        logger.info("Successfully booted \(serverPipes.count) MCP servers")
+        
+        // Step 3: Create MCPClient instances and connect them
+        var clients: [MCPClient] = []
+        
+        for (serverName, pipes) in serverPipes {
+            logger.info("Creating MCPClient for server: \(serverName)")
+            
+            // Create client with name and version
+            let client = MCPClient(name: serverName, version: "1.0.0")
+            
+            // Connect using the new transport-based approach
+            try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+            logger.info("✓ Connected to server: \(serverName)")
+            
+            // Check available tools (tools will be populated when first tool call is made)
+            let _ = await client.tools.count
+            logger.info("✓ Connected to server: \(serverName) (tools will be available on first call)")
+            
+            clients.append(client)
+        }
+        
+        logger.info("✓ Successfully created and connected \(clients.count) MCP clients")
+        logger.info("Note: Echo servers don't implement MCP protocol, so tool calls would fail")
+        logger.info("In a real scenario, you would connect to actual MCP-compliant servers")
+        
+    } catch {
+        logger.error("Failed to boot MCP servers: \(error)")
+    }
+}
+
+// Example: Direct MCPClient usage with custom transport
+func directMCPClientExample() async {
+    let logger = Logger(label: "DirectMCPClientExample")
+    logger.info("=== SwiftAgentKit Direct MCPClient Example ===")
+    
+    // Create a simple echo server for demonstration
+    let echoServerProcess = Process()
+    echoServerProcess.executableURL = URL(fileURLWithPath: "/bin/echo")
+    echoServerProcess.arguments = ["Hello from echo server"]
+    
+    let inPipe = Pipe()
+    let outPipe = Pipe()
+    
+    echoServerProcess.standardInput = inPipe
+    echoServerProcess.standardOutput = outPipe
+    
+    do {
+        logger.info("Starting echo server process...")
+        try echoServerProcess.run()
+        
+        // Create MCPClient
+        let client = MCPClient(name: "echo-client", version: "1.0.0")
+        
+        // Connect using the new transport-based approach
+        logger.info("Connecting MCPClient to echo server...")
+        try await client.connect(inPipe: inPipe, outPipe: outPipe)
+        logger.info("✓ MCPClient connected successfully")
+        
+        // Demonstrate client state
+        let state = await client.state
+        logger.info("Client state: \(state)")
+        
+        // Check available tools (echo server might not have MCP tools, but we can still connect)
+        let toolCount = await client.tools.count
+        logger.info("Available tools: \(toolCount)")
+        
+        logger.info("Note: Echo server doesn't implement MCP protocol")
+        logger.info("In a real scenario, you would connect to an MCP-compliant server")
+        
+        // Clean up
+        echoServerProcess.terminate()
+        
+    } catch {
+        logger.error("Failed to demonstrate direct MCPClient usage: \(error)")
+        echoServerProcess.terminate()
+    }
+}
+
+// Example: Error handling with the new architecture
+func newMCPErrorHandlingExample() async {
+    let logger = Logger(label: "NewMCPErrorHandlingExample")
+    logger.info("=== SwiftAgentKit New MCP Error Handling Example ===")
+    
+    // Example 1: Try to use MCPClient without connecting
+    let client = MCPClient(name: "test-client", version: "1.0.0")
+    
+    do {
+        logger.info("Attempting to call tool without connecting...")
+        let _ = try await client.callTool("test_tool", arguments: ["test": "value"])
+    } catch {
+        logger.error("Expected error when not connected: \(error)")
+    }
+    
+    // Example 2: Try to boot non-existent server
+    let serverManager = MCPServerManager()
+    
+    let invalidBootCall = MCPConfig.ServerBootCall(
+        name: "non-existent-server",
+        command: "/path/to/nonexistent/server",
+        arguments: [],
+        environment: .object([:])
+    )
+    
+    do {
+        logger.info("Attempting to boot non-existent server...")
+        let _ = try await serverManager.bootServer(bootCall: invalidBootCall)
+    } catch {
+        logger.error("Expected error when server doesn't exist: \(error)")
+    }
+    
+    // Example 3: Try to connect to invalid pipes
+    let invalidClient = MCPClient(name: "invalid-client", version: "1.0.0")
+    
+    do {
+        logger.info("Attempting to connect with invalid pipes...")
+        // Create pipes but don't connect them to any process
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        
+        try await invalidClient.connect(inPipe: inPipe, outPipe: outPipe)
+        logger.info("✓ Connected with pipes (this might work for basic connection)")
+        
+    } catch {
+        logger.error("Error connecting with pipes: \(error)")
+    }
+}
+
+// Example: Multiple servers with the new architecture
+func multipleServersExample() async {
+    let logger = Logger(label: "MultipleServersExample")
+    logger.info("=== SwiftAgentKit Multiple Servers Example ===")
+    
+    // Create configuration with multiple servers
+    let server1 = MCPConfig.ServerBootCall(
+        name: "server-1",
+        command: "echo",
+        arguments: ["Server 1 response"],
+        environment: .object(["SERVER_ID": .string("1")])
+    )
+    
+    let server2 = MCPConfig.ServerBootCall(
+        name: "server-2", 
+        command: "echo",
+        arguments: ["Server 2 response"],
+        environment: .object(["SERVER_ID": .string("2")])
+    )
+    
+    var config = MCPConfig()
+    config.serverBootCalls = [server1, server2]
+    config.globalEnvironment = .object([
+        "SHARED_ENV": .string("shared-value")
+    ])
+    
+    let serverManager = MCPServerManager()
+    
+    do {
+        logger.info("Booting multiple servers...")
+        let serverPipes = try await serverManager.bootServers(config: config)
+        logger.info("✓ Booted \(serverPipes.count) servers")
+        
+        // Create and connect clients for each server
+        for (serverName, pipes) in serverPipes {
+            logger.info("Setting up client for \(serverName)...")
+            
+            let client = MCPClient(name: serverName, version: "1.0.0")
+            try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+            
+            let state = await client.state
+            logger.info("✓ \(serverName) client state: \(state)")
+        }
+        
+    } catch {
+        logger.error("Failed to boot multiple servers: \(error)")
+    }
+}
+
+// Example: Using MCPManager with the new architecture (backward compatibility)
+func mcpManagerWithNewArchitectureExample() async {
+    let logger = Logger(label: "MCPManagerNewArchExample")
+    logger.info("=== SwiftAgentKit MCPManager with New Architecture Example ===")
+    
+    // Create a sample config file
     let sampleConfig = """
     {
-        "mcpServers": {
-            "example-server": {
-                "command": "/usr/local/bin/example-mcp-server",
-                "args": ["--port", "4242"],
-                "env": {
-                    "API_KEY": "your-api-key",
-                    "MODEL": "gpt-4"
+        "serverBootCalls": [
+            {
+                "name": "example-server",
+                "command": "echo",
+                "arguments": ["hello from MCPManager"],
+                "environment": {
+                    "API_KEY": "your-api-key"
                 }
             }
-        },
-        "globalEnv": {
-            "LOG_LEVEL": "info",
-            "ENVIRONMENT": "development"
+        ],
+        "globalEnvironment": {
+            "LOG_LEVEL": "info"
         }
     }
     """
     
-    // Write the sample config to a temporary file
     let tempDir = FileManager.default.temporaryDirectory
-    let configURL = tempDir.appendingPathComponent("mcp-config.json")
+    let configURL = tempDir.appendingPathComponent("mcp-config-new.json")
     
     do {
         try sampleConfig.write(to: configURL, atomically: true, encoding: .utf8)
-        logger.info("Created sample MCP config at: \(configURL.path)")
-    } catch {
-        logger.error("Failed to create sample config: \(error)")
-        return
-    }
-    
-    // Initialize MCPManager with the config file
-    let mcpManager = MCPManager()
-    
-    do {
-        logger.info("Initializing MCPManager...")
-        try await mcpManager.initialize(configFileURL: configURL)
-        logger.info("MCPManager initialized successfully!")
+        logger.info("Created sample config at: \(configURL.path)")
         
-        // Example: Create a tool call
+        // Use MCPManager (which now uses the new architecture internally)
+        let mcpManager = MCPManager()
+        try await mcpManager.initialize(configFileURL: configURL)
+        logger.info("✓ MCPManager initialized using new architecture")
+        
+        // Demonstrate tool call
         let toolCall = ToolCall(
             name: "example_tool",
-            arguments: [
-                "input": "Hello, world!",
-                "options": ["option1", "option2"]
-            ],
-            instructions: "Process this input with the specified options"
+            arguments: ["input": "Hello from new architecture!"],
+            instructions: "Process this input"
         )
         
-        logger.info("Making tool call: \(toolCall.name)")
-        
-        // Execute the tool call
         if let messages = try await mcpManager.toolCall(toolCall) {
-            logger.info("Tool call successful! Received \(messages.count) messages:")
-            for (index, message) in messages.enumerated() {
-                logger.info("Message \(index + 1): \(message.content)")
-            }
+            logger.info("✓ Tool call successful with \(messages.count) messages")
         } else {
-            logger.warning("Tool call returned no messages")
+            logger.info("⚠ Tool call returned no messages")
         }
         
-    } catch {
-        logger.error("Failed to initialize MCPManager: \(error)")
-    }
-    
-    // Clean up the temporary config file
-    try? FileManager.default.removeItem(at: configURL)
-}
-
-// Example: Using MCPManager with a real config file
-func mcpManagerWithRealConfigExample() async {
-    let logger = Logger(label: "MCPRealConfigExample")
-    logger.info("=== SwiftAgentKit MCP Manager with Real Config Example ===")
-    
-    // In a real application, you would load your actual MCP config file
-    let configPath = "./mcp-config.json" // Replace with your actual config path
-    let configURL = URL(fileURLWithPath: configPath)
-    
-    // Check if the config file exists
-    guard FileManager.default.fileExists(atPath: configPath) else {
-        logger.error("MCP config file not found at: \(configPath)")
-        logger.info("Please create an mcp-config.json file with your MCP server configuration")
-        return
-    }
-    
-    let mcpManager = MCPManager()
-    
-    do {
-        logger.info("Initializing MCPManager with config: \(configPath)")
-        try await mcpManager.initialize(configFileURL: configURL)
-        logger.info("MCPManager initialized successfully!")
-        
-        // Example: Create a tool call for a real MCP server
-        let toolCall = ToolCall(
-            name: "text_generation",
-            arguments: [
-                "prompt": "Write a short story about a robot learning to paint",
-                "max_tokens": 100,
-                "temperature": 0.7
-            ],
-            instructions: "Generate creative text based on the provided prompt"
-        )
-        
-        logger.info("Making tool call to: \(toolCall.name)")
-        
-        // Execute the tool call
-        if let messages = try await mcpManager.toolCall(toolCall) {
-            logger.info("Tool call successful! Received \(messages.count) messages:")
-            for (index, message) in messages.enumerated() {
-                logger.info("Message \(index + 1): \(message.content)")
-            }
-        } else {
-            logger.warning("Tool call returned no messages - the tool might not be available")
-        }
+        // Clean up
+        try FileManager.default.removeItem(at: configURL)
         
     } catch {
-        logger.error("Failed to initialize MCPManager: \(error)")
-        logger.info("Make sure your MCP config file is valid and the servers are accessible")
-    }
-}
-
-// Example: Error handling and state management
-func mcpManagerErrorHandlingExample() async {
-    let logger = Logger(label: "MCPErrorHandlingExample")
-    logger.info("=== SwiftAgentKit MCP Manager Error Handling Example ===")
-    
-    let mcpManager = MCPManager()
-    
-    // Example 1: Try to initialize with a non-existent config file
-    let nonExistentURL = URL(fileURLWithPath: "/path/to/nonexistent/config.json")
-    
-    do {
-        logger.info("Attempting to initialize with non-existent config...")
-        try await mcpManager.initialize(configFileURL: nonExistentURL)
-    } catch {
-        logger.error("Expected error when config file doesn't exist: \(error)")
-    }
-    
-    // Example 2: Try to make a tool call before initialization
-    let toolCall = ToolCall(name: "test_tool", arguments: [:])
-    
-    do {
-        logger.info("Attempting tool call before initialization...")
-        let _ = try await mcpManager.toolCall(toolCall)
-    } catch {
-        logger.error("Expected error when calling tool before initialization: \(error)")
-    }
-    
-    // Example 3: Create an invalid config file
-    let invalidConfig = """
-    {
-        "invalid": "json",
-        "missing": "required fields"
-    }
-    """
-    
-    let tempDir = FileManager.default.temporaryDirectory
-    let invalidConfigURL = tempDir.appendingPathComponent("invalid-mcp-config.json")
-    
-    do {
-        try invalidConfig.write(to: invalidConfigURL, atomically: true, encoding: .utf8)
-        logger.info("Created invalid MCP config for testing...")
-        
-        try await mcpManager.initialize(configFileURL: invalidConfigURL)
-    } catch {
-        logger.error("Expected error with invalid config: \(error)")
-    }
-    
-    // Clean up
-    try? FileManager.default.removeItem(at: invalidConfigURL)
-}
-
-// Example: Working with multiple tools
-func mcpManagerMultipleToolsExample() async {
-    let logger = Logger(label: "MCPMultipleToolsExample")
-    logger.info("=== SwiftAgentKit MCP Manager Multiple Tools Example ===")
-    
-    // This example assumes you have a config file with multiple MCP servers
-    let configPath = "./mcp-config-multiple.json"
-    let configURL = URL(fileURLWithPath: configPath)
-    
-    guard FileManager.default.fileExists(atPath: configPath) else {
-        logger.info("Skipping multiple tools example - config file not found")
-        return
-    }
-    
-    let mcpManager = MCPManager()
-    
-    do {
-        try await mcpManager.initialize(configFileURL: configURL)
-        logger.info("MCPManager initialized with multiple servers!")
-        
-        // Example tool calls for different types of tools
-        let toolCalls = [
-            ToolCall(
-                name: "text_generation",
-                arguments: ["prompt": "Hello, how are you?"],
-                instructions: "Generate a friendly response"
-            ),
-            ToolCall(
-                name: "image_analysis",
-                arguments: ["image_url": "https://example.com/image.jpg"],
-                instructions: "Analyze the content of this image"
-            ),
-            ToolCall(
-                name: "data_processing",
-                arguments: ["data": "sample data", "format": "json"],
-                instructions: "Process the provided data"
-            )
-        ]
-        
-        for toolCall in toolCalls {
-            logger.info("Trying tool: \(toolCall.name)")
-            
-            do {
-                if let messages = try await mcpManager.toolCall(toolCall) {
-                    logger.info("✓ \(toolCall.name) succeeded with \(messages.count) messages")
-                } else {
-                    logger.info("⚠ \(toolCall.name) returned no messages (tool may not be available)")
-                }
-            } catch {
-                logger.error("✗ \(toolCall.name) failed: \(error)")
-            }
-        }
-        
-    } catch {
-        logger.error("Failed to initialize MCPManager: \(error)")
+        logger.error("Failed to demonstrate MCPManager with new architecture: \(error)")
+        try? FileManager.default.removeItem(at: configURL)
     }
 }
 
 // Run examples
+print("Starting MCP Examples...")
+
+// Run examples in a Task to handle async functions
 Task {
-    await mcpManagerExample()
-    await mcpManagerWithRealConfigExample()
-    await mcpManagerErrorHandlingExample()
-    await mcpManagerMultipleToolsExample()
-} 
+    print("Running newMCPArchitectureExample...")
+    await newMCPArchitectureExample()
+    print("Running directMCPClientExample...")
+    await directMCPClientExample()
+    print("Running newMCPErrorHandlingExample...")
+    await newMCPErrorHandlingExample()
+    print("Running multipleServersExample...")
+    await multipleServersExample()
+    print("Running mcpManagerWithNewArchitectureExample...")
+    await mcpManagerWithNewArchitectureExample()
+    print("MCP Examples completed!")
+}
+
+// Keep the main thread alive for a moment to allow async tasks to complete
+Thread.sleep(forTimeInterval: 3.0) 

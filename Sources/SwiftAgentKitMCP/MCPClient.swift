@@ -15,58 +15,83 @@ import SwiftAgentKit
 /// MCP clients maintain 1:1 connections with servers, inside the MCP host application
 public actor MCPClient {
     
-    enum Transport {
-        case stdio
-        case rest
-    }
-    
-    enum State {
+    public enum State: Sendable {
         case notConnected
         case connected
         case error
     }
     
-    var name: String {
-        bootCall.name
+    public enum MCPClientError: LocalizedError {
+        case notConnected
+        
+        public var errorDescription: String? {
+            switch self {
+            case .notConnected:
+                return "MCP client is not connected"
+            }
+        }
     }
-    var version: String
-    var state: State = .notConnected
+    
+    public let name: String
+    public let version: String
+    public let isStrict: Bool
+    public var state: State = .notConnected
     
     public private(set) var tools: [Tool] = []
     public private(set) var resources: [Resource] = []
     public private(set) var prompts: [Prompt] = []
     private let logger = Logger(label: "MCPClient")
     
-    init(bootCall: MCPConfig.ServerBootCall, version: String, isStrict: Bool = false) {
-        self.bootCall = bootCall
+    public init(name: String, version: String, isStrict: Bool = false) {
+        self.name = name
         self.version = version
-        let configuration = Client.Configuration(strict: isStrict)
-        self.client = Client(name: bootCall.name, version: version, configuration: configuration)
+        self.isStrict = isStrict
+        // Client will be created when connecting to transport
     }
     
-    func initializeMCPClient(config: MCPConfig) async throws {
+    /// Connect to an MCP server using the provided transport
+    /// - Parameter transport: The transport to use for communication
+    public func connect(transport: Transport) async throws {
+        let configuration = Client.Configuration(strict: isStrict)
+        let newClient = Client(name: name, version: version, configuration: configuration)
         
-        var environment = config.globalEnvironment.mcpEnvironment
-        let bootCallEnvironment = bootCall.environment.mcpEnvironment
-        environment.merge(bootCallEnvironment, uniquingKeysWith: { (_, new) in new })
-        let (inPipe, outPipe) = Shell.shell(bootCall.command, arguments: bootCall.arguments, environment: environment)
+        // Connect the client to the transport
+        try await newClient.connect(transport: transport)
         
-        // Create a transport and connect
-        let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe)
-        try await client.connect(transport: transport)
+        // Store the connected client
+        self.client = newClient
         
         // Get capabilities after connection
-        self.capabilities = await client.capabilities
+        self.capabilities = await newClient.capabilities
         state = .connected
+        logger.info("MCP client '\(name)' connected successfully")
     }
     
+    /// Connect to an MCP server using stdio pipes
+    /// - Parameters:
+    ///   - inPipe: Input pipe for receiving data from the server
+    ///   - outPipe: Output pipe for sending data to the server
+    public func connect(inPipe: Pipe, outPipe: Pipe) async throws {
+        let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe)
+        try await connect(transport: transport)
+    }
+    
+
+    
     func getTools() async throws {
+        guard let client = client else {
+            throw MCPClientError.notConnected
+        }
         // List available tools
         let (tools, _) = try await client.listTools()
         self.tools = tools
     }
     
     public func callTool(_ toolName: String, arguments: [String: Value]? = nil) async throws -> [Tool.Content]? {
+        
+        guard let client = client else {
+            throw MCPClientError.notConnected
+        }
         
         guard tools.map(\.name).firstIndex(of: toolName) != nil else {
             return nil
@@ -97,17 +122,26 @@ public actor MCPClient {
     }
     
     func getResources() async throws {
+        guard let client = client else {
+            throw MCPClientError.notConnected
+        }
         // List available tools
         let (resources, _) = try await client.listResources()
         self.resources = resources
     }
     
     func readResource(_ uri: String) async throws -> [Resource.Content] {
+        guard let client = client else {
+            throw MCPClientError.notConnected
+        }
         let contents = try await client.readResource(uri: uri)
         return contents
     }
     
     func subscribeToResource(_ uri: String) async throws {
+        guard let client = client else {
+            throw MCPClientError.notConnected
+        }
         // Subscribe to resource updates if supported
         // Note: Resource subscription capabilities may vary by MCP implementation
         try await client.subscribeToResource(uri: uri)
@@ -118,141 +152,33 @@ public actor MCPClient {
             self.logger.info("Resource \(uri) updated with new content")
             
             // Fetch the updated resource content
-            _ = try await self.client.readResource(uri: uri)
+            _ = try await self.client?.readResource(uri: uri)
             self.logger.info("Updated resource content received")
         }
     }
     
     func getPrompts() async throws {
+        guard let client = client else {
+            throw MCPClientError.notConnected
+        }
         // List available tools
         let (prompts, _) = try await client.listPrompts()
         self.prompts = prompts
     }
     
     func getPrompt(_ name: String, arguments: [String: Value]? = nil) async throws -> [Prompt.Message] {
+        guard let client = client else {
+            throw MCPClientError.notConnected
+        }
         let (_, messages) = try await client.getPrompt(name: name, arguments: arguments)
         return messages
     }
     
     // MARK: - Private
     
-    private let client: Client
-    private var bootCall: MCPConfig.ServerBootCall
+    private var client: Client?
     private var capabilities: Client.Capabilities?
 }
 
-import Logging
 
-actor ClientTransport: Transport {
-    
-    nonisolated let logger: Logging.Logger
-    
-    
-    init(inPipe: Pipe, outPipe: Pipe, logger: Logging.Logger? = nil) {
-        
-        self.inPipe = inPipe
-        self.outPipe = outPipe
-        self.logger = logger ?? Logging.Logger(label: "mcp.transport.stdio")
-        
-        // Create message stream
-        var continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation!
-        self.messageStream = AsyncThrowingStream { continuation = $0 }
-        self.messageContinuation = continuation
-        
-    }
-    
-    /// Establishes connection with the transport
-    func connect() async throws {
-        guard !isConnected else { return }
-        
-        isConnected = true
-        
-        // Start reading loop in background
-        Task.detached {
-            await self.readLoop()
-        }
-    }
-    
-    /// Disconnects from the transport
-    func disconnect() async {
-        guard isConnected else { return }
-        isConnected = false
-        messageContinuation.finish()
-        outPipe.fileHandleForReading.readabilityHandler = nil
-        logger.info("Transport disconnected")
-    }
-    
-    /// Sends data
-    func send(_ data: Data) async throws {
-        
-        guard isConnected else {
-            throw MCPError.transportError(Errno(rawValue: ENOTCONN))
-        }
-        
-        // Add newline as delimiter
-        var messageWithNewline = data
-        messageWithNewline.append(UInt8(ascii: "\n"))
-        try inPipe.fileHandleForWriting.write(contentsOf: messageWithNewline)
-    }
-    
-    /// Receives data in an async sequence
-    func receive() -> AsyncThrowingStream<Data, Swift.Error> {
-        return messageStream
-    }
-    
-    // MARK: - Private
-    
-    private var inPipe: Pipe
-    private var outPipe: Pipe
-    private var isConnected = false
-    private let messageStream: AsyncThrowingStream<Data, Swift.Error>
-    private let messageContinuation: AsyncThrowingStream<Data, Swift.Error>.Continuation
-    
-    /// Continuous loop that reads and processes incoming messages
-    ///
-    /// This method runs in the background while the transport is connected,
-    /// parsing complete messages delimited by newlines and yielding them
-    /// to the message stream.
-    private func readLoop() async {
-        
-        outPipe.fileHandleForReading.readabilityHandler = { pipeHandle in
-            let data = pipeHandle.availableData
-            self.logger.debug("Received data: \(String(data: data, encoding: .utf8) ?? "")")
-            self.messageContinuation.yield(data)
-        }
-    }
-}
-
-// MARK: - Extensions
-
-extension JSON {
-    
-    var mcpEnvironment: [String: String] {
-        var result = [String: String]()
-        
-        guard case .object(let object) = self else {
-            return [:]
-        }
-        
-        for (key, value) in object {
-            let stringValue: String? = {
-                if case .string(let string) = value {
-                    return string
-                } else if case .integer(let interger) = value {
-                    return String(interger)
-                } else if case .double(let double) = value {
-                    return String(double)
-                } else if case .boolean(let boolean) = value {
-                    return boolean ? "true" : "false"
-                } else {
-                    return nil
-                }
-            }()
-            if let stringValue {
-                result[key] = stringValue
-            }
-        }
-        return result
-    }
-}
 
