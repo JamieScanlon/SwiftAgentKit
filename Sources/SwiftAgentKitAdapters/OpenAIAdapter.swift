@@ -193,7 +193,7 @@ public struct OpenAIAdapter: AgentAdapter {
                 message: message,
                 timestamp: ISO8601DateFormatter().string(from: .init())
             ),
-            history: [params.message]
+            history: []
         )
         
         await store.addTask(task: task)
@@ -227,7 +227,7 @@ public struct OpenAIAdapter: AgentAdapter {
                 contextId: contextId
             )
             
-            // Update task with completed status
+            // Update task with completed status and add messages to history
             _ = await store.updateTask(
                 id: taskId,
                 status: TaskStatus(
@@ -236,6 +236,11 @@ public struct OpenAIAdapter: AgentAdapter {
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
+            
+            // Add both the user message and assistant response to task history
+            var updatedTask = await store.getTask(id: taskId) ?? task
+            updatedTask.history = [message, responseMessage]
+            await store.addTask(task: updatedTask)
             
             // Get final task state
             task = await store.getTask(id: taskId) ?? task
@@ -279,7 +284,7 @@ public struct OpenAIAdapter: AgentAdapter {
                 message: message,
                 timestamp: ISO8601DateFormatter().string(from: .init())
             ),
-            history: [params.message]
+            history: []
         )
         
         await store.addTask(task: baseTask)
@@ -410,7 +415,7 @@ public struct OpenAIAdapter: AgentAdapter {
                 contextId: contextId
             )
             
-            // Update task with completed status
+            // Update task with completed status and add messages to history
             _ = await store.updateTask(
                 id: taskId,
                 status: TaskStatus(
@@ -419,6 +424,11 @@ public struct OpenAIAdapter: AgentAdapter {
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
+            
+            // Add both the user message and assistant response to task history
+            var updatedTask = await store.getTask(id: taskId) ?? baseTask
+            updatedTask.history = [message, responseMessage]
+            await store.addTask(task: updatedTask)
             
             // Emit final status update
             let completed = TaskStatusUpdateEvent(
