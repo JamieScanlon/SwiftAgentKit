@@ -42,7 +42,7 @@ public actor MCPClient {
     public private(set) var prompts: [Prompt] = []
     private let logger = Logger(label: "MCPClient")
     
-    public init(name: String, version: String, isStrict: Bool = false) {
+    public init(name: String, version: String = "1.0", isStrict: Bool = false) {
         self.name = name
         self.version = version
         self.isStrict = isStrict
@@ -74,6 +74,7 @@ public actor MCPClient {
     public func connect(inPipe: Pipe, outPipe: Pipe) async throws {
         let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe)
         try await connect(transport: transport)
+        try await getTools()
     }
     
 
