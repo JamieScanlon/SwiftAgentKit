@@ -514,8 +514,9 @@ public struct OpenAIAdapter: AgentAdapter {
             }
         }
         
-        // Add conversation history
-        messages.append(contentsOf: conversationHistory)
+        // Add conversation history (filtering out any system messages to avoid duplication)
+        let filteredHistory = conversationHistory.filter { $0.role != .system }
+        messages.append(contentsOf: filteredHistory)
         
         // Add current user message
         if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
@@ -553,8 +554,9 @@ public struct OpenAIAdapter: AgentAdapter {
             }
         }
         
-        // Add conversation history
-        messages.append(contentsOf: conversationHistory)
+        // Add conversation history (filtering out any system messages to avoid duplication)
+        let filteredHistory = conversationHistory.filter { $0.role != .system }
+        messages.append(contentsOf: filteredHistory)
         
         // Add current user message
         if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
