@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Logging
 import MCP
 import SwiftAgentKit
 
@@ -14,6 +15,8 @@ import SwiftAgentKit
 /// Creates a MCPClient for every available server
 /// Dispatches tool calls to clients
 public actor MCPManager {
+    private let logger = Logger(label: "MCPManager")
+    
     public init() {}
     
     public enum State {
@@ -22,15 +25,21 @@ public actor MCPManager {
     }
     
     public var state: State = .notReady
-    public var toolCallsJsonString: String?
+    public var toolCallsJsonString: String? {
+        if let data = try? JSONSerialization.data(withJSONObject: toolCallsJson) {
+            return String(data: data, encoding: .utf8)
+        }
+        return nil
+    }
     public var toolCallsJson: [[String: Any]] = []
+    public private(set) var clients: [MCPClient] = []
     
     /// Initialize the MCPManager with a config file URL
     public func initialize(configFileURL: URL) async throws {
         do {
             try await loadMCPConfiguration(configFileURL: configFileURL)
         } catch {
-            print("\(error)")
+            logger.error("Failed to initialize MCPManager: \(error)")
         }
     }
     
@@ -54,15 +63,13 @@ public actor MCPManager {
     
     // MARK: - Private
     
-    private var clients: [MCPClient] = []
-    
     private func loadMCPConfiguration(configFileURL: URL) async throws {
         do {
             let config = try MCPConfigHelper.parseMCPConfig(fileURL: configFileURL)
             try await createClients(config)
             state = .initialized
         } catch {
-            print("Error loading MCP configuration: \(error)")
+            logger.error("Error loading MCP configuration: \(error)")
             state = .notReady
         }
     }
@@ -90,9 +97,6 @@ public actor MCPManager {
             }
         }
         toolCallsJson = json
-        if let data = try? JSONSerialization.data(withJSONObject: json) {
-            toolCallsJsonString = String(data: data, encoding: .utf8)
-        }
     }
     
 }
