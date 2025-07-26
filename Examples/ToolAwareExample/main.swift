@@ -1,99 +1,139 @@
 import Foundation
 import Logging
 import SwiftAgentKit
-import SwiftAgentKitA2A
 import SwiftAgentKitAdapters
+import SwiftAgentKitA2A
 
-// Example: Using Tool-Aware Adapters with A2A and MCP capabilities
-func toolAwareExample() async {
-    let logger = Logger(label: "ToolAwareExample")
-    logger.info("=== SwiftAgentKit Tool-Aware Adapter Example ===")
-    
-    // Example 1: Basic setup (no tools)
-    logger.info("Creating basic adapter without tools...")
-    let basicAdapter = AdapterBuilder()
-        .withLLM(OpenAIAdapter(apiKey: "your-openai-key"))
-        .build()
-    
-    let basicServer = A2AServer(port: 4245, adapter: basicAdapter)
-    
-    // Example 2: With custom tool provider
-    logger.info("Creating adapter with custom tool provider...")
-    
-    let customProvider = CustomToolProvider()
-    let toolAwareAdapter = AdapterBuilder()
-        .withLLM(AnthropicAdapter(apiKey: "your-anthropic-key"))
-        .withToolProvider(customProvider)
-        .build()
-    
-    let toolAwareServer = A2AServer(port: 4246, adapter: toolAwareAdapter)
-    
-    // Example 3: Manual setup with tool manager
-    logger.info("Creating adapter with manual tool manager setup...")
-    
-    let manualToolManager = ToolManager(providers: [customProvider])
-    let manualAdapter = ToolAwareAdapter(
-        baseAdapter: GeminiAdapter(apiKey: "your-gemini-key"),
-        toolManager: manualToolManager
-    )
-    
-    let manualServer = A2AServer(port: 4247, adapter: manualAdapter)
-    
-    logger.info("Tool-aware adapters created successfully!")
-    logger.info("Basic adapter: \(basicServer)")
-    logger.info("Tool-aware adapter: \(toolAwareServer)")
-    logger.info("Manual adapter: \(manualServer)")
-}
-
-// Example: Testing tool execution
-func testToolExecution() async {
-    let logger = Logger(label: "TestToolExecution")
-    logger.info("=== Testing Tool Execution ===")
-    
-    // Create a custom tool provider
-    let customProvider = CustomToolProvider()
-    let toolManager = ToolManager(providers: [customProvider])
-    
-    // Test tool execution directly
-    let toolCall = ToolCall(
-        name: "custom_function",
-        arguments: ["input": "Hello from tool!"],
-        instructions: "Execute the custom function"
-    )
-    
-    do {
-        let result = try await toolManager.executeTool(toolCall)
-        logger.info("Tool execution result: \(result.success)")
-        logger.info("Tool content: \(result.content)")
-        if let error = result.error {
-            logger.error("Tool error: \(error)")
+@main
+struct ToolAwareExample {
+    static func main() async throws {
+        let logger = Logger(label: "ToolAwareExample")
+        logger.info("Starting Tool-Aware Adapter Example")
+        
+        // Create a task store
+        let taskStore = TaskStore()
+        
+        // Create a custom tool provider
+        let customToolProvider = CustomToolProvider()
+        
+        // Create a tool manager
+        let toolManager = ToolManager()
+        toolManager.addProvider(customToolProvider)
+        
+        // Create base adapters
+        let openAIAdapter = OpenAIAdapter(apiKey: "your-openai-key")
+        let anthropicAdapter = AnthropicAdapter(apiKey: "your-anthropic-key")
+        
+        // Create tool-aware adapters
+        let toolAwareOpenAI = ToolAwareAdapter(
+            baseAdapter: openAIAdapter,
+            toolManager: toolManager
+        )
+        
+        let toolAwareAnthropic = ToolAwareAdapter(
+            baseAdapter: anthropicAdapter,
+            toolManager: toolManager
+        )
+        
+        // Example 1: Using the builder pattern
+        logger.info("Example 1: Using the builder pattern")
+        let builderAdapter = AdapterBuilder()
+            .withLLM(openAIAdapter)
+            .withToolProvider(customToolProvider)
+            .build()
+        
+        let message1 = A2AMessage(
+            role: "user",
+            parts: [.text(text: "What's the weather like in San Francisco?")],
+            messageId: UUID().uuidString,
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString
+        )
+        
+        let params1 = MessageSendParams(message: message1)
+        
+        do {
+            let task1 = try await builderAdapter.handleSend(params1, store: taskStore)
+            if let responseMessage = task1.status.message,
+               let firstPart = responseMessage.parts.first,
+               case .text(let text) = firstPart {
+                logger.info("Builder response: \(text)")
+            }
+        } catch {
+            logger.error("Builder example failed: \(error)")
         }
-    } catch {
-        logger.error("Tool execution failed: \(error)")
+        
+        // Example 2: Direct tool-aware adapter usage
+        logger.info("Example 2: Direct tool-aware adapter usage")
+        let message2 = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Can you tell me about the weather in New York?")],
+            messageId: UUID().uuidString,
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString
+        )
+        
+        let params2 = MessageSendParams(message: message2)
+        
+        do {
+            let task2 = try await toolAwareOpenAI.handleSend(params2, store: taskStore)
+            if let responseMessage = task2.status.message,
+               let firstPart = responseMessage.parts.first,
+               case .text(let text) = firstPart {
+                logger.info("Direct adapter response: \(text)")
+            }
+        } catch {
+            logger.error("Direct adapter example failed: \(error)")
+        }
+        
+        // Example 3: Manual setup without builder
+        logger.info("Example 3: Manual setup without builder")
+        let message3 = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Execute the custom_function with input 'test input'")],
+            messageId: UUID().uuidString,
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString
+        )
+        
+        let params3 = MessageSendParams(message: message3)
+        
+        do {
+            let task3 = try await toolAwareAnthropic.handleSend(params3, store: taskStore)
+            if let responseMessage = task3.status.message,
+               let firstPart = responseMessage.parts.first,
+               case .text(let text) = firstPart {
+                logger.info("Manual setup response: \(text)")
+            }
+        } catch {
+            logger.error("Manual setup example failed: \(error)")
+        }
+        
+        // Example 4: Streaming with tools
+        logger.info("Example 4: Streaming with tools")
+        let message4 = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Stream a response about the weather in London")],
+            messageId: UUID().uuidString,
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString
+        )
+        
+        let params4 = MessageSendParams(message: message4)
+        
+        do {
+            try await toolAwareOpenAI.handleStream(params4, store: taskStore) { @Sendable event in
+                logger.info("Stream event: \(type(of: event))")
+            }
+        } catch {
+            logger.error("Streaming example failed: \(error)")
+        }
+        
+        logger.info("Tool-Aware Adapter Example completed!")
     }
 }
 
-// Example: Testing tool parsing
-func testToolParsing() async {
-    let logger = Logger(label: "TestToolParsing")
-    logger.info("=== Testing Tool Call Parsing ===")
-    
-    // Test the ToolCall.processModelResponse method
-    let responseWithTool = "Here's the weather: <|python_tag|>weather_tool(location=\"New York\", units=\"celsius\")<|eom_id|>"
-    let (message, toolCall) = ToolCall.processModelResponse(content: responseWithTool)
-    
-    logger.info("Processed message: \(message)")
-    logger.info("Extracted tool call: \(toolCall ?? "none")")
-    
-    // Test without tool call
-    let responseWithoutTool = "Here's a simple response without any tools."
-    let (message2, toolCall2) = ToolCall.processModelResponse(content: responseWithoutTool)
-    
-    logger.info("Processed message (no tools): \(message2)")
-    logger.info("Extracted tool call (no tools): \(toolCall2 ?? "none")")
-}
-
-// Custom tool provider for demonstration
+// Custom tool provider implementation
 struct CustomToolProvider: ToolProvider {
     public var name: String { "Custom Tools" }
     
@@ -143,38 +183,4 @@ struct CustomToolProvider: ToolProvider {
             )
         }
     }
-}
-
-// Example: Using custom tool provider
-func customToolProviderExample() async {
-    let logger = Logger(label: "CustomToolProviderExample")
-    logger.info("=== Custom Tool Provider Example ===")
-    
-    let customAdapter = AdapterBuilder()
-        .withLLM(OpenAIAdapter(apiKey: "your-openai-key"))
-        .withToolProvider(CustomToolProvider())
-        .build()
-    
-    let server = A2AServer(port: 4250, adapter: customAdapter)
-    
-    logger.info("Custom tool provider adapter created!")
-    logger.info("Server: \(server)")
-}
-
-// Run examples
-print("Starting ToolAwareExample...")
-
-// Set up logging
-LoggingSystem.bootstrap { label in
-    var handler = StreamLogHandler.standardOutput(label: label)
-    handler.logLevel = .info
-    return handler
-}
-
-// Run examples synchronously
-await toolAwareExample()
-await testToolExecution()
-await testToolParsing()
-await customToolProviderExample()
-
-print("ToolAwareExample completed!") 
+} 

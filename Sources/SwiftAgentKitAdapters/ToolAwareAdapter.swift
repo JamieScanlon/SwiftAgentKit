@@ -10,6 +10,27 @@ import Logging
 import SwiftAgentKit
 import SwiftAgentKitA2A
 
+/// Enhanced protocol that extends AgentAdapter with tool-aware methods
+/// This protocol allows adapters to natively support tool calling without
+/// requiring the ToolAwareAdapter wrapper.
+public protocol ToolAwareAgentAdapter: AgentAdapter {
+    /// Handle a message with available tools
+    /// - Parameters:
+    ///   - params: The message parameters
+    ///   - availableToolCalls: Array of tool calls to be made
+    ///   - store: The task store
+    /// - Returns: An A2A task representing the response
+    func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolCall], store: TaskStore) async throws -> A2ATask
+    
+    /// Handle streaming with available tools
+    /// - Parameters:
+    ///   - params: The message parameters
+    ///   - availableToolCalls: Array of tool calls to be made
+    ///   - store: The task store
+    ///   - eventSink: Callback for streaming events
+    func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolCall], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws
+}
+
 /// Enhanced adapter that can use tools while keeping the base adapter unchanged
 public struct ToolAwareAdapter: AgentAdapter {
     private let baseAdapter: AgentAdapter
@@ -49,39 +70,48 @@ public struct ToolAwareAdapter: AgentAdapter {
         let availableTools = await toolManager.allToolsAsync()
         logger.info("Available tools: \(availableTools.map(\.name))")
         
-        // Create enhanced message with tool context
-        let enhancedParams = await enhanceMessageWithToolContext(params, availableTools: availableTools)
-        
-        // Process with base adapter
-        var task = try await baseAdapter.handleSend(enhancedParams, store: store)
-        
-        // Check if the response contains tool calls
-        if let responseMessage = task.status.message {
-            let (processedMessage, toolCalls) = await processResponseForToolCalls(responseMessage)
-            
-            if !toolCalls.isEmpty {
-                logger.info("Detected \(toolCalls.count) tool calls in response")
-                
-                // Execute tool calls and get results
-                let toolResults = await executeToolCalls(toolCalls, toolManager: toolManager)
-                
-                // Create follow-up message with tool results
-                let followUpParams = createFollowUpMessage(params, toolResults: toolResults)
-                
-                // Get final response from LLM with tool results
-                let finalTask = try await baseAdapter.handleSend(followUpParams, store: store)
-                
-                // Combine the original task with the final response
-                task = finalTask
-            } else {
-                // No tool calls, update task with processed message
-                var updatedTask = task
-                updatedTask.status.message = processedMessage
-                task = updatedTask
+        // Check if base adapter supports tool-aware methods
+        if let toolAwareAdapter = baseAdapter as? ToolAwareAgentAdapter {
+            // Convert tool definitions to tool calls for the protocol
+            let availableToolCalls = availableTools.map { toolDef in
+                ToolCall(name: toolDef.name, arguments: [:])
             }
+            
+            // Process with base adapter using tool-aware method
+            var task = try await toolAwareAdapter.handleSendWithTools(params, availableToolCalls: availableToolCalls, store: store)
+            
+            // Check if the response contains tool calls
+            if let responseMessage = task.status.message {
+                let (processedMessage, toolCalls) = await processResponseForToolCalls(responseMessage)
+                
+                if !toolCalls.isEmpty {
+                    logger.info("Detected \(toolCalls.count) tool calls in response")
+                    
+                    // Execute tool calls and get results
+                    let toolResults = await executeToolCalls(toolCalls, toolManager: toolManager)
+                    
+                    // Create follow-up message with tool results
+                    let followUpParams = createFollowUpMessage(params, toolResults: toolResults)
+                    
+                    // Get final response from LLM with tool results
+                    let finalTask = try await toolAwareAdapter.handleSendWithTools(followUpParams, availableToolCalls: availableToolCalls, store: store)
+                    
+                    // Combine the original task with the final response
+                    task = finalTask
+                } else {
+                    // No tool calls, update task with processed message
+                    var updatedTask = task
+                    updatedTask.status.message = processedMessage
+                    task = updatedTask
+                }
+            }
+            
+            return task
+        } else {
+            // Non-tool-aware adapter, just use the plain message without tool functionality
+            logger.info("Base adapter does not support tool-aware methods, using plain message")
+            return try await baseAdapter.handleSend(params, store: store)
         }
-        
-        return task
     }
     
     public func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
@@ -97,88 +127,30 @@ public struct ToolAwareAdapter: AgentAdapter {
         let availableTools = await toolManager.allToolsAsync()
         logger.info("Available tools: \(availableTools.map(\.name))")
         
-        // Create enhanced message with tool context
-        let enhancedParams = await enhanceMessageWithToolContext(params, availableTools: availableTools)
-        
-        // For streaming, we need to collect the response and check for tool calls
-        var accumulatedResponse = ""
-        var hasProcessedToolCalls = false
-        
-        try await baseAdapter.handleStream(enhancedParams, store: store) { event in
-            // Check if this is a message event with content
-            if let messageEvent = event as? TaskStatusUpdateEvent,
-               let message = messageEvent.status.message {
-                let text = message.parts.compactMap { part in
-                    if case .text(let text) = part { return text } else { return nil }
-                }.joined(separator: " ")
-                accumulatedResponse += text
-                
-                // Check for tool calls in accumulated response
-                if !hasProcessedToolCalls {
-                    let (_, toolCall) = ToolCall.processModelResponse(content: accumulatedResponse)
-                    if let toolCall = toolCall {
-                        hasProcessedToolCalls = true
-                        logger.info("Detected tool calls in streaming response")
-                        
-                        // For now, we'll handle tool calls synchronously to avoid concurrency issues
-                        // In a production environment, you might want to implement a more sophisticated
-                        // approach for handling streaming tool calls
-                        logger.info("Tool calls detected in streaming mode, but async execution is disabled for concurrency safety")
-                    }
-                }
+        // Check if base adapter supports tool-aware methods
+        if let toolAwareAdapter = baseAdapter as? ToolAwareAgentAdapter {
+            // Convert tool definitions to tool calls for the protocol
+            let availableToolCalls = availableTools.map { toolDef in
+                ToolCall(name: toolDef.name, arguments: [:])
             }
             
-            // Forward the event
-            eventSink(event)
+            // Use the tool-aware streaming method
+            try await toolAwareAdapter.handleStreamWithTools(params, availableToolCalls: availableToolCalls, store: store, eventSink: eventSink)
+        } else {
+            // Non-tool-aware adapter, just use the plain message without tool functionality
+            logger.info("Base adapter does not support tool-aware methods, using plain message")
+            try await baseAdapter.handleStream(params, store: store, eventSink: eventSink)
         }
     }
     
-    // MARK: - Internal Helper Methods (for testing)
+    // MARK: - Internal Helper Methods
     
-    internal func enhanceMessageWithToolContext(_ params: MessageSendParams, availableTools: [ToolDefinition]) async -> MessageSendParams {
-        guard !availableTools.isEmpty else { return params }
-        
-        // Create tool context message
-        let toolDescriptions = availableTools.map { tool in
-            "- \(tool.name): \(tool.description)"
-        }.joined(separator: "\n")
-        
-        let toolContext = """
-        Available tools:
-        \(toolDescriptions)
-        
-        You can use these tools by including tool calls in your response. Format tool calls as:
-        <|python_tag|>
-        tool_name(arguments)
-        <|eom_id|>
-        
-        For example:
-        <|python_tag|>
-        weather_tool(location="New York")
-        <|eom_id|>
-        """
-        
-        // Add tool context to the message
-        var enhancedParts = params.message.parts
-        enhancedParts.insert(.text(text: toolContext), at: 0)
-        
-        let enhancedMessage = A2AMessage(
-            role: params.message.role,
-            parts: enhancedParts,
-            messageId: params.message.messageId,
-            taskId: params.message.taskId,
-            contextId: params.message.contextId
-        )
-        
-        return MessageSendParams(message: enhancedMessage)
-    }
-    
-    internal func processResponseForToolCalls(_ message: A2AMessage) async -> (A2AMessage, [String]) {
+    internal func processResponseForToolCalls(_ message: A2AMessage) async -> (A2AMessage, [ToolCall]) {
         let text = message.parts.compactMap { part in
             if case .text(let text) = part { return text } else { return nil }
         }.joined(separator: " ")
         
-        let (processedText, toolCall) = ToolCall.processModelResponse(content: text)
+        let (processedText, toolCallString) = ToolCall.processModelResponse(content: text)
         
         var processedParts = message.parts
         if let firstPart = processedParts.first,
@@ -196,30 +168,30 @@ public struct ToolAwareAdapter: AgentAdapter {
             contextId: message.contextId
         )
         
-        let toolCalls = toolCall != nil ? [toolCall!] : []
+        let toolCalls: [ToolCall] = {
+            guard let toolCallString else { return [] }
+            guard let toolCall = ToolCall.parse(toolCallString) else { return [] }
+            return [toolCall]
+        }()
         return (processedMessage, toolCalls)
     }
     
-    internal func executeToolCalls(_ toolCalls: [String], toolManager: ToolManager) async -> [ToolResult] {
+    internal func executeToolCalls(_ toolCalls: [ToolCall], toolManager: ToolManager) async -> [ToolResult] {
         var results: [ToolResult] = []
         
-        for toolCallString in toolCalls {
+        for toolCall in toolCalls {
             do {
-                // Parse tool call string to extract name and arguments
-                let (name, arguments) = parseToolCall(toolCallString)
-                let toolCall = ToolCall(name: name, arguments: arguments)
-                
-                logger.info("Executing tool: \(name) with arguments: \(arguments)")
+                logger.info("Executing tool: \(toolCall.name) with arguments: \(toolCall.arguments)")
                 let result = try await toolManager.executeTool(toolCall)
                 results.append(result)
                 
                 if result.success {
-                    logger.info("Tool \(name) executed successfully")
+                    logger.info("Tool \(toolCall.name) executed successfully")
                 } else {
-                    logger.warning("Tool \(name) failed: \(result.error ?? "Unknown error")")
+                    logger.warning("Tool \(toolCall.name) failed: \(result.error ?? "Unknown error")")
                 }
             } catch {
-                logger.error("Error executing tool call '\(toolCallString)': \(error)")
+                logger.error("Error executing tool call '\(toolCall.name)': \(error)")
                 results.append(ToolResult(
                     success: false,
                     content: "",
@@ -229,34 +201,6 @@ public struct ToolAwareAdapter: AgentAdapter {
         }
         
         return results
-    }
-    
-    internal func parseToolCall(_ toolCallString: String) -> (String, [String: Sendable]) {
-        // Simple parsing for tool calls like "tool_name(arg1=value1, arg2=value2)"
-        let trimmed = toolCallString.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        guard let openParenIndex = trimmed.firstIndex(of: "("),
-              let closeParenIndex = trimmed.lastIndex(of: ")") else {
-            return (trimmed, [:])
-        }
-        
-        let name = String(trimmed[..<openParenIndex]).trimmingCharacters(in: .whitespaces)
-        let argsString = String(trimmed[trimmed.index(after: openParenIndex)..<closeParenIndex])
-        
-        var arguments: [String: Sendable] = [:]
-        
-        // Parse arguments
-        let args = argsString.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-        for arg in args {
-            let parts = arg.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            if parts.count == 2 {
-                let key = parts[0]
-                let value = parts[1].trimmingCharacters(in: .init(charactersIn: "\"'"))
-                arguments[key] = value
-            }
-        }
-        
-        return (name, arguments)
     }
     
     internal func createFollowUpMessage(_ originalParams: MessageSendParams, toolResults: [ToolResult]) -> MessageSendParams {
@@ -290,8 +234,13 @@ public struct ToolAwareAdapter: AgentAdapter {
     internal func handleStreamingToolCalls(_ toolCalls: [String], toolManager: ToolManager, originalParams: MessageSendParams, eventSink: @escaping (Encodable) -> Void) async {
         logger.info("Handling streaming tool calls: \(toolCalls)")
         
+        // Convert string tool calls to ToolCall objects
+        let parsedToolCalls = toolCalls.compactMap { toolCallString in
+            ToolCall.parse(toolCallString)
+        }
+        
         // Execute tool calls
-        let toolResults = await executeToolCalls(toolCalls, toolManager: toolManager)
+        let toolResults = await executeToolCalls(parsedToolCalls, toolManager: toolManager)
         
         // Create follow-up message with tool results
         let followUpParams = createFollowUpMessage(originalParams, toolResults: toolResults)

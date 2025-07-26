@@ -26,6 +26,13 @@ public struct AdapterBuilder {
         return builder
     }
     
+    /// Set the base LLM adapter that supports tool-aware methods
+    public func withToolAwareLLM(_ adapter: ToolAwareAgentAdapter) -> AdapterBuilder {
+        var builder = self
+        builder.baseAdapter = adapter
+        return builder
+    }
+    
     /// Add A2A clients as tool providers
     public func withA2AClients(_ clients: [A2AClient]) -> AdapterBuilder {
         var builder = self
@@ -50,18 +57,26 @@ public struct AdapterBuilder {
     /// Build the final adapter
     public func build() -> AgentAdapter {
         guard let baseAdapter = baseAdapter else {
-            fatalError("Base adapter must be specified using withLLM()")
+            fatalError("Base adapter must be specified using withLLM() or withToolAwareLLM()")
         }
         
-        let toolManager = providers.isEmpty ? nil : ToolManager(providers: providers)
-        
-        if let toolManager = toolManager {
-            logger.info("Building tool-aware adapter with tool manager")
-        } else {
+        if providers.isEmpty {
             logger.info("Building basic adapter without tools")
+            // If no tools, just return the base adapter directly
+            return baseAdapter
+        } else {
+            let toolManager = ToolManager(providers: providers)
+            logger.info("Building tool-aware adapter with tool manager")
+            
+            // Check if the base adapter supports tool-aware methods
+            if let toolAwareAdapter = baseAdapter as? ToolAwareAgentAdapter {
+                return ToolAwareAdapter(baseAdapter: toolAwareAdapter, toolManager: toolManager)
+            } else {
+                // Fall back to the old approach for non-tool-aware adapters
+                // This creates a wrapper that enhances messages with tool information
+                return ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
+            }
         }
-        
-        return ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
     }
 }
 

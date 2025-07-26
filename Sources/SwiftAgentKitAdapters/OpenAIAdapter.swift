@@ -12,7 +12,7 @@ import Logging
 import OpenAI
 
 /// OpenAI API adapter for A2A protocol
-public struct OpenAIAdapter: AgentAdapter {
+public struct OpenAIAdapter: ToolAwareAgentAdapter {
     
     // MARK: - Configuration
     
@@ -264,6 +264,8 @@ public struct OpenAIAdapter: AgentAdapter {
         return task
     }
     
+
+    
     public func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         let taskId = UUID().uuidString
         let contextId = UUID().uuidString
@@ -483,6 +485,8 @@ public struct OpenAIAdapter: AgentAdapter {
         }
     }
     
+
+    
     // MARK: - Private Methods
     
 
@@ -553,6 +557,8 @@ public struct OpenAIAdapter: AgentAdapter {
         return firstChoice.message.content ?? ""
     }
     
+
+    
     private func streamFromOpenAI(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = []) async throws -> AsyncThrowingStream<String, Error> {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
@@ -599,6 +605,398 @@ public struct OpenAIAdapter: AgentAdapter {
             }
         }
     }
+    
+    // MARK: - ToolAwareAgentAdapter Methods
+    
+    public func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolCall], store: TaskStore) async throws -> A2ATask {
+        let taskId = UUID().uuidString
+        let contextId = UUID().uuidString
+        
+        // Create initial task
+        let message = A2AMessage(
+            role: params.message.role,
+            parts: params.message.parts,
+            messageId: UUID().uuidString,
+            taskId: taskId,
+            contextId: contextId
+        )
+        
+        var task = A2ATask(
+            id: taskId,
+            contextId: contextId,
+            status: TaskStatus(
+                state: .submitted,
+                message: message,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: []
+        )
+        
+        await store.addTask(task: task)
+        
+        // Update to working state
+        _ = await store.updateTask(
+            id: taskId,
+            status: TaskStatus(
+                state: .working,
+                message: message,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+        )
+        
+        do {
+            // Extract text from message parts
+            let prompt = extractTextFromParts(params.message.parts)
+            
+            // Build conversation history if available
+            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task.history)
+            
+            // Convert tool calls to OpenAI tool format
+            let tools = availableToolCalls.map { toolCall in
+                ChatQuery.ChatCompletionToolParam(
+                    function: .init(
+                        name: toolCall.name,
+                        description: "Tool: \(toolCall.name)",
+                        parameters: nil // For now, we'll use nil parameters since we don't have detailed schema info
+                    )
+                )
+            }
+            
+            // Call OpenAI API with tools
+            let response = try await callOpenAIWithTools(prompt: prompt, conversationHistory: conversationHistory, tools: tools)
+            
+            // Create response message
+            let responseMessage = A2AMessage(
+                role: "assistant",
+                parts: [.text(text: response)],
+                messageId: UUID().uuidString,
+                taskId: taskId,
+                contextId: contextId
+            )
+            
+            // Update task with completed status and add messages to history
+            _ = await store.updateTask(
+                id: taskId,
+                status: TaskStatus(
+                    state: .completed,
+                    message: responseMessage,
+                    timestamp: ISO8601DateFormatter().string(from: .init())
+                )
+            )
+            
+            // Add both the user message and assistant response to task history
+            var updatedTask = await store.getTask(id: taskId) ?? task
+            updatedTask.history = [message, responseMessage]
+            await store.addTask(task: updatedTask)
+            
+            // Get final task state
+            task = await store.getTask(id: taskId) ?? task
+            
+        } catch {
+            logger.error("OpenAI API call with tools failed: \(error)")
+            
+            // Update task with failed status
+            _ = await store.updateTask(
+                id: taskId,
+                status: TaskStatus(
+                    state: .failed,
+                    message: message,
+                    timestamp: ISO8601DateFormatter().string(from: .init())
+                )
+            )
+            
+            task = await store.getTask(id: taskId) ?? task
+        }
+        
+        return task
+    }
+    
+    public func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolCall], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        let taskId = UUID().uuidString
+        let contextId = UUID().uuidString
+        
+        let message = A2AMessage(
+            role: params.message.role,
+            parts: params.message.parts,
+            messageId: UUID().uuidString,
+            taskId: taskId,
+            contextId: contextId
+        )
+        
+        let baseTask = A2ATask(
+            id: taskId,
+            contextId: contextId,
+            status: TaskStatus(
+                state: .submitted,
+                message: message,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: []
+        )
+        
+        await store.addTask(task: baseTask)
+        
+        // Emit submitted status
+        let submitted = TaskStatusUpdateEvent(
+            taskId: taskId,
+            contextId: contextId,
+            kind: "status-update",
+            status: TaskStatus(
+                state: .submitted,
+                message: message,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            final: false
+        )
+        let submittedResponse = SendStreamingMessageSuccessResponse(
+            jsonrpc: "2.0",
+            id: 1,
+            result: submitted
+        )
+        eventSink(submittedResponse)
+        
+        // Update to working state
+        _ = await store.updateTask(
+            id: taskId,
+            status: TaskStatus(
+                state: .working,
+                message: message,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+        )
+        
+        let working = TaskStatusUpdateEvent(
+            taskId: taskId,
+            contextId: contextId,
+            kind: "status-update",
+            status: TaskStatus(
+                state: .working,
+                message: message,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            final: false
+        )
+        let workingResponse = SendStreamingMessageSuccessResponse(
+            jsonrpc: "2.0",
+            id: 1,
+            result: working
+        )
+        eventSink(workingResponse)
+        
+        do {
+            // Extract text from message parts
+            let prompt = extractTextFromParts(params.message.parts)
+            
+            // Build conversation history if available
+            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: baseTask.history)
+            
+            // Convert tool calls to OpenAI tool format
+            let tools = availableToolCalls.map { toolCall in
+                ChatQuery.ChatCompletionToolParam(
+                    function: .init(
+                        name: toolCall.name,
+                        description: "Tool: \(toolCall.name)",
+                        parameters: nil // For now, we'll use nil parameters since we don't have detailed schema info
+                    )
+                )
+            }
+            
+            // Stream from OpenAI API with tools
+            let stream = try await streamFromOpenAIWithTools(prompt: prompt, conversationHistory: conversationHistory, tools: tools)
+            
+            var accumulatedText = ""
+            
+            for try await chunk in stream {
+                accumulatedText += chunk
+                
+                // Create artifact update event
+                let artifact = Artifact(
+                    artifactId: UUID().uuidString,
+                    parts: [.text(text: accumulatedText)],
+                    name: "openai-response",
+                    description: "Streaming response from OpenAI with tools",
+                    metadata: nil,
+                    extensions: []
+                )
+                
+                let artifactEvent = TaskArtifactUpdateEvent(
+                    taskId: taskId,
+                    contextId: contextId,
+                    kind: "artifact-update",
+                    artifact: artifact
+                )
+                let artifactResponse = SendStreamingMessageSuccessResponse(
+                    jsonrpc: "2.0",
+                    id: 1,
+                    result: artifactEvent
+                )
+                eventSink(artifactResponse)
+            }
+            
+            // Create final response message
+            let responseMessage = A2AMessage(
+                role: "assistant",
+                parts: [.text(text: accumulatedText)],
+                messageId: UUID().uuidString,
+                taskId: taskId,
+                contextId: contextId
+            )
+            
+            // Update task with completed status
+            _ = await store.updateTask(
+                id: taskId,
+                status: TaskStatus(
+                    state: .completed,
+                    message: responseMessage,
+                    timestamp: ISO8601DateFormatter().string(from: .init())
+                )
+            )
+            
+            // Emit completed status
+            let completed = TaskStatusUpdateEvent(
+                taskId: taskId,
+                contextId: contextId,
+                kind: "status-update",
+                status: TaskStatus(
+                    state: .completed,
+                    message: responseMessage,
+                    timestamp: ISO8601DateFormatter().string(from: .init())
+                ),
+                final: true
+            )
+            let completedResponse = SendStreamingMessageSuccessResponse(
+                jsonrpc: "2.0",
+                id: 1,
+                result: completed
+            )
+            eventSink(completedResponse)
+            
+        } catch {
+            logger.error("OpenAI streaming with tools failed: \(error)")
+            
+            // Update task with failed status
+            _ = await store.updateTask(
+                id: taskId,
+                status: TaskStatus(
+                    state: .failed,
+                    message: message,
+                    timestamp: ISO8601DateFormatter().string(from: .init())
+                )
+            )
+            
+            // Emit failed status
+            let failed = TaskStatusUpdateEvent(
+                taskId: taskId,
+                contextId: contextId,
+                kind: "status-update",
+                status: TaskStatus(
+                    state: .failed,
+                    message: message,
+                    timestamp: ISO8601DateFormatter().string(from: .init())
+                ),
+                final: true
+            )
+            let failedResponse = SendStreamingMessageSuccessResponse(
+                jsonrpc: "2.0",
+                id: 1,
+                result: failed
+            )
+            eventSink(failedResponse)
+        }
+    }
+    
+    // MARK: - Private Helper Methods for Tools
+    
+    private func callOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> String {
+        // Build messages array
+        var messages: [ChatQuery.ChatCompletionMessageParam] = []
+        
+        // Add system message if configured
+        if let systemPrompt = config.systemPrompt {
+            if let systemMessage = ChatQuery.ChatCompletionMessageParam(role: .system, content: systemPrompt) {
+                messages.append(systemMessage)
+            }
+        }
+        
+        // Add conversation history (filtering out any system messages to avoid duplication)
+        let filteredHistory = conversationHistory.filter { $0.role != .system }
+        messages.append(contentsOf: filteredHistory)
+        
+        // Add current user message
+        if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
+            messages.append(userMessage)
+        }
+        
+        let query = ChatQuery(
+            messages: messages,
+            model: .init(stringLiteral: config.model),
+            frequencyPenalty: config.frequencyPenalty,
+            presencePenalty: config.presencePenalty,
+            stop: config.stopSequences.map { .init(stringList: $0) },
+            temperature: config.temperature,
+            tools: tools,
+            topP: config.topP,
+            user: config.user
+        )
+        
+        let response = try await openAI.chats(query: query)
+        
+        guard let firstChoice = response.choices.first else {
+            throw OpenAIAdapterError.invalidResponse
+        }
+        
+        return firstChoice.message.content ?? ""
+    }
+    
+    private func streamFromOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> AsyncThrowingStream<String, Error> {
+        // Build messages array
+        var messages: [ChatQuery.ChatCompletionMessageParam] = []
+        
+        // Add system message if configured
+        if let systemPrompt = config.systemPrompt {
+            if let systemMessage = ChatQuery.ChatCompletionMessageParam(role: .system, content: systemPrompt) {
+                messages.append(systemMessage)
+            }
+        }
+        
+        // Add conversation history (filtering out any system messages to avoid duplication)
+        let filteredHistory = conversationHistory.filter { $0.role != .system }
+        messages.append(contentsOf: filteredHistory)
+        
+        // Add current user message
+        if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
+            messages.append(userMessage)
+        }
+        
+        let query = ChatQuery(
+            messages: messages,
+            model: .init(stringLiteral: config.model),
+            frequencyPenalty: config.frequencyPenalty,
+            presencePenalty: config.presencePenalty,
+            stop: config.stopSequences.map { .init(stringList: $0) },
+            temperature: config.temperature,
+            tools: tools,
+            topP: config.topP,
+            user: config.user
+        )
+        
+        return AsyncThrowingStream<String, Error> { continuation in
+            Task {
+                do {
+                    for try await result in openAI.chatsStream(query: query) {
+                        if let content = result.choices.first?.delta.content {
+                            continuation.yield(content)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+
 }
 
 // MARK: - Errors
