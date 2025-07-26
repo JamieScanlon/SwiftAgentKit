@@ -33,13 +33,31 @@ public struct ToolResult: Sendable {
 
 /// Definition of an available tool
 public struct ToolDefinition: Sendable, Codable {
+
+    public struct Parameter: Sendable, Codable {
+        public let name: String
+        public let description: String
+        public let type: String
+        public let required: Bool
+
+        public init(name: String, description: String, type: String, required: Bool) {
+            self.name = name
+            self.description = description
+            self.type = type
+            self.required = required
+        }
+    }
+
     public let name: String
     public let description: String
+    public let parameters: [Parameter]
     public let type: ToolType
+   
     
-    public init(name: String, description: String, type: ToolType) {
+    public init(name: String, description: String, parameters: [Parameter], type: ToolType) {
         self.name = name
         self.description = description
+        self.parameters = parameters
         self.type = type
     }
     

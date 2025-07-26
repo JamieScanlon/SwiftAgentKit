@@ -608,7 +608,7 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
     
     // MARK: - ToolAwareAgentAdapter Methods
     
-    public func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolCall], store: TaskStore) async throws -> A2ATask {
+    public func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore) async throws -> A2ATask {
         let taskId = UUID().uuidString
         let contextId = UUID().uuidString
         
@@ -652,13 +652,9 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task.history)
             
             // Convert tool calls to OpenAI tool format
-            let tools = availableToolCalls.map { toolCall in
+            let tools = availableToolCalls.map { tool in
                 ChatQuery.ChatCompletionToolParam(
-                    function: .init(
-                        name: toolCall.name,
-                        description: "Tool: \(toolCall.name)",
-                        parameters: nil // For now, we'll use nil parameters since we don't have detailed schema info
-                    )
+                    function: tool.toOpenAIFunction()
                 )
             }
             
@@ -711,7 +707,7 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
         return task
     }
     
-    public func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolCall], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    public func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         let taskId = UUID().uuidString
         let contextId = UUID().uuidString
         
@@ -791,13 +787,9 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: baseTask.history)
             
             // Convert tool calls to OpenAI tool format
-            let tools = availableToolCalls.map { toolCall in
+            let tools = availableToolCalls.map { tool in
                 ChatQuery.ChatCompletionToolParam(
-                    function: .init(
-                        name: toolCall.name,
-                        description: "Tool: \(toolCall.name)",
-                        parameters: nil // For now, we'll use nil parameters since we don't have detailed schema info
-                    )
+                    function: tool.toOpenAIFunction()
                 )
             }
             
@@ -1028,4 +1020,40 @@ enum OpenAIAdapterError: Error, LocalizedError {
             return "Context length exceeded. Please shorten your message or conversation history."
         }
     }
-} 
+}
+
+// MARK: Format ToolDefinition for OpenAI
+
+extension ToolDefinition {
+    
+    func toOpenAIFunction() -> ChatQuery.ChatCompletionToolParam.FunctionDefinition {
+        var params: JSONSchema?
+        if parameters.isEmpty == false {
+            var props: Dictionary<String, AnyJSONDocument> = Dictionary<String, AnyJSONDocument>()
+            for p in parameters {
+                props[p.name] = .init(["type": p.type])
+            }
+            var required: [String] = parameters.compactMap({
+                if $0.required {
+                    return $0.name
+                } else {
+                    return nil
+                }
+            })
+            
+            var dict: [String: AnyJSONDocument] = [
+                "type": .init("object"),
+                "properties": .init(props),
+                "required": .init(required)
+            ]
+            params = .object(dict)
+        }
+        return .init(
+            name: name,
+            description: description,
+            parameters: params,
+            strict: false
+        )
+    }
+}
+

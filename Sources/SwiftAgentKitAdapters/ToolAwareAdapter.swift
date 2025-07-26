@@ -20,7 +20,7 @@ public protocol ToolAwareAgentAdapter: AgentAdapter {
     ///   - availableToolCalls: Array of tool calls to be made
     ///   - store: The task store
     /// - Returns: An A2A task representing the response
-    func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolCall], store: TaskStore) async throws -> A2ATask
+    func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore) async throws -> A2ATask
     
     /// Handle streaming with available tools
     /// - Parameters:
@@ -28,7 +28,7 @@ public protocol ToolAwareAgentAdapter: AgentAdapter {
     ///   - availableToolCalls: Array of tool calls to be made
     ///   - store: The task store
     ///   - eventSink: Callback for streaming events
-    func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolCall], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws
+    func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws
 }
 
 /// Enhanced adapter that can use tools while keeping the base adapter unchanged
@@ -72,13 +72,9 @@ public struct ToolAwareAdapter: AgentAdapter {
         
         // Check if base adapter supports tool-aware methods
         if let toolAwareAdapter = baseAdapter as? ToolAwareAgentAdapter {
-            // Convert tool definitions to tool calls for the protocol
-            let availableToolCalls = availableTools.map { toolDef in
-                ToolCall(name: toolDef.name, arguments: [:])
-            }
             
             // Process with base adapter using tool-aware method
-            var task = try await toolAwareAdapter.handleSendWithTools(params, availableToolCalls: availableToolCalls, store: store)
+            var task = try await toolAwareAdapter.handleSendWithTools(params, availableToolCalls: availableTools, store: store)
             
             // Check if the response contains tool calls
             if let responseMessage = task.status.message {
@@ -94,7 +90,7 @@ public struct ToolAwareAdapter: AgentAdapter {
                     let followUpParams = createFollowUpMessage(params, toolResults: toolResults)
                     
                     // Get final response from LLM with tool results
-                    let finalTask = try await toolAwareAdapter.handleSendWithTools(followUpParams, availableToolCalls: availableToolCalls, store: store)
+                    let finalTask = try await toolAwareAdapter.handleSendWithTools(followUpParams, availableToolCalls: availableTools, store: store)
                     
                     // Combine the original task with the final response
                     task = finalTask
@@ -129,13 +125,9 @@ public struct ToolAwareAdapter: AgentAdapter {
         
         // Check if base adapter supports tool-aware methods
         if let toolAwareAdapter = baseAdapter as? ToolAwareAgentAdapter {
-            // Convert tool definitions to tool calls for the protocol
-            let availableToolCalls = availableTools.map { toolDef in
-                ToolCall(name: toolDef.name, arguments: [:])
-            }
             
             // Use the tool-aware streaming method
-            try await toolAwareAdapter.handleStreamWithTools(params, availableToolCalls: availableToolCalls, store: store, eventSink: eventSink)
+            try await toolAwareAdapter.handleStreamWithTools(params, availableToolCalls: availableTools, store: store, eventSink: eventSink)
         } else {
             // Non-tool-aware adapter, just use the plain message without tool functionality
             logger.info("Base adapter does not support tool-aware methods, using plain message")

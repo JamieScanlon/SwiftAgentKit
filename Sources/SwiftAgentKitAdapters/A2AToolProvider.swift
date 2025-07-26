@@ -24,6 +24,7 @@ public struct A2AToolProvider: ToolProvider {
                 tools.append(ToolDefinition(
                     name: agentCard.name,
                     description: agentCard.description,
+                    parameters: [],
                     type: .a2aAgent
                 ))
             }

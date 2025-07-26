@@ -142,11 +142,13 @@ struct CustomToolProvider: ToolProvider {
             ToolDefinition(
                 name: "custom_function",
                 description: "A custom function that does something",
+                parameters: [],
                 type: .function
             ),
             ToolDefinition(
                 name: "weather_tool",
                 description: "Get weather information for a location",
+                parameters: [.init(name: "latitude", description: "latitude", type: "string", required: true), .init(name: "longitude", description: "longitude", type: "string", required: true)],
                 type: .function
             )
         ]

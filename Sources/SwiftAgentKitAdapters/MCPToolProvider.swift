@@ -11,6 +11,49 @@ import MCP
 import SwiftAgentKit
 import SwiftAgentKitMCP
 
+extension ToolDefinition {
+    public init(tool: Tool) {
+        
+        var parameters: [ToolDefinition.Parameter] = []
+        if case .object(let inputSchema) = tool.inputSchema {
+            if case .object(let propertiesValue) = inputSchema["properties"] {
+                
+                var requiredArray: [String] = []
+                if case .array(let requiredValue) = inputSchema["required"] {
+                    requiredArray = requiredValue.compactMap({
+                        if case .string(let stringValue) = $0 {
+                            return stringValue
+                        } else {
+                            return nil
+                        }
+                    })
+                    
+                }
+                
+                for (key, value) in propertiesValue {
+                    
+                    guard case .object(let objectValue) = value else { continue }
+                    let name: String = key
+                    var description = ""
+                    var type: String = ""
+                    let required: Bool = requiredArray.contains(key)
+                    if case .string(let stringValue) = objectValue["type"] {
+                        type = stringValue
+                    }
+                    if case .string(let stringValue) = objectValue["description"] {
+                        description = stringValue
+                    }
+                    parameters.append(.init(name: name, description: description, type: type, required: required))
+                }
+            }
+        }
+        self.name = tool.name
+        self.description = tool.description
+        self.parameters = parameters
+        self.type = .mcpTool
+    }
+}
+
 /// Direct MCP tool provider
 public struct MCPToolProvider: ToolProvider {
     private let clients: [MCPClient]
@@ -26,6 +69,7 @@ public struct MCPToolProvider: ToolProvider {
                 tools.append(ToolDefinition(
                     name: tool.name,
                     description: tool.description,
+                    parameters: [],
                     type: .mcpTool
                 ))
             }
