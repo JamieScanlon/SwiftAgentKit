@@ -24,7 +24,9 @@ public struct A2AToolProvider: ToolProvider {
                 tools.append(ToolDefinition(
                     name: agentCard.name,
                     description: agentCard.description,
-                    parameters: [],
+                    parameters: [
+                        .init(name: "task", description: "Issue a task for this agent to complete on your behalf.", type: "string", required: true)
+                    ],
                     type: .a2aAgent
                 ))
             }

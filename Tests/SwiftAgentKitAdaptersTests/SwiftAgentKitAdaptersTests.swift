@@ -11,6 +11,7 @@ import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
 import SwiftAgentKit
 import EasyJSON
+import MCP
 
 @Suite struct SwiftAgentKitAdaptersTests {
     
@@ -726,6 +727,397 @@ import EasyJSON
             #expect(false, "handleSend threw error: \(error)")
         }
     }
+    
+    // MARK: - ToolDefinition Extension Tests
+    
+    @Test("ToolDefinition should parse MCP Tool with basic properties")
+    func testToolDefinitionFromMCPToolBasic() throws {
+        // Create a simple MCP Tool
+        let mcpTool = Tool(
+            name: "test_tool",
+            description: "A test tool for unit testing",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "input": .object([
+                        "type": .string("string"),
+                        "description": .string("Input parameter")
+                    ])
+                ]),
+                "required": .array([.string("input")])
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "test_tool")
+        #expect(toolDefinition.description == "A test tool for unit testing")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.count == 1)
+        
+        let parameter = toolDefinition.parameters.first!
+        #expect(parameter.name == "input")
+        #expect(parameter.description == "Input parameter")
+        #expect(parameter.type == "string")
+        #expect(parameter.required == true)
+    }
+    
+    @Test("ToolDefinition should parse MCP Tool with multiple parameters")
+    func testToolDefinitionFromMCPToolMultipleParameters() throws {
+        // Create an MCP Tool with multiple parameters
+        let mcpTool = Tool(
+            name: "complex_tool",
+            description: "A complex tool with multiple parameters",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object([
+                        "type": .string("string"),
+                        "description": .string("The name parameter")
+                    ]),
+                    "age": .object([
+                        "type": .string("integer"),
+                        "description": .string("The age parameter")
+                    ]),
+                    "active": .object([
+                        "type": .string("boolean"),
+                        "description": .string("Whether the item is active")
+                    ])
+                ]),
+                "required": .array([.string("name"), .string("age")])
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "complex_tool")
+        #expect(toolDefinition.description == "A complex tool with multiple parameters")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.count == 3)
+        
+        // Check name parameter
+        let nameParam = toolDefinition.parameters.first { $0.name == "name" }!
+        #expect(nameParam.description == "The name parameter")
+        #expect(nameParam.type == "string")
+        #expect(nameParam.required == true)
+        
+        // Check age parameter
+        let ageParam = toolDefinition.parameters.first { $0.name == "age" }!
+        #expect(ageParam.description == "The age parameter")
+        #expect(ageParam.type == "integer")
+        #expect(ageParam.required == true)
+        
+        // Check active parameter
+        let activeParam = toolDefinition.parameters.first { $0.name == "active" }!
+        #expect(activeParam.description == "Whether the item is active")
+        #expect(activeParam.type == "boolean")
+        #expect(activeParam.required == false)
+    }
+    
+    @Test("ToolDefinition should parse MCP Tool with no parameters")
+    func testToolDefinitionFromMCPToolNoParameters() throws {
+        // Create an MCP Tool with no parameters
+        let mcpTool = Tool(
+            name: "simple_tool",
+            description: "A simple tool with no parameters",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([:])
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "simple_tool")
+        #expect(toolDefinition.description == "A simple tool with no parameters")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.isEmpty)
+    }
+    
+    @Test("ToolDefinition should parse MCP Tool with no required parameters")
+    func testToolDefinitionFromMCPToolNoRequiredParameters() throws {
+        // Create an MCP Tool with optional parameters only
+        let mcpTool = Tool(
+            name: "optional_tool",
+            description: "A tool with only optional parameters",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "optional1": .object([
+                        "type": .string("string"),
+                        "description": .string("First optional parameter")
+                    ]),
+                    "optional2": .object([
+                        "type": .string("number"),
+                        "description": .string("Second optional parameter")
+                    ])
+                ])
+                // No "required" field means all parameters are optional
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "optional_tool")
+        #expect(toolDefinition.description == "A tool with only optional parameters")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.count == 2)
+        
+        for parameter in toolDefinition.parameters {
+            #expect(parameter.required == false)
+        }
+    }
+    
+    @Test("ToolDefinition should handle MCP Tool with missing inputSchema")
+    func testToolDefinitionFromMCPToolMissingInputSchema() throws {
+        // Create an MCP Tool with no inputSchema
+        let mcpTool = Tool(
+            name: "no_schema_tool",
+            description: "A tool without input schema",
+            inputSchema: nil
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "no_schema_tool")
+        #expect(toolDefinition.description == "A tool without input schema")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.isEmpty)
+    }
+    
+    @Test("ToolDefinition should handle MCP Tool with non-object inputSchema")
+    func testToolDefinitionFromMCPToolNonObjectInputSchema() throws {
+        // Create an MCP Tool with non-object inputSchema
+        let mcpTool = Tool(
+            name: "non_object_tool",
+            description: "A tool with non-object input schema",
+            inputSchema: .string("string")
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "non_object_tool")
+        #expect(toolDefinition.description == "A tool with non-object input schema")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.isEmpty)
+    }
+    
+    @Test("ToolDefinition should handle MCP Tool with missing properties")
+    func testToolDefinitionFromMCPToolMissingProperties() throws {
+        // Create an MCP Tool with inputSchema but no properties
+        let mcpTool = Tool(
+            name: "no_properties_tool",
+            description: "A tool with no properties",
+            inputSchema: .object([
+                "type": .string("object")
+                // No "properties" field
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "no_properties_tool")
+        #expect(toolDefinition.description == "A tool with no properties")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.isEmpty)
+    }
+    
+    @Test("ToolDefinition should handle MCP Tool with non-object properties")
+    func testToolDefinitionFromMCPToolNonObjectProperties() throws {
+        // Create an MCP Tool with non-object properties
+        let mcpTool = Tool(
+            name: "non_object_properties_tool",
+            description: "A tool with non-object properties",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .string("not an object")
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "non_object_properties_tool")
+        #expect(toolDefinition.description == "A tool with non-object properties")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.isEmpty)
+    }
+    
+    @Test("ToolDefinition should handle MCP Tool with non-object parameter values")
+    func testToolDefinitionFromMCPToolNonObjectParameterValues() throws {
+        // Create an MCP Tool with non-object parameter values
+        let mcpTool = Tool(
+            name: "non_object_params_tool",
+            description: "A tool with non-object parameter values",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "valid_param": .object([
+                        "type": .string("string"),
+                        "description": .string("A valid parameter")
+                    ]),
+                    "invalid_param": .string("not an object")
+                ]),
+                "required": .array([.string("valid_param")])
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "non_object_params_tool")
+        #expect(toolDefinition.description == "A tool with non-object parameter values")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.count == 1) // Only the valid parameter should be included
+        
+        let parameter = toolDefinition.parameters.first!
+        #expect(parameter.name == "valid_param")
+        #expect(parameter.description == "A valid parameter")
+        #expect(parameter.type == "string")
+        #expect(parameter.required == true)
+    }
+    
+    @Test("ToolDefinition should handle MCP Tool with missing type and description")
+    func testToolDefinitionFromMCPToolMissingTypeAndDescription() throws {
+        // Create an MCP Tool with parameters missing type and description
+        let mcpTool = Tool(
+            name: "incomplete_params_tool",
+            description: "A tool with incomplete parameters",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "param1": .object([:]), // Empty object
+                    "param2": .object([
+                        "type": .string("string")
+                        // Missing description
+                    ]),
+                    "param3": .object([
+                        "description": .string("Parameter description")
+                        // Missing type
+                    ])
+                ]),
+                "required": .array([.string("param1"), .string("param2")])
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "incomplete_params_tool")
+        #expect(toolDefinition.description == "A tool with incomplete parameters")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.count == 3)
+        
+        // Check param1 (empty object)
+        let param1 = toolDefinition.parameters.first { $0.name == "param1" }!
+        #expect(param1.description == "")
+        #expect(param1.type == "")
+        #expect(param1.required == true)
+        
+        // Check param2 (missing description)
+        let param2 = toolDefinition.parameters.first { $0.name == "param2" }!
+        #expect(param2.description == "")
+        #expect(param2.type == "string")
+        #expect(param2.required == true)
+        
+        // Check param3 (missing type)
+        let param3 = toolDefinition.parameters.first { $0.name == "param3" }!
+        #expect(param3.description == "Parameter description")
+        #expect(param3.type == "")
+        #expect(param3.required == false)
+    }
+    
+    @Test("ToolDefinition should handle MCP Tool with non-string required values")
+    func testToolDefinitionFromMCPToolNonStringRequiredValues() throws {
+        // Create an MCP Tool with non-string values in required array
+        let mcpTool = Tool(
+            name: "mixed_required_tool",
+            description: "A tool with mixed required values",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "param1": .object([
+                        "type": .string("string"),
+                        "description": .string("First parameter")
+                    ]),
+                    "param2": .object([
+                        "type": .string("number"),
+                        "description": .string("Second parameter")
+                    ])
+                ]),
+                "required": .array([
+                    .string("param1"),
+                    .int(42), // Non-string value
+                    .bool(true), // Non-string value
+                    .string("param2")
+                ])
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "mixed_required_tool")
+        #expect(toolDefinition.description == "A tool with mixed required values")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.count == 2)
+        
+        // Check param1 (should be required)
+        let param1 = toolDefinition.parameters.first { $0.name == "param1" }!
+        #expect(param1.required == true)
+        
+        // Check param2 (should be required)
+        let param2 = toolDefinition.parameters.first { $0.name == "param2" }!
+        #expect(param2.required == true)
+    }
+    
+    @Test("ToolDefinition should handle MCP Tool with complex nested structure")
+    func testToolDefinitionFromMCPToolComplexNestedStructure() throws {
+        // Create an MCP Tool with complex nested structure
+        let mcpTool = Tool(
+            name: "complex_nested_tool",
+            description: "A tool with complex nested structure",
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "user": .object([
+                        "type": .string("object"),
+                        "description": .string("User object"),
+                        "properties": .object([
+                            "name": .object([
+                                "type": .string("string"),
+                                "description": .string("User name")
+                            ]),
+                            "email": .object([
+                                "type": .string("string"),
+                                "description": .string("User email")
+                            ])
+                        ])
+                    ]),
+                    "settings": .object([
+                        "type": .string("object"),
+                        "description": .string("Settings object")
+                    ])
+                ]),
+                "required": .array([.string("user")])
+            ])
+        )
+        
+        let toolDefinition = ToolDefinition(tool: mcpTool)
+        
+        #expect(toolDefinition.name == "complex_nested_tool")
+        #expect(toolDefinition.description == "A tool with complex nested structure")
+        #expect(toolDefinition.type == .mcpTool)
+        #expect(toolDefinition.parameters.count == 2)
+        
+        // Check user parameter
+        let userParam = toolDefinition.parameters.first { $0.name == "user" }!
+        #expect(userParam.description == "User object")
+        #expect(userParam.type == "object")
+        #expect(userParam.required == true)
+        
+        // Check settings parameter
+        let settingsParam = toolDefinition.parameters.first { $0.name == "settings" }!
+        #expect(settingsParam.description == "Settings object")
+        #expect(settingsParam.type == "object")
+        #expect(settingsParam.required == false)
+    }
 }
 
 // MARK: - Test Helpers
@@ -739,6 +1131,7 @@ struct CustomTestToolProvider: ToolProvider {
             ToolDefinition(
                 name: "test_tool",
                 description: "A test tool for unit testing",
+                parameters: [],
                 type: .function
             )
         ]

@@ -85,6 +85,7 @@ struct SimpleToolProvider: ToolProvider {
             ToolDefinition(
                 name: "simple_tool",
                 description: "A simple tool for testing",
+                parameters: [],
                 type: .function
             )
         ]

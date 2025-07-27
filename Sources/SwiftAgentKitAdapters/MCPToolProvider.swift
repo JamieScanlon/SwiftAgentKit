@@ -66,12 +66,7 @@ public struct MCPToolProvider: ToolProvider {
         for client in clients {
             let clientTools = await client.tools
             for tool in clientTools {
-                tools.append(ToolDefinition(
-                    name: tool.name,
-                    description: tool.description,
-                    parameters: [],
-                    type: .mcpTool
-                ))
+                tools.append(ToolDefinition(tool: tool))
             }
         }
         return tools

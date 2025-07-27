@@ -1033,7 +1033,7 @@ extension ToolDefinition {
             for p in parameters {
                 props[p.name] = .init(["type": p.type])
             }
-            var required: [String] = parameters.compactMap({
+            let required: [String] = parameters.compactMap({
                 if $0.required {
                     return $0.name
                 } else {
@@ -1041,7 +1041,7 @@ extension ToolDefinition {
                 }
             })
             
-            var dict: [String: AnyJSONDocument] = [
+            let dict: [String: AnyJSONDocument] = [
                 "type": .init("object"),
                 "properties": .init(props),
                 "required": .init(required)
