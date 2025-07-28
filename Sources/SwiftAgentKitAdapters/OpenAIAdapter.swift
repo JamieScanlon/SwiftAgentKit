@@ -528,9 +528,8 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             }
         }
         
-        // Add conversation history (filtering out any system messages to avoid duplication)
-        let filteredHistory = conversationHistory.filter { $0.role != .system }
-        messages.append(contentsOf: filteredHistory)
+        // Add conversation history
+        messages.append(contentsOf: conversationHistory)
         
         // Add current user message
         if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
@@ -570,9 +569,8 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             }
         }
         
-        // Add conversation history (filtering out any system messages to avoid duplication)
-        let filteredHistory = conversationHistory.filter { $0.role != .system }
-        messages.append(contentsOf: filteredHistory)
+        // Add conversation history
+        messages.append(contentsOf: conversationHistory)
         
         // Add current user message
         if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
@@ -910,9 +908,8 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             }
         }
         
-        // Add conversation history (filtering out any system messages to avoid duplication)
-        let filteredHistory = conversationHistory.filter { $0.role != .system }
-        messages.append(contentsOf: filteredHistory)
+        // Add conversation history
+        messages.append(contentsOf: conversationHistory)
         
         // Add current user message
         if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
@@ -951,9 +948,8 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             }
         }
         
-        // Add conversation history (filtering out any system messages to avoid duplication)
-        let filteredHistory = conversationHistory.filter { $0.role != .system }
-        messages.append(contentsOf: filteredHistory)
+        // Add conversation history
+        messages.append(contentsOf: conversationHistory)
         
         // Add current user message
         if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
