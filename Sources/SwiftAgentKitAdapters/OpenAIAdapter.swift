@@ -48,7 +48,7 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             stopSequences: [String]? = nil,
             user: String? = nil,
             organizationIdentifier: String? = nil,
-            timeoutInterval: TimeInterval = 60.0,
+            timeoutInterval: TimeInterval = 300.0,
             customHeaders: [String: String] = [:],
             parsingOptions: ParsingOptions = []
         ) {
@@ -154,7 +154,7 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
         systemPrompt: String? = nil,
         baseURL: URL = URL(string: "https://api.openai.com/v1")!,
         organizationIdentifier: String? = nil,
-        timeoutInterval: TimeInterval = 60.0,
+        timeoutInterval: TimeInterval = 300.0,
         customHeaders: [String: String] = [:],
         parsingOptions: ParsingOptions = []
     ) {
