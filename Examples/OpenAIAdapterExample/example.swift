@@ -15,6 +15,10 @@ struct OpenAIAdapterExample {
         
         let logger = Logger(label: "OpenAIAdapterExample")
         logger.info("Starting OpenAI Adapter Example")
+        logger.info("This example demonstrates the enhanced OpenAI adapter that can handle:")
+        logger.info("- Text content in response messages")
+        logger.info("- Tool calls as separate message parts")
+        logger.info("- Mixed content types in a single response")
         
         // Create OpenAI adapter with MacPaw OpenAI package and custom configuration
         // This demonstrates the full configuration options available:
@@ -58,9 +62,23 @@ struct OpenAIAdapterExample {
         do {
             // Test non-streaming
             let task = try await openAIAdapter.handleSend(params, store: taskStore)
-            if let firstPart = task.status.message?.parts.first,
-               case .text(let text) = firstPart {
-                logger.info("Response received: \(text)")
+            
+            // The response message can now contain multiple parts:
+            // - Text content (.text)
+            // - Tool calls (.data with tool call information)
+            // - File content (.file)
+            if let message = task.status.message {
+                logger.info("Response received with \(message.parts.count) parts:")
+                for (index, part) in message.parts.enumerated() {
+                    switch part {
+                    case .text(let text):
+                        logger.info("  Part \(index + 1): Text - \(text)")
+                    case .data(let data):
+                        logger.info("  Part \(index + 1): Data (tool call) - \(data.count) bytes")
+                    case .file(let data, let url):
+                        logger.info("  Part \(index + 1): File - URL: \(url?.absoluteString ?? "nil"), Data: \(data?.count ?? 0) bytes")
+                    }
+                }
             } else {
                 logger.info("Response received: No content")
             }

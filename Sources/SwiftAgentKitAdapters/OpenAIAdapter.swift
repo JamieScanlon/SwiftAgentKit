@@ -659,10 +659,13 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             // Call OpenAI API with tools
             let response = try await callOpenAIWithTools(prompt: prompt, conversationHistory: conversationHistory, tools: tools)
             
-            // Create response message
+            // Convert response to message parts (handles text content and tool calls)
+            let messageParts = convertOpenAIResponseToMessageParts(response)
+            
+            // Create response message with all content types
             let responseMessage = A2AMessage(
                 role: "assistant",
-                parts: [.text(text: response)],
+                parts: messageParts,
                 messageId: UUID().uuidString,
                 taskId: taskId,
                 contextId: contextId
@@ -823,10 +826,21 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
                 eventSink(artifactResponse)
             }
             
-            // Create final response message
+            // Create final response message with all content types
+            var finalParts: [A2AMessagePart] = []
+            
+            // Add text content if present
+            if !accumulatedText.isEmpty {
+                finalParts.append(.text(text: accumulatedText))
+            }
+            
+            // Add tool calls if present (for streaming, we'd need to accumulate tool calls from the stream)
+            // Note: This is a simplified implementation. In a full implementation, you'd need to
+            // accumulate tool calls from the streaming response as well.
+            
             let responseMessage = A2AMessage(
                 role: "assistant",
-                parts: [.text(text: accumulatedText)],
+                parts: finalParts,
                 messageId: UUID().uuidString,
                 taskId: taskId,
                 contextId: contextId
@@ -897,7 +911,7 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
     
     // MARK: - Private Helper Methods for Tools
     
-    private func callOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> String {
+    private func callOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> ChatResult.Choice {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
         
@@ -934,7 +948,81 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             throw OpenAIAdapterError.invalidResponse
         }
         
-        return firstChoice.message.content ?? ""
+        return firstChoice
+    }
+    
+    // MARK: - Helper Methods for Response Processing
+    
+    /// Converts an OpenAI response choice into A2A message parts
+    /// Handles text content and tool calls as separate message parts
+    private func convertOpenAIResponseToMessageParts(_ choice: ChatResult.Choice) -> [A2AMessagePart] {
+        var parts: [A2AMessagePart] = []
+        
+        // Add text content if present
+        if let content = choice.message.content, !content.isEmpty {
+            parts.append(.text(text: content))
+        }
+        
+        // Add tool calls if present
+        if let toolCalls = choice.message.toolCalls {
+            for toolCall in toolCalls {
+                // Convert tool call to JSON data for storage
+                let toolCallData = createToolCallData(toolCall)
+                parts.append(.data(data: toolCallData))
+            }
+        }
+        
+        return parts
+    }
+    
+    /// Creates JSON data representation of a tool call
+    private func createToolCallData(_ toolCall: ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam) -> Data {
+        let toolCallDict: [String: Any] = [
+            "id": toolCall.id,
+            "type": "function",
+            "function": [
+                "name": toolCall.function.name,
+                "arguments": toolCall.function.arguments
+            ]
+        ]
+        
+        return try! JSONSerialization.data(withJSONObject: toolCallDict)
+    }
+    
+    /// Extracts tool calls from message parts
+    private func extractToolCallsFromParts(_ parts: [A2AMessagePart]) -> [ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam] {
+        var toolCalls: [ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam] = []
+        
+        for part in parts {
+            if case .data(let data) = part {
+                if let toolCall = parseToolCallFromData(data) {
+                    toolCalls.append(toolCall)
+                }
+            }
+        }
+        
+        return toolCalls
+    }
+    
+    /// Parses tool call data back to OpenAI tool call format
+    private func parseToolCallFromData(_ data: Data) -> ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam? {
+        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let id = dict["id"] as? String,
+              let functionDict = dict["function"] as? [String: Any],
+              let name = functionDict["name"] as? String,
+              let arguments = functionDict["arguments"] as? String else {
+            return nil
+        }
+        
+        let function = ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam.FunctionCall(
+            arguments: arguments,
+            name: name
+        )
+        
+        return ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam(
+            id: id,
+            function: function
+        )
     }
     
     private func streamFromOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> AsyncThrowingStream<String, Error> {
