@@ -78,7 +78,8 @@ public struct ToolAwareAdapter: AgentAdapter {
             
             // Check if the response contains tool calls
             if let responseMessage = task.status.message {
-                let (processedMessage, toolCalls) = await processResponseForToolCalls(responseMessage)
+                let availableToolNames = availableTools.map { $0.name }
+                let (processedMessage, toolCalls) = await processResponseForToolCalls(responseMessage, availableTools: availableToolNames)
                 
                 if !toolCalls.isEmpty {
                     logger.info("Detected \(toolCalls.count) tool calls in response")
@@ -137,19 +138,46 @@ public struct ToolAwareAdapter: AgentAdapter {
     
     // MARK: - Internal Helper Methods
     
-    internal func processResponseForToolCalls(_ message: A2AMessage) async -> (A2AMessage, [ToolCall]) {
-        let text = message.parts.compactMap { part in
-            if case .text(let text) = part { return text } else { return nil }
-        }.joined(separator: " ")
+    public func processResponseForToolCalls(_ message: A2AMessage, availableTools: [String] = []) async -> (A2AMessage, [ToolCall]) {
+        var toolCalls: [ToolCall] = []
+        var processedParts: [A2AMessagePart] = []
         
-        let (processedText, toolCallString) = ToolCall.processModelResponse(content: text)
+        // Process each part to extract tool calls and build processed parts
+        for part in message.parts {
+            switch part {
+            case .text(let text):
+                // Process text parts for embedded tool calls (legacy format)
+                let (processedText, toolCallString) = ToolCall.processModelResponse(content: text, availableTools: availableTools)
+                
+                // Add processed text if not empty
+                if !processedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    processedParts.append(.text(text: processedText))
+                }
+                
+                // Parse any tool calls found in text
+                if let toolCallString = toolCallString,
+                   let toolCall = ToolCall.parse(toolCallString) {
+                    toolCalls.append(toolCall)
+                }
+                
+            case .data(let data):
+                // Process data parts for tool calls (new format)
+                if let toolCall = parseToolCallFromData(data) {
+                    toolCalls.append(toolCall)
+                } else {
+                    // If it's not a tool call, preserve the data part
+                    processedParts.append(part)
+                }
+                
+            case .file:
+                // Preserve file parts as-is
+                processedParts.append(part)
+            }
+        }
         
-        var processedParts = message.parts
-        if let firstPart = processedParts.first,
-           case .text = firstPart {
-            processedParts[0] = .text(text: processedText)
-        } else {
-            processedParts.insert(.text(text: processedText), at: 0)
+        // Ensure we have at least one text part if we have tool calls but no text
+        if toolCalls.count > 0 && !processedParts.contains(where: { if case .text = $0 { return true } else { return false } }) {
+            processedParts.insert(.text(text: ""), at: 0)
         }
         
         let processedMessage = A2AMessage(
@@ -160,12 +188,48 @@ public struct ToolAwareAdapter: AgentAdapter {
             contextId: message.contextId
         )
         
-        let toolCalls: [ToolCall] = {
-            guard let toolCallString else { return [] }
-            guard let toolCall = ToolCall.parse(toolCallString) else { return [] }
-            return [toolCall]
-        }()
         return (processedMessage, toolCalls)
+    }
+    
+    /// Parses tool call data from JSON format to ToolCall object
+    private func parseToolCallFromData(_ data: Data) -> ToolCall? {
+        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let _ = dict["id"] as? String,
+              let type = dict["type"] as? String,
+              type == "function",
+              let functionDict = dict["function"] as? [String: Any],
+              let name = functionDict["name"] as? String,
+              let argumentsString = functionDict["arguments"] as? String else {
+            return nil
+        }
+        
+        // Parse the arguments JSON string into a dictionary
+        guard let argumentsData = argumentsString.data(using: .utf8),
+              let argumentsDict = try? JSONSerialization.jsonObject(with: argumentsData) as? [String: Any] else {
+            return nil
+        }
+        
+        // Convert the arguments to the expected format
+        var toolCallArguments: [String: Sendable] = [:]
+        for (key, value) in argumentsDict {
+            if let stringValue = value as? String {
+                toolCallArguments[key] = stringValue
+            } else if let numberValue = value as? NSNumber {
+                toolCallArguments[key] = numberValue
+            } else if let boolValue = value as? Bool {
+                toolCallArguments[key] = boolValue
+            } else if let arrayValue = value as? [String] {
+                toolCallArguments[key] = arrayValue
+            } else if let dictValue = value as? [String: String] {
+                toolCallArguments[key] = dictValue
+            } else if let intValue = value as? Int {
+                toolCallArguments[key] = intValue
+            } else if let doubleValue = value as? Double {
+                toolCallArguments[key] = doubleValue
+            }
+        }
+        
+        return ToolCall(name: name, arguments: toolCallArguments)
     }
     
     internal func executeToolCalls(_ toolCalls: [ToolCall], toolManager: ToolManager) async -> [ToolResult] {
