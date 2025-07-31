@@ -138,6 +138,12 @@ public struct ToolCall: Sendable {
             }
         }
         
+        // Check for direct JSON format tool calls (not wrapped in tags)
+        if let jsonRange = findDirectJsonToolCall(in: content, availableTools: availableTools) {
+            let jsonContent = String(content[jsonRange])
+            return (toolCall: jsonContent, range: jsonRange)
+        }
+        
         // Check for JSON format tool calls with <|python_start|>...<|python_end|>
         if let range1 = content.ranges(of: "<|python_start|>").first {
             let startIndex = range1.upperBound
@@ -194,6 +200,44 @@ public struct ToolCall: Sendable {
             return (toolCall: extractedToolCall, range: range1.lowerBound..<range2.upperBound)
         }
         return (toolCall: toolCallContent, range: range1.lowerBound..<range2.upperBound)
+    }
+    
+    private static func findDirectJsonToolCall(in content: String, availableTools: [String]) -> Range<String.Index>? {
+        // Look for JSON objects that start with { and contain "type": "function"
+        var braceCount = 0
+        var startIndex: String.Index?
+        
+        for (index, char) in content.enumerated() {
+            let stringIndex = content.index(content.startIndex, offsetBy: index)
+            
+            if char == "{" {
+                if braceCount == 0 {
+                    startIndex = stringIndex
+                }
+                braceCount += 1
+            } else if char == "}" {
+                braceCount -= 1
+                if braceCount == 0 && startIndex != nil {
+                    // We found a complete JSON object
+                    let jsonRange = startIndex!..<content.index(after: stringIndex)
+                    let jsonContent = String(content[jsonRange])
+                    
+                    // Check if it contains "type": "function" and is valid JSON
+                    if jsonContent.contains("\"type\": \"function\"") {
+                        if let toolCall = parseJsonFormat(jsonContent) {
+                            if availableTools.isEmpty || availableTools.contains(toolCall.name) {
+                                return jsonRange
+                            }
+                        }
+                    }
+                    
+                    // Reset for next potential JSON object
+                    startIndex = nil
+                }
+            }
+        }
+        
+        return nil
     }
     
     private static func findJsonEndIndex(in content: String) -> String.Index? {

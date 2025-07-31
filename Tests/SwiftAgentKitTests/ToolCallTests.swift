@@ -567,6 +567,76 @@ struct ToolCallTests {
     
     // MARK: - JSON Format Tool Call Tests
     
+    @Test("processToolCalls - Direct JSON Format Tool Call")
+    func testProcessToolCallsDirectJsonFormat() throws {
+        let content = "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}"
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}")
+        #expect(result.range != nil)
+    }
+    
+    @Test("processToolCalls - Direct JSON Format Tool Call with Surrounding Text")
+    func testProcessToolCallsDirectJsonFormatWithSurroundingText() throws {
+        let content = "Here is the response: {\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}} and more text"
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}")
+        #expect(result.range != nil)
+    }
+    
+    @Test("processToolCalls - Direct JSON Format Tool Call Not in Available Tools")
+    func testProcessToolCallsDirectJsonFormatNotAvailable() throws {
+        let content = "{\"type\": \"function\", \"name\": \"unknown_tool\", \"parameters\": {\"message\": \"Hello World\"}}"
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        #expect(result.toolCall == nil)
+        #expect(result.range == nil)
+    }
+    
+    @Test("processToolCalls - Direct JSON Format Tool Call with Invalid Type")
+    func testProcessToolCallsDirectJsonFormatInvalidType() throws {
+        let content = "{\"type\": \"message\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World\"}}"
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        #expect(result.toolCall == nil)
+        #expect(result.range == nil)
+    }
+    
+    @Test("processToolCalls - Direct JSON Format Tool Call with Invalid JSON")
+    func testProcessToolCallsDirectJsonFormatInvalidJson() throws {
+        let content = "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World\""
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        #expect(result.toolCall == nil)
+        #expect(result.range == nil)
+    }
+    
+    @Test("processModelResponse - Direct JSON Format Tool Call")
+    func testProcessModelResponseDirectJsonFormat() throws {
+        let content = "Here is the response: {\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}} and more text"
+        let result = ToolCall.processModelResponse(content: content, availableTools: ["echo"])
+        #expect(result.message == "Here is the response:  and more text")
+        #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}")
+    }
+    
+    @Test("parse - Direct JSON Format Tool Call")
+    func testParseDirectJsonFormat() throws {
+        let jsonString = "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}"
+        let toolCall = ToolCall.parse(jsonString)
+        #expect(toolCall != nil)
+        #expect(toolCall?.name == "echo")
+        #expect(toolCall?.arguments["message"] as? String == "Hello World I hear you!")
+    }
+    
+    @Test("parse - Direct JSON Format Tool Call with Multiple Parameters")
+    func testParseDirectJsonFormatWithMultipleParameters() throws {
+        let jsonString = "{\"type\": \"function\", \"name\": \"calculate\", \"parameters\": {\"operation\": \"add\", \"a\": 10, \"b\": 20}}"
+        let toolCall = ToolCall.parse(jsonString)
+        #expect(toolCall != nil)
+        #expect(toolCall?.name == "calculate")
+        #expect(toolCall?.arguments["operation"] as? String == "add")
+        #expect(toolCall?.arguments["a"] as? Int == 10)
+        #expect(toolCall?.arguments["b"] as? Int == 20)
+    }
+    
+    // MARK: - JSON Format Tool Call Tests
+    
     @Test("processToolCalls - JSON Format Tool Call")
     func testProcessToolCallsJsonFormat() throws {
         let content = "<|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|>"
