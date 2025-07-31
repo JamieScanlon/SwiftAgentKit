@@ -262,23 +262,15 @@ public struct ToolAwareAdapter: AgentAdapter {
     internal func createFollowUpMessage(_ originalParams: MessageSendParams, toolResults: [ToolResult]) -> MessageSendParams {
         let toolResultsText = toolResults.enumerated().map { index, result in
             if result.success {
-                return "Tool result \(index + 1): \(result.content)"
+                return result.content
             } else {
-                return "Tool result \(index + 1): Error - \(result.error ?? "Unknown error")"
+                return "\(result.error ?? "Unknown error")"
             }
         }.joined(separator: "\n\n")
         
-        let followUpText = """
-        Tool execution completed. Here are the results:
-        
-        \(toolResultsText)
-        
-        Please continue with your response based on these tool results.
-        """
-        
         let followUpMessage = A2AMessage(
             role: "user",
-            parts: [.text(text: followUpText)],
+            parts: [.text(text: toolResultsText)],
             messageId: UUID().uuidString,
             taskId: originalParams.message.taskId,
             contextId: originalParams.message.contextId
