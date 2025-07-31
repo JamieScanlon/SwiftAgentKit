@@ -564,4 +564,77 @@ struct ToolCallTests {
         #expect(toolCall?.arguments["query"] as? String == "🚀 rocket")
         #expect(toolCall?.arguments["name"] as? String == "🎉 party")
     }
+    
+    // MARK: - JSON Format Tool Call Tests
+    
+    @Test("processToolCalls - JSON Format Tool Call")
+    func testProcessToolCallsJsonFormat() throws {
+        let content = "<|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|>"
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["add"])
+        #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
+        #expect(result.range != nil)
+    }
+    
+    @Test("processToolCalls - JSON Format Tool Call with Surrounding Text")
+    func testProcessToolCallsJsonFormatWithSurroundingText() throws {
+        let content = "Here is the result: <|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|> and more text"
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["add"])
+        #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
+        #expect(result.range != nil)
+    }
+    
+    @Test("processToolCalls - JSON Format Tool Call with Only Opening Tag")
+    func testProcessToolCallsJsonFormatOnlyOpeningTag() throws {
+        let content = "Some text <|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}} more text"
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["add"])
+        #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
+        #expect(result.range != nil)
+    }
+    
+    @Test("processToolCalls - JSON Format Tool Call Not in Available Tools")
+    func testProcessToolCallsJsonFormatNotAvailable() throws {
+        let content = "<|python_start|>{\"type\": \"function\", \"name\": \"unknown_tool\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|>"
+        let result = ToolCall.processToolCalls(content: content, availableTools: ["add"])
+        #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"unknown_tool\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
+        #expect(result.range != nil)
+    }
+    
+    @Test("processModelResponse - JSON Format Tool Call")
+    func testProcessModelResponseJsonFormat() throws {
+        let content = "Here is the result: <|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|> and more text"
+        let result = ToolCall.processModelResponse(content: content, availableTools: ["add"])
+        #expect(result.message == "Here is the result:  and more text")
+        #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
+    }
+    
+    @Test("parse - JSON Format Tool Call")
+    func testParseJsonFormat() throws {
+        let jsonString = "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}"
+        let toolCall = ToolCall.parse(jsonString)
+        #expect(toolCall != nil)
+        #expect(toolCall?.name == "add")
+        #expect(toolCall?.arguments["a"] as? Int == 44123)
+        #expect(toolCall?.arguments["b"] as? Int == 5532)
+    }
+    
+    @Test("parse - JSON Format Tool Call with String Parameters")
+    func testParseJsonFormatWithStringParameters() throws {
+        let jsonString = "{\"type\": \"function\", \"name\": \"search\", \"parameters\": {\"query\": \"test query\", \"filter\": \"active\"}}"
+        let toolCall = ToolCall.parse(jsonString)
+        #expect(toolCall != nil)
+        #expect(toolCall?.name == "search")
+        #expect(toolCall?.arguments["query"] as? String == "test query")
+        #expect(toolCall?.arguments["filter"] as? String == "active")
+    }
+    
+    @Test("parse - JSON Format Tool Call with Mixed Parameter Types")
+    func testParseJsonFormatWithMixedParameterTypes() throws {
+        let jsonString = "{\"type\": \"function\", \"name\": \"calculate\", \"parameters\": {\"operation\": \"add\", \"values\": [1, 2, 3], \"enabled\": true}}"
+        let toolCall = ToolCall.parse(jsonString)
+        #expect(toolCall != nil)
+        #expect(toolCall?.name == "calculate")
+        #expect(toolCall?.arguments["operation"] as? String == "add")
+        #expect(toolCall?.arguments["enabled"] as? Bool == true)
+        // Note: Array parsing would need to be implemented separately
+    }
 } 

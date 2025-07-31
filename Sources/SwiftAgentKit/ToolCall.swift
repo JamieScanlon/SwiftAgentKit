@@ -138,6 +138,35 @@ public struct ToolCall: Sendable {
             }
         }
         
+        // Check for JSON format tool calls with <|python_start|>...<|python_end|>
+        if let range1 = content.ranges(of: "<|python_start|>").first {
+            let startIndex = range1.upperBound
+            
+            // Look for the closing tag after the opening tag
+            let range2Attempt = content.ranges(of: "<|python_end|>").first { range in
+                range.lowerBound >= startIndex
+            }
+            
+            if let range2 = range2Attempt {
+                let endIndex = range2.lowerBound
+                let toolCallContent = String(content[startIndex..<endIndex])
+                return (toolCall: toolCallContent, range: range1.lowerBound..<range2.upperBound)
+            } else {
+                // Only opening tag is present, try to extract just the JSON content
+                let endIndex = content.endIndex
+                let toolCallContent = String(content[startIndex..<endIndex])
+                
+                // Try to find the end of the JSON object
+                if let jsonEndIndex = findJsonEndIndex(in: toolCallContent) {
+                    let jsonContent = String(toolCallContent[..<jsonEndIndex])
+                    return (toolCall: jsonContent, range: range1.lowerBound..<content.index(startIndex, offsetBy: jsonEndIndex.utf16Offset(in: toolCallContent)))
+                }
+                
+                return (toolCall: toolCallContent, range: range1.lowerBound..<endIndex)
+            }
+        }
+        
+        // Check for legacy format tool calls with <|python_tag|>...<|eom_id|>
         guard let range1 = content.ranges(of: "<|python_tag|>").first else {
             return (nil, nil)
         }
@@ -165,6 +194,44 @@ public struct ToolCall: Sendable {
             return (toolCall: extractedToolCall, range: range1.lowerBound..<range2.upperBound)
         }
         return (toolCall: toolCallContent, range: range1.lowerBound..<range2.upperBound)
+    }
+    
+    private static func findJsonEndIndex(in content: String) -> String.Index? {
+        var braceCount = 0
+        var inString = false
+        var escapeNext = false
+        
+        for (index, char) in content.enumerated() {
+            let stringIndex = content.index(content.startIndex, offsetBy: index)
+            
+            if escapeNext {
+                escapeNext = false
+                continue
+            }
+            
+            if char == "\\" {
+                escapeNext = true
+                continue
+            }
+            
+            if char == "\"" {
+                inString.toggle()
+                continue
+            }
+            
+            if !inString {
+                if char == "{" {
+                    braceCount += 1
+                } else if char == "}" {
+                    braceCount -= 1
+                    if braceCount == 0 {
+                        return content.index(after: stringIndex)
+                    }
+                }
+            }
+        }
+        
+        return nil
     }
     
     private static func extractToolCallFromContent(_ content: String, availableTools: [String]) -> String? {
@@ -232,10 +299,26 @@ public struct ToolCall: Sendable {
         let (toolCall, range) = processToolCalls(content: content, availableTools: availableTools)
         if let toolCall {
             if let range {
-                // Check if this is a wrapped tool call by looking for the opening tag
-                if let pythonTagRange = content.range(of: "<|python_tag|>"),
-                   range.lowerBound >= pythonTagRange.lowerBound {
-                    // This is a wrapped tool call
+                // Check if this is a JSON format tool call by looking for the opening tag
+                if let pythonStartTagRange = content.range(of: "<|python_start|>"),
+                   range.lowerBound >= pythonStartTagRange.lowerBound {
+                    // This is a JSON format wrapped tool call
+                    if let pythonEndTagRange = content.range(of: "<|python_end|>"),
+                       range.upperBound <= pythonEndTagRange.upperBound {
+                        // Both tags are present, remove the entire wrapped content
+                        let beforePythonStartTag = String(content[..<pythonStartTagRange.lowerBound])
+                        let afterPythonEndTag = String(content[pythonEndTagRange.upperBound...])
+                        let message = beforePythonStartTag + afterPythonEndTag
+                        return (message: message, toolCall: toolCall)
+                    } else {
+                        // Only opening tag is present, remove everything from the opening tag onwards
+                        let beforePythonStartTag = String(content[..<pythonStartTagRange.lowerBound])
+                        let message = beforePythonStartTag
+                        return (message: message, toolCall: toolCall)
+                    }
+                } else if let pythonTagRange = content.range(of: "<|python_tag|>"),
+                          range.lowerBound >= pythonTagRange.lowerBound {
+                    // This is a legacy wrapped tool call
                     if let eomTagRange = content.range(of: "<|eom_id|>"),
                        range.upperBound <= eomTagRange.upperBound {
                         // Both tags are present, preserve the tags
@@ -317,6 +400,11 @@ public struct ToolCall: Sendable {
     public static func parse(_ toolCallString: String) -> ToolCall? {
         let trimmed = toolCallString.trimmingCharacters(in: .whitespaces)
         
+        // Try to parse as JSON format first
+        if trimmed.hasPrefix("{") && trimmed.hasSuffix("}") {
+            return parseJsonFormat(trimmed)
+        }
+        
         // Find the opening parenthesis
         guard let openParenIndex = trimmed.firstIndex(of: "(") else {
             return nil
@@ -347,6 +435,61 @@ public struct ToolCall: Sendable {
         }
         
         return ToolCall(name: functionName, arguments: arguments)
+    }
+    
+    private static func parseJsonFormat(_ jsonString: String) -> ToolCall? {
+        guard let data = jsonString.data(using: .utf8) else {
+            return nil
+        }
+        
+        do {
+            let json = try JSONSerialization.jsonObject(with: data, options: [])
+            
+            guard let dict = json as? [String: Any] else {
+                return nil
+            }
+            
+            guard let type = dict["type"] as? String, type == "function" else {
+                return nil
+            }
+            
+            guard let name = dict["name"] as? String else {
+                return nil
+            }
+            
+            var arguments: [String: Sendable] = [:]
+            
+            if let parameters = dict["parameters"] as? [String: Any] {
+                for (key, value) in parameters {
+                    // Convert values to appropriate types
+                    if let stringValue = value as? String {
+                        arguments[key] = stringValue
+                    } else if let boolValue = value as? Bool {
+                        arguments[key] = boolValue
+                    } else if let intValue = value as? Int {
+                        arguments[key] = intValue
+                    } else if let doubleValue = value as? Double {
+                        arguments[key] = doubleValue
+                    } else if let nsNumber = value as? NSNumber {
+                        // Handle NSNumber types (including booleans from JSON)
+                        if CFGetTypeID(nsNumber) == CFBooleanGetTypeID() {
+                            arguments[key] = nsNumber.boolValue
+                        } else if CFNumberIsFloatType(nsNumber) {
+                            arguments[key] = nsNumber.doubleValue
+                        } else {
+                            arguments[key] = nsNumber.intValue
+                        }
+                    } else {
+                        // Convert other types to strings
+                        arguments[key] = String(describing: value)
+                    }
+                }
+            }
+            
+            return ToolCall(name: name, arguments: arguments)
+        } catch {
+            return nil
+        }
     }
     
     private static func parseArguments(_ argsString: String) -> [String: Sendable] {
