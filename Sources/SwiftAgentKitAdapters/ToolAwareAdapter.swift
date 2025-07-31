@@ -87,11 +87,11 @@ public struct ToolAwareAdapter: AgentAdapter {
                     // Execute tool calls and get results
                     let toolResults = await executeToolCalls(toolCalls, toolManager: toolManager)
                     
-                    // Create follow-up message with tool results
-                    let followUpParams = createFollowUpMessage(params, toolResults: toolResults)
+                    // Create message with tool results
+                    let toolResultMessageParams = createToolResultMessage(params, toolResults: toolResults)
                     
                     // Get final response from LLM with tool results
-                    let finalTask = try await toolAwareAdapter.handleSendWithTools(followUpParams, availableToolCalls: availableTools, store: store)
+                    let finalTask = try await toolAwareAdapter.handleSendWithTools(toolResultMessageParams, availableToolCalls: availableTools, store: store)
                     
                     // Combine the original task with the final response
                     task = finalTask
@@ -259,7 +259,7 @@ public struct ToolAwareAdapter: AgentAdapter {
         return results
     }
     
-    internal func createFollowUpMessage(_ originalParams: MessageSendParams, toolResults: [ToolResult]) -> MessageSendParams {
+    internal func createToolResultMessage(_ originalParams: MessageSendParams, toolResults: [ToolResult]) -> MessageSendParams {
         let toolResultsText = toolResults.enumerated().map { index, result in
             if result.success {
                 return result.content
@@ -269,7 +269,7 @@ public struct ToolAwareAdapter: AgentAdapter {
         }.joined(separator: "\n\n")
         
         let followUpMessage = A2AMessage(
-            role: "user",
+            role: "agent", // Follows the A2A spec: a role can be either "user" or "agent"
             parts: [.text(text: toolResultsText)],
             messageId: UUID().uuidString,
             taskId: originalParams.message.taskId,
@@ -290,8 +290,8 @@ public struct ToolAwareAdapter: AgentAdapter {
         // Execute tool calls
         let toolResults = await executeToolCalls(parsedToolCalls, toolManager: toolManager)
         
-        // Create follow-up message with tool results
-        let followUpParams = createFollowUpMessage(originalParams, toolResults: toolResults)
+        // Create message with tool results
+        let followUpParams = createToolResultMessage(originalParams, toolResults: toolResults)
         
         // Stream the follow-up response
         do {
