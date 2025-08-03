@@ -49,8 +49,8 @@ let package = Package(
     ],
     dependencies: [
         // Core dependencies
-//        .package(url: "https://github.com/vapor/vapor.git", from: "4.0.0"),
-        .package(url: "https://github.com/vapor/vapor.git", revision: "4014016aad591a120f244f9b9e8a57252b7e62b4"),
+        .package(url: "https://github.com/vapor/vapor.git", from: "4.0.0"),
+//        .package(url: "https://github.com/vapor/vapor.git", revision: "4014016aad591a120f244f9b9e8a57252b7e62b4"),
         .package(url: "https://github.com/JamieScanlon/EasyJSON.git", from: "1.0.0"),
         
         // Logging dependency
