@@ -43,6 +43,12 @@ public actor MCPManager {
         }
     }
     
+    /// Initialize the A2AManager with an arrat of `MCPClient` objects
+    public func initialize(clients: [MCPClient]) async throws {
+        self.clients = clients
+        await buildToolsJson()
+    }
+    
     public func toolCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
         for client in clients {
             if let contents = try await client.callTool(toolCall.name, arguments: toolCall.argumentsToValue()) {

@@ -29,6 +29,12 @@ public actor A2AManager {
         }
     }
     
+    /// Initialize the A2AManager with an arrat of `A2AClient` objects
+    public func initialize(clients: [A2AClient]) async throws {
+        self.clients = clients
+        await buildToolsJson()
+    }
+    
     public func agentCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
         for client in clients {
             guard let instructions: String = toolCall.arguments["instructions"] as? String else { continue }
