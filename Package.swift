@@ -26,6 +26,9 @@ let package = Package(
         .library(
             name: "SwiftAgentKitAdapters",
             targets: ["SwiftAgentKitAdapters"]),
+        .library(
+            name: "SwiftAgentKitOrchestrator",
+            targets: ["SwiftAgentKitOrchestrator"]),
         
         // Example executables
         .executable(
@@ -46,6 +49,9 @@ let package = Package(
         .executable(
             name: "OpenAIAdapterExample",
             targets: ["OpenAIAdapterExample"]),
+        .executable(
+            name: "OrchestratorExample",
+            targets: ["OrchestratorExample"]),
     ],
     dependencies: [
         // Core dependencies
@@ -71,6 +77,7 @@ let package = Package(
             name: "SwiftAgentKit",
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "EasyJSON", package: "EasyJSON"),
             ]),
         
         // A2A (Agent-to-Agent) module
@@ -105,6 +112,17 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "OpenAI", package: "OpenAI"),
             ]),
+        
+        // Orchestrator module - LLM orchestrator building blocks
+        .target(
+            name: "SwiftAgentKitOrchestrator",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitA2A",
+                "SwiftAgentKitMCP",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            exclude: ["README.md"]),
         
         // Example executables
         .executableTarget(
@@ -162,6 +180,15 @@ let package = Package(
             ],
             path: "Examples/OpenAIAdapterExample"),
         
+        .executableTarget(
+            name: "OrchestratorExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitOrchestrator",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/OrchestratorExample"),
+        
         // Test targets
         .testTarget(
             name: "SwiftAgentKitTests",
@@ -178,6 +205,10 @@ let package = Package(
         .testTarget(
             name: "SwiftAgentKitAdaptersTests",
             dependencies: ["SwiftAgentKitAdapters"]
+        ),
+        .testTarget(
+            name: "SwiftAgentKitOrchestratorTests",
+            dependencies: ["SwiftAgentKitOrchestrator"]
         ),
     ]
 ) 

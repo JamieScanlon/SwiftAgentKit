@@ -6,6 +6,6 @@ import Logging
 struct SwiftAgentKitTests {
     @Test("Version")
     func testSwiftAgentKitVersion() throws {
-        #expect(swiftAgentKitVersion == "0.1.3")
+        #expect(swiftAgentKitVersion == "0.3.1")
     }
 } 

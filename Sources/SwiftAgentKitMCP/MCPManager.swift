@@ -43,19 +43,19 @@ public actor MCPManager {
         }
     }
     
-    public func toolCall(_ toolCall: ToolCall) async throws -> [SwiftAgentKit.Message]? {
+    public func toolCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
         for client in clients {
             if let contents = try await client.callTool(toolCall.name, arguments: toolCall.argumentsToValue()) {
-                var returnMessages: [SwiftAgentKit.Message] = []
+                var returnResponses: [LLMResponse] = []
                 for content in contents {
                     switch content {
                     case .text(let text):
-                        returnMessages.append(Message(id: UUID(), role: .tool, content: text))
+                        returnResponses.append(LLMResponse.complete(content: text))
                     default:
                         continue
                     }
                 }
-                return returnMessages
+                return returnResponses
             }
         }
         return nil

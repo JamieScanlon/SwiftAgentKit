@@ -47,10 +47,7 @@ extension ToolDefinition {
                 }
             }
         }
-        self.name = tool.name
-        self.description = tool.description
-        self.parameters = parameters
-        self.type = .mcpTool
+        self.init(name: tool.name, description: tool.description, parameters: parameters, type: .mcpTool)
     }
 }
 

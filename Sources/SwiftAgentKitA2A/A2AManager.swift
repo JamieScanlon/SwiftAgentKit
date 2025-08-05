@@ -29,23 +29,23 @@ public actor A2AManager {
         }
     }
     
-    public func agentCall(_ toolCall: ToolCall) async throws -> [Message]? {
+    public func agentCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
         for client in clients {
             guard let instructions: String = toolCall.arguments["instructions"] as? String else { continue }
             let a2aMessage = A2AMessage(role: "assistant", parts: [.text(text: instructions)], messageId: UUID().uuidString)
             let params: MessageSendParams = .init(message: a2aMessage)
             let contents = try await client.streamMessage(params: params)
-            var returnMessages: [Message] = []
+            var returnResponses: [LLMResponse] = []
             for await content in contents {
                 switch content.result {
                 case .message(let aMessage):
                     let text = aMessage.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
-                    returnMessages.append(Message(id: UUID(), role: .tool, content: text))
+                    returnResponses.append(LLMResponse.complete(content: text))
                 default:
                     continue
                 }
             }
-            return returnMessages
+            return returnResponses
         }
         return nil
     }
