@@ -44,8 +44,7 @@ struct MockLLM: LLMProtocol {
         let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
         let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM)
         
-        let llmProtocol = await orchestrator.llmProtocol
-        #expect(llmProtocol is MockLLM)
+        #expect(await orchestrator.llm is MockLLM)
         #expect(mockLLM.model == "test-model")
     }
     
@@ -81,12 +80,10 @@ struct MockLLM: LLMProtocol {
         )
         let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config)
         
-        let llmProtocol = await orchestrator.llmProtocol
-        let orchestratorConfig = await orchestrator.orchestratorConfig
-        #expect(llmProtocol is MockLLM)
-        #expect(orchestratorConfig.streamingEnabled == true)
-        #expect(orchestratorConfig.mcpEnabled == true)
-        #expect(orchestratorConfig.a2aEnabled == false)
+        #expect(await orchestrator.llm is MockLLM)
+        #expect(await orchestrator.config.streamingEnabled == true)
+        #expect(await orchestrator.config.mcpEnabled == true)
+        #expect(await orchestrator.config.a2aEnabled == false)
     }
     
     @Test("updateConversation handles synchronous responses")
@@ -105,7 +102,7 @@ struct MockLLM: LLMProtocol {
         var finalConversation: [Message]?
         
         // Start listening to the stream
-        let messageTask = Task {
+        _ = Task {
             for await message in messageStream {
                 #expect(message.role == .assistant)
                 finalConversation = finalConversation ?? []
@@ -141,7 +138,7 @@ struct MockLLM: LLMProtocol {
         var finalConversation: [Message]?
         
         // Start listening to the stream
-        let messageTask = Task {
+        _ = Task {
             for await message in messageStream {
                 streamCount += 1
                 #expect(message.role == .assistant)
@@ -178,7 +175,7 @@ struct MockLLM: LLMProtocol {
         var finalConversation: [Message]?
         
         // Start listening to the stream
-        let messageTask = Task {
+        _ = Task {
             for await message in messageStream {
                 #expect(message.role == .assistant)
                 finalConversation = finalConversation ?? []
@@ -224,7 +221,7 @@ struct MockLLM: LLMProtocol {
         var finalConversation: [Message]?
         
         // Start listening to the stream
-        let messageTask = Task {
+        _ = Task {
             for await message in messageStream {
                 #expect(message.role == .assistant)
                 finalConversation = finalConversation ?? []

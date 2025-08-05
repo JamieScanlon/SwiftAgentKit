@@ -111,7 +111,9 @@ let package = Package(
                 "SwiftAgentKitMCP",
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "OpenAI", package: "OpenAI"),
-            ]),
+            ],
+            path: "Sources/SwiftAgentKitAdapters",
+            exclude: ["README.md"]),
         
         // Orchestrator module - LLM orchestrator building blocks
         .target(

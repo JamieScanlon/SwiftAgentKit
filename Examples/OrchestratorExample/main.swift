@@ -109,8 +109,7 @@ func main() async {
     // Initialize the orchestrator
     let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, logger: logger)
     logger.info("Orchestrator initialized successfully: \(orchestrator)")
-    let orchestratorConfig = await orchestrator.orchestratorConfig
-    logger.info("Configuration - Streaming: \(orchestratorConfig.streamingEnabled), MCP: \(orchestratorConfig.mcpEnabled), A2A: \(orchestratorConfig.a2aEnabled)")
+    logger.info("Configuration - Streaming: \(config.streamingEnabled), MCP: \(config.mcpEnabled), A2A: \(config.a2aEnabled)")
     
     // Demonstrate conversation processing
     logger.info("Demonstrating conversation processing...")
@@ -130,7 +129,7 @@ func main() async {
         logger.info("Processing conversation...")
         
         // Start listening to streams before processing
-        let messageTask = Task {
+        _ = Task {
             for await message in messageStream {
                 logger.info("Received final message: \(message.content)")
                 finalConversation = finalConversation ?? []
@@ -139,7 +138,7 @@ func main() async {
             }
         }
         
-        let partialTask = Task {
+        _ = Task {
             for await partialContent in partialContentStream {
                 logger.info("Received partial content: \(partialContent)")
                 partialCount += 1

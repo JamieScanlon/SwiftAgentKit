@@ -18,7 +18,7 @@ struct ToolAwareExample {
         
         // Create a tool manager
         let toolManager = ToolManager()
-        toolManager.addProvider(customToolProvider)
+        _ = toolManager.addProvider(customToolProvider)
         
         // Create base adapters
         let openAIAdapter = OpenAIAdapter(apiKey: "your-openai-key")
