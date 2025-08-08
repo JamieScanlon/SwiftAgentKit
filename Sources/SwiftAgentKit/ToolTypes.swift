@@ -51,6 +51,33 @@ public struct ToolDefinition: Sendable, Codable {
         case mcpTool = "mcp_tool"
         case function = "function"
     }
+    
+    public func toolCallJson() -> [String: Any] {
+        var returnValue: [String: Any] = ["type": "function"]
+        var properties: [String: Any] = [:]
+        var required: [String] = []
+        
+        for parameter in parameters {
+            properties[parameter.name] = [
+                "type": parameter.type,
+                "description": parameter.description
+            ]
+            if parameter.required {
+                required.append(parameter.name)
+            }
+        }
+        
+        returnValue["function"] = [
+            "name": name,
+            "description": description,
+            "parameters": [
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            ]
+        ]
+        return returnValue
+    }
 }
 
 /// Simple tool manager that coordinates multiple providers

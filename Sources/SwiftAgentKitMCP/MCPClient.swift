@@ -37,7 +37,7 @@ public actor MCPClient {
     public let isStrict: Bool
     public var state: State = .notConnected
     
-    public private(set) var tools: [Tool] = []
+    public private(set) var tools: [ToolDefinition] = []
     public private(set) var resources: [Resource] = []
     public private(set) var prompts: [Prompt] = []
     private let logger = Logger(label: "MCPClient")
@@ -85,7 +85,7 @@ public actor MCPClient {
         }
         // List available tools
         let (tools, _) = try await client.listTools()
-        self.tools = tools
+        self.tools = tools.map { ToolDefinition(tool: $0) }
     }
     
     public func callTool(_ toolName: String, arguments: [String: Value]? = nil) async throws -> [Tool.Content]? {
@@ -182,4 +182,42 @@ public actor MCPClient {
 }
 
 
-
+extension ToolDefinition {
+    public init(tool: Tool) {
+        
+        var parameters: [ToolDefinition.Parameter] = []
+        if case .object(let inputSchema) = tool.inputSchema {
+            if case .object(let propertiesValue) = inputSchema["properties"] {
+                
+                var requiredArray: [String] = []
+                if case .array(let requiredValue) = inputSchema["required"] {
+                    requiredArray = requiredValue.compactMap({
+                        if case .string(let stringValue) = $0 {
+                            return stringValue
+                        } else {
+                            return nil
+                        }
+                    })
+                    
+                }
+                
+                for (key, value) in propertiesValue {
+                    
+                    guard case .object(let objectValue) = value else { continue }
+                    let name: String = key
+                    var description = ""
+                    var type: String = ""
+                    let required: Bool = requiredArray.contains(key)
+                    if case .string(let stringValue) = objectValue["type"] {
+                        type = stringValue
+                    }
+                    if case .string(let stringValue) = objectValue["description"] {
+                        description = stringValue
+                    }
+                    parameters.append(.init(name: name, description: description, type: type, required: required))
+                }
+            }
+        }
+        self.init(name: tool.name, description: tool.description, parameters: parameters, type: .mcpTool)
+    }
+}
