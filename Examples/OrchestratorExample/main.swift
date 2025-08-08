@@ -43,7 +43,7 @@ struct MockLLM: LLMProtocol {
         }
     }
     
-    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error> {
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         return AsyncThrowingStream { continuation in
             Task {
                 // Check if this is a tool response
@@ -51,33 +51,33 @@ struct MockLLM: LLMProtocol {
                 
                 if hasToolMessages {
                     logger.info("LLM received tool responses, generating final streaming answer")
-                    continuation.yield(LLMResponse.streamChunk("Based on the tool results, "))
-                    continuation.yield(LLMResponse.streamChunk("here's my final answer: "))
-                    continuation.yield(LLMResponse.complete(content: "The weather is sunny and 75°F today."))
+                    continuation.yield(.stream(LLMResponse.streamChunk("Based on the tool results, ")))
+                    continuation.yield(.stream(LLMResponse.streamChunk("here's my final answer: ")))
+                    continuation.yield(.complete(LLMResponse.complete(content: "The weather is sunny and 75°F today.")))
                 } else {
                     // Check if we should make a tool call
                     let lastMessage = messages.last
                     if lastMessage?.content.contains("weather") == true {
                         logger.info("LLM making tool call for weather information")
                         // First yield some partial chunks
-                        continuation.yield(LLMResponse.streamChunk("I need to "))
-                        continuation.yield(LLMResponse.streamChunk("check the weather "))
-                        continuation.yield(LLMResponse.streamChunk("for you."))
+                        continuation.yield(.stream(LLMResponse.streamChunk("I need to ")))
+                        continuation.yield(.stream(LLMResponse.streamChunk("check the weather ")))
+                        continuation.yield(.stream(LLMResponse.streamChunk("for you.")))
                         
                         // Then yield the tool call
                         let toolCall = ToolCall(
                             name: "get_weather",
                             arguments: ["location": "current"]
                         )
-                        continuation.yield(LLMResponse.withToolCalls(
+                        continuation.yield(.complete(LLMResponse.withToolCalls(
                             content: "I need to check the weather for you.",
                             toolCalls: [toolCall]
-                        ))
+                        )))
                     } else {
                         // Yield partial chunks for regular responses
-                        continuation.yield(LLMResponse.streamChunk("Mock "))
-                        continuation.yield(LLMResponse.streamChunk("streaming "))
-                        continuation.yield(LLMResponse.complete(content: "response from orchestrator"))
+                        continuation.yield(.stream(LLMResponse.streamChunk("Mock ")))
+                        continuation.yield(.stream(LLMResponse.streamChunk("streaming ")))
+                        continuation.yield(.complete(LLMResponse.complete(content: "response from orchestrator")))
                     }
                 }
                 continuation.finish()

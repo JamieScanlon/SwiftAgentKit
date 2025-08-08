@@ -42,13 +42,6 @@ public protocol LLMProtocol: Sendable {
     /// Returns the model name for this LLM instance
     func getModelName() -> String
     
-    /// Send a message to the LLM and get a response
-    /// - Parameters:
-    ///   - message: The message to send
-    ///   - config: Configuration for the request
-    /// - Returns: The LLM response
-    func send(_ message: Message, config: LLMRequestConfig) async throws -> LLMResponse
-    
     /// Send multiple messages to the LLM and get a response
     /// - Parameters:
     ///   - messages: The messages to send
@@ -56,31 +49,32 @@ public protocol LLMProtocol: Sendable {
     /// - Returns: The LLM response
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse
     
-    /// Stream responses from the LLM
-    /// - Parameters:
-    ///   - message: The message to send
-    ///   - config: Configuration for the request
-    /// - Returns: An async sequence of streaming responses
-    func stream(_ message: Message, config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error>
-    
     /// Stream responses from the LLM with multiple messages
     /// - Parameters:
     ///   - messages: The messages to send
     ///   - config: Configuration for the request
-    /// - Returns: An async sequence of streaming responses
-    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error>
+    /// - Returns: An async sequence of streaming results
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error>
 }
 
 /// Default implementations for the LLMProtocol
 public extension LLMProtocol {
     
-    /// Default implementation for sending a single message
+    /// Send a message to the LLM and get a response
+    /// - Parameters:
+    ///   - message: The message to send
+    ///   - config: Configuration for the request
+    /// - Returns: The LLM response
     func send(_ message: Message, config: LLMRequestConfig) async throws -> LLMResponse {
         return try await send([message], config: config)
     }
     
-    /// Default implementation for streaming a single message
-    func stream(_ message: Message, config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error> {
+    /// Stream responses from the LLM
+    /// - Parameters:
+    ///   - message: The message to send
+    ///   - config: Configuration for the request
+    /// - Returns: An async sequence of streaming results
+    func stream(_ message: Message, config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         return stream([message], config: config)
     }
     

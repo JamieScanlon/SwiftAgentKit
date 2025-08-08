@@ -81,10 +81,14 @@ public actor SwiftAgentKitOrchestrator {
             // Handle streaming response
             let stream = llm.stream(messages, config: requestConfig)
             
-            for try await response in stream {
-                
-                if response.isComplete {
+            for try await result in stream {
+                switch result {
+                case .stream(let response):
+                    logger.info("Received streaming chunk")
+                    // Publish the streaming chunk to partial content stream
+                    publishPartialContent(response.content)
                     
+                case .complete(let response):
                     logger.info("Received complete streaming response")
                     // Convert LLMResponse to Message for conversation history
                     let responseMessage = Message(id: UUID(), role: .assistant, content: response.content)
@@ -110,11 +114,6 @@ public actor SwiftAgentKitOrchestrator {
                         // Recurse here with the updated message history
                         try await updateConversation(updatedMessages, availableTools: availableTools)
                     }
-                    
-                } else {
-                    logger.info("Received streaming chunk")
-                    // Publish the streaming chunk to partial content stream
-                    publishPartialContent(response.content)
                 }
             }
         } else {

@@ -274,36 +274,70 @@ public struct LLMProtocolAdapter: AgentAdapter {
             let stream = llm.stream(messages, config: llmConfig)
             var fullContent = ""
             
-            for try await response in stream {
-                fullContent += response.content
-                
-                // Create artifact update event for streaming
-                let artifact = Artifact(
-                    artifactId: UUID().uuidString,
-                    parts: [.text(text: fullContent)],
-                    name: "llm-response",
-                    description: "Streaming response from LLM",
-                    metadata: nil,
-                    extensions: []
-                )
-                
-                let artifactEvent = TaskArtifactUpdateEvent(
-                    taskId: taskId,
-                    contextId: contextId,
-                    kind: "artifact-update",
-                    artifact: artifact,
-                    append: false,
-                    lastChunk: response.isComplete,
-                    metadata: nil
-                )
-                
-                let streamingEvent = SendStreamingMessageSuccessResponse(
-                    jsonrpc: "2.0",
-                    id: 1,
-                    result: artifactEvent
-                )
-                
-                eventSink(streamingEvent)
+            for try await result in stream {
+                switch result {
+                case .stream(let response):
+                    fullContent += response.content
+                    
+                    // Create artifact update event for streaming
+                    let artifact = Artifact(
+                        artifactId: UUID().uuidString,
+                        parts: [.text(text: fullContent)],
+                        name: "llm-response",
+                        description: "Streaming response from LLM",
+                        metadata: nil,
+                        extensions: []
+                    )
+                    
+                    let artifactEvent = TaskArtifactUpdateEvent(
+                        taskId: taskId,
+                        contextId: contextId,
+                        kind: "artifact-update",
+                        artifact: artifact,
+                        append: false,
+                        lastChunk: false,
+                        metadata: nil
+                    )
+                    
+                    let streamingEvent = SendStreamingMessageSuccessResponse(
+                        jsonrpc: "2.0",
+                        id: 1,
+                        result: artifactEvent
+                    )
+                    
+                    eventSink(streamingEvent)
+                    
+                case .complete(let response):
+                    fullContent += response.content
+                    
+                    // Create artifact update event for final response
+                    let artifact = Artifact(
+                        artifactId: UUID().uuidString,
+                        parts: [.text(text: fullContent)],
+                        name: "llm-response",
+                        description: "Streaming response from LLM",
+                        metadata: nil,
+                        extensions: []
+                    )
+                    
+                    let artifactEvent = TaskArtifactUpdateEvent(
+                        taskId: taskId,
+                        contextId: contextId,
+                        kind: "artifact-update",
+                        artifact: artifact,
+                        append: false,
+                        lastChunk: true,
+                        metadata: nil
+                    )
+                    
+                    let streamingEvent = SendStreamingMessageSuccessResponse(
+                        jsonrpc: "2.0",
+                        id: 1,
+                        result: artifactEvent
+                    )
+                    
+                    eventSink(streamingEvent)
+                }
             }
             
             // Create final response message

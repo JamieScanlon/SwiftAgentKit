@@ -150,9 +150,9 @@ import EasyJSON
                 return LLMResponse.complete(content: "Test response")
             }
             
-            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error> {
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
                 return AsyncThrowingStream { continuation in
-                    continuation.yield(LLMResponse.complete(content: "Test streaming response"))
+                    continuation.yield(.complete(LLMResponse.complete(content: "Test streaming response")))
                     continuation.finish()
                 }
             }

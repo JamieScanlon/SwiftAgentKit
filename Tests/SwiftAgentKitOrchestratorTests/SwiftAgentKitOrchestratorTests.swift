@@ -22,7 +22,7 @@ struct MockLLM: LLMProtocol {
         return LLMResponse.complete(content: "Mock response")
     }
     
-    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error> {
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         return AsyncThrowingStream { continuation in
             Task {
                 // Simulate streaming response with multiple chunks
@@ -30,11 +30,11 @@ struct MockLLM: LLMProtocol {
                 
                 // Send streaming chunks
                 for chunk in chunks {
-                    continuation.yield(LLMResponse.streamChunk(chunk))
+                    continuation.yield(.stream(LLMResponse.streamChunk(chunk)))
                 }
                 
                 // Send the complete response
-                continuation.yield(LLMResponse.complete(content: "Mock streaming response"))
+                continuation.yield(.complete(LLMResponse.complete(content: "Mock streaming response")))
                 continuation.finish()
             }
         }

@@ -48,7 +48,7 @@ struct ExampleLLM: LLMProtocol {
         )
     }
     
-    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error> {
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         return AsyncThrowingStream { continuation in
             Task {
                 do {
@@ -62,7 +62,12 @@ struct ExampleLLM: LLMProtocol {
                             content: word + (isComplete ? "" : " "),
                             isComplete: isComplete
                         )
-                        continuation.yield(chunk)
+                        
+                        if isComplete {
+                            continuation.yield(.complete(chunk))
+                        } else {
+                            continuation.yield(.stream(chunk))
+                        }
                         
                         if !isComplete {
                             try await Task.sleep(nanoseconds: 100_000_000) // 0.1 second delay

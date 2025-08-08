@@ -29,7 +29,7 @@ struct MockLLM: LLMProtocol {
         return LLMResponse.complete(content: responseContent)
     }
     
-    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error> {
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         return AsyncThrowingStream { continuation in
             Task {
                 logger.info("MockLLM: Starting stream for \(messages.count) messages with model \(model)")
@@ -40,11 +40,11 @@ struct MockLLM: LLMProtocol {
                 for (_, word) in words.enumerated() {
                     try await Task.sleep(nanoseconds: 200_000_000) // 0.2 seconds
                     
-                    continuation.yield(LLMResponse.streamChunk(word))
+                    continuation.yield(.stream(LLMResponse.streamChunk(word)))
                 }
                 
                 // Final complete message
-                continuation.yield(LLMResponse.complete(content: "Streaming complete!"))
+                continuation.yield(.complete(LLMResponse.complete(content: "Streaming complete!")))
                 continuation.finish()
             }
         }
@@ -110,14 +110,15 @@ func demonstrateLLMProtocol() async {
     let stream = mockLLM.stream(message, config: streamingConfig)
     
     do {
-        for try await response in stream {
-            if response.isComplete {
+        for try await result in stream {
+            switch result {
+            case .stream(let response):
+                logger.info("Stream chunk: \(response.content)")
+            case .complete(let response):
                 logger.info("Stream complete: \(response.content)")
                 if response.hasToolCalls {
                     logger.info("Final response contains \(response.toolCalls.count) tool calls")
                 }
-            } else {
-                logger.info("Stream chunk: \(response.content)")
             }
         }
     } catch {
