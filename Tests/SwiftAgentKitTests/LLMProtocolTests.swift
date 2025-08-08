@@ -135,4 +135,31 @@ import EasyJSON
         #expect(config.availableTools.first?.parameters.count == 1)
         #expect(config.availableTools.first?.parameters.first?.name == "expression")
     }
+    
+    @Test("LLMProtocol implementations provide getModelName()")
+    func testGetModelName() throws {
+        // Create a test LLM implementation
+        struct TestLLM: LLMProtocol {
+            let modelName: String
+            
+            func getModelName() -> String {
+                return modelName
+            }
+            
+            func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+                return LLMResponse.complete(content: "Test response")
+            }
+            
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error> {
+                return AsyncThrowingStream { continuation in
+                    continuation.yield(LLMResponse.complete(content: "Test streaming response"))
+                    continuation.finish()
+                }
+            }
+        }
+        
+        let testLLM = TestLLM(modelName: "test-model-v1")
+        
+        #expect(testLLM.getModelName() == "test-model-v1")
+    }
 } 

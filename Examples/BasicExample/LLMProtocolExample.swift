@@ -13,6 +13,10 @@ struct MockLLM: LLMProtocol {
         self.logger = logger
     }
     
+    func getModelName() -> String {
+        return model
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         logger.info("MockLLM: Processing \(messages.count) messages with model \(model)")
         

@@ -57,7 +57,7 @@ public struct LLMProtocolAdapter: AgentAdapter {
     ) {
         self.llm = llm
         self.config = configuration
-        self.logger = llm.logger
+        self.logger = Logger(label: "LLMProtocolAdapter")
     }
     
     public init(
@@ -70,7 +70,7 @@ public struct LLMProtocolAdapter: AgentAdapter {
         additionalParameters: JSON? = nil
     ) {
         let config = Configuration(
-            model: model ?? llm.model,
+            model: model ?? llm.getModelName(),
             maxTokens: maxTokens,
             temperature: temperature,
             topP: topP,

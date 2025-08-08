@@ -38,11 +38,9 @@ public struct LLMRequestConfig: Sendable {
 
 /// A common protocol for interacting with LLMs
 public protocol LLMProtocol: Sendable {
-    /// The model identifier for this LLM instance
-    var model: String { get }
-    
-    /// The logger for this LLM instance
-    var logger: Logger { get }
+
+    /// Returns the model name for this LLM instance
+    func getModelName() -> String
     
     /// Send a message to the LLM and get a response
     /// - Parameters:

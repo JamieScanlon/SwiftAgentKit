@@ -24,6 +24,10 @@ struct ExampleLLM: LLMProtocol {
         self.logger = Logger(label: "ExampleLLM")
     }
     
+    func getModelName() -> String {
+        return model
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         logger.info("Processing \(messages.count) messages")
         

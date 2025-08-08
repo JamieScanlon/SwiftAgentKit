@@ -26,6 +26,10 @@ struct TestLLM: LLMProtocol {
         self.shouldFail = shouldFail
     }
     
+    func getModelName() -> String {
+        return model
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         if shouldFail {
             throw LLMError.invalidRequest("Test failure")

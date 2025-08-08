@@ -91,6 +91,10 @@ struct MyCustomLLM: LLMProtocol {
         self.logger = Logger(label: "MyCustomLLM")
     }
     
+    func getModelName() -> String {
+        return model
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         // Your LLM implementation here
         let response = "Response from my custom LLM"
@@ -165,6 +169,10 @@ struct ExampleLLM: LLMProtocol {
     init(model: String = "example-llm") {
         self.model = model
         self.logger = Logger(label: "ExampleLLM")
+    }
+    
+    func getModelName() -> String {
+        return model
     }
     
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {

@@ -13,6 +13,10 @@ struct MockLLM: LLMProtocol {
         self.logger = logger
     }
     
+    func getModelName() -> String {
+        return model
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         // Check if this is a tool response (contains tool messages)
         let hasToolMessages = messages.contains { $0.role == .tool }

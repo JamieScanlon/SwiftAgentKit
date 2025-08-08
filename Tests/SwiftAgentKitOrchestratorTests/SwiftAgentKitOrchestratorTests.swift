@@ -14,6 +14,10 @@ struct MockLLM: LLMProtocol {
         self.logger = logger
     }
     
+    func getModelName() -> String {
+        return model
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         return LLMResponse.complete(content: "Mock response")
     }
@@ -45,7 +49,7 @@ struct MockLLM: LLMProtocol {
         let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM)
         
         #expect(await orchestrator.llm is MockLLM)
-        #expect(mockLLM.model == "test-model")
+        #expect(mockLLM.getModelName() == "test-model")
     }
     
     @Test("OrchestratorConfig can be initialized with default values")
