@@ -67,6 +67,15 @@ public actor MCPManager {
         return nil
     }
     
+    /// Get all available tools from MCP clients
+    public func availableTools() async -> [ToolDefinition] {
+        var allTools: [ToolDefinition] = []
+        for client in clients {
+            allTools.append(contentsOf: await client.tools)
+        }
+        return allTools
+    }
+    
     // MARK: - Private
     
     private func loadMCPConfiguration(configFileURL: URL) async throws {

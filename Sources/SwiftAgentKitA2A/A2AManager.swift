@@ -56,6 +56,24 @@ public actor A2AManager {
         return nil
     }
     
+    /// Get all available tools from A2A clients
+    public func availableTools() async -> [ToolDefinition] {
+        var allTools: [ToolDefinition] = []
+        for client in clients {
+            if let agentCard = await client.agentCard {
+                allTools.append(ToolDefinition(
+                    name: agentCard.name,
+                    description: agentCard.description,
+                    parameters: [
+                        .init(name: "instructions", description: "Issue a task for this agent to complete on your behalf.", type: "string", required: true)
+                    ],
+                    type: .a2aAgent
+                ))
+            }
+        }
+        return allTools
+    }
+    
     // MARK: - Private
     
     private var clients: [A2AClient] = []

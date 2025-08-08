@@ -243,4 +243,31 @@ struct MockLLM: LLMProtocol {
         #expect(finalConversation!.count >= 1) // At least one new message
         #expect(finalConversation!.last?.role == .assistant)
     }
+    
+    @Test("availableTools property returns empty array when no managers are configured")
+    func testAvailableToolsEmpty() async throws {
+        let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let config = OrchestratorConfig(mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config)
+        
+        let tools = await orchestrator.availableTools
+        #expect(tools.isEmpty)
+    }
+    
+    @Test("availableTools property respects configuration flags")
+    func testAvailableToolsRespectsConfig() async throws {
+        let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        
+        // Test with MCP enabled but no manager provided
+        let config1 = OrchestratorConfig(mcpEnabled: true, a2aEnabled: false)
+        let orchestrator1 = SwiftAgentKitOrchestrator(llm: mockLLM, config: config1)
+        let tools1 = await orchestrator1.availableTools
+        #expect(tools1.isEmpty)
+        
+        // Test with A2A enabled but no manager provided
+        let config2 = OrchestratorConfig(mcpEnabled: false, a2aEnabled: true)
+        let orchestrator2 = SwiftAgentKitOrchestrator(llm: mockLLM, config: config2)
+        let tools2 = await orchestrator2.availableTools
+        #expect(tools2.isEmpty)
+    }
 } 

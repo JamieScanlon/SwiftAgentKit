@@ -3,6 +3,7 @@ import Logging
 import SwiftAgentKit
 import SwiftAgentKitA2A
 import SwiftAgentKitMCP
+import SwiftAgentKitAdapters
 
 /// Configuration for the SwiftAgentKitOrchestrator
 public struct OrchestratorConfig: Sendable {
@@ -32,6 +33,25 @@ public actor SwiftAgentKitOrchestrator {
     public let config: OrchestratorConfig
     public let mcpManager: MCPManager?
     public let a2aManager: A2AManager?
+    
+    /// All available tools from MCP and A2A managers
+    public var allAvailableTools: [ToolDefinition] {
+        get async {
+            var allTools: [ToolDefinition] = []
+            
+            // Get tools from MCP manager if enabled
+            if let mcpManager = mcpManager, config.mcpEnabled {
+                allTools.append(contentsOf: await mcpManager.availableTools())
+            }
+            
+            // Get tools from A2A manager if enabled
+            if let a2aManager = a2aManager, config.a2aEnabled {
+                allTools.append(contentsOf: await a2aManager.availableTools())
+            }
+            
+            return allTools
+        }
+    }
     
     /// Stream of message updates from the orchestrator
     public var messageStream: AsyncStream<Message> {
