@@ -106,6 +106,16 @@ public enum LLMCapability: String, Codable, Sendable {
 }
 
 /// Common errors that can occur when interacting with LLMs
+///
+/// ## Examples
+///
+/// ```swift
+/// // Check if LLM supports a required capability
+/// let requiredCapability = LLMCapability.vision
+/// if !llm.getCapabilities().contains(requiredCapability) {
+///     throw LLMError.unsupportedCapability(requiredCapability)
+/// }
+/// ```
 public enum LLMError: Error, LocalizedError, Sendable {
     case invalidRequest(String)
     case rateLimitExceeded
@@ -115,6 +125,7 @@ public enum LLMError: Error, LocalizedError, Sendable {
     case networkError(Error)
     case invalidResponse(String)
     case timeout
+    case unsupportedCapability(LLMCapability)
     case unknown(Error)
     
     public var errorDescription: String? {
@@ -135,6 +146,8 @@ public enum LLMError: Error, LocalizedError, Sendable {
             return "Invalid response: \(message)"
         case .timeout:
             return "Request timeout"
+        case .unsupportedCapability(let capability):
+            return "Unsupported capability: \(capability.rawValue)"
         case .unknown(let error):
             return "Unknown error: \(error.localizedDescription)"
         }

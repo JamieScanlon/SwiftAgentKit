@@ -95,6 +95,7 @@ import EasyJSON
         let modelNotFound = LLMError.modelNotFound("gpt-5")
         let authFailed = LLMError.authenticationFailed
         let timeout = LLMError.timeout
+        let unsupportedCapability = LLMError.unsupportedCapability(.vision)
         
         #expect(invalidRequest.localizedDescription.contains("Invalid request"))
         #expect(invalidRequest.localizedDescription.contains("test message"))
@@ -103,6 +104,8 @@ import EasyJSON
         #expect(modelNotFound.localizedDescription.contains("gpt-5"))
         #expect(authFailed.localizedDescription.contains("Authentication failed"))
         #expect(timeout.localizedDescription.contains("Request timeout"))
+        #expect(unsupportedCapability.localizedDescription.contains("Unsupported capability"))
+        #expect(unsupportedCapability.localizedDescription.contains("vision"))
     }
     
     @Test("LLMRequestConfig can be initialized with available tools")
