@@ -110,16 +110,17 @@ public actor SwiftAgentKitOrchestrator {
                     
                 case .complete(let response):
                     logger.info("Received complete streaming response")
+
+                    // Finish and nil out the partial content stream continuation since streaming is complete
+                    partialContentStreamContinuation?.finish()
+                    partialContentStreamContinuation = nil
+                    currentPartialContentStream = nil
+                    
                     // Convert LLMResponse to Message for conversation history
                     let responseMessage = Message(id: UUID(), role: .assistant, content: response.content)
                     updatedMessages.append(responseMessage)
                     // Publish the message
                     publishMessage(responseMessage)
-                    
-                    // Finish and nil out the partial content stream continuation since streaming is complete
-                    partialContentStreamContinuation?.finish()
-                    partialContentStreamContinuation = nil
-                    currentPartialContentStream = nil
                     
                     if response.hasToolCalls {
                         
