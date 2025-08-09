@@ -42,6 +42,9 @@ public protocol LLMProtocol: Sendable {
     /// Returns the model name for this LLM instance
     func getModelName() -> String
     
+    /// Returns the capabilities of this LLM
+    func getCapabilities() -> [LLMCapability]
+    
     /// Send multiple messages to the LLM and get a response
     /// - Parameters:
     ///   - messages: The messages to send
@@ -89,6 +92,17 @@ public extension LLMProtocol {
             additionalParameters: config.additionalParameters
         )
     }
+}
+
+/// An enumeration representing the exact model capability
+public enum LLMCapability: String, Codable, Sendable {
+    case unknown
+    case completion
+    case tools
+    case insert
+    case vision
+    case embedding
+    case thinking
 }
 
 /// Common errors that can occur when interacting with LLMs

@@ -17,6 +17,10 @@ struct MockLLM: LLMProtocol {
         return model
     }
     
+    func getCapabilities() -> [LLMCapability] {
+        return [.completion, .tools]
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         logger.info("MockLLM: Processing \(messages.count) messages with model \(model)")
         

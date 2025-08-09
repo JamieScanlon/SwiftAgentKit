@@ -95,6 +95,10 @@ struct MyCustomLLM: LLMProtocol {
         return model
     }
     
+    func getCapabilities() -> [LLMCapability] {
+        return [.completion, .tools]
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         // Your LLM implementation here
         let response = "Response from my custom LLM"
@@ -173,6 +177,10 @@ struct ExampleLLM: LLMProtocol {
     
     func getModelName() -> String {
         return model
+    }
+    
+    func getCapabilities() -> [LLMCapability] {
+        return [.completion, .tools]
     }
     
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {

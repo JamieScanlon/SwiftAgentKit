@@ -146,6 +146,10 @@ import EasyJSON
                 return modelName
             }
             
+            func getCapabilities() -> [LLMCapability] {
+                return [.completion, .tools]
+            }
+            
             func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
                 return LLMResponse.complete(content: "Test response")
             }

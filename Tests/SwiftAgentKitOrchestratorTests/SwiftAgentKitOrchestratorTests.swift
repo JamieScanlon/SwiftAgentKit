@@ -18,6 +18,10 @@ struct MockLLM: LLMProtocol {
         return model
     }
     
+    func getCapabilities() -> [LLMCapability] {
+        return [.completion, .tools]
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         return LLMResponse.complete(content: "Mock response")
     }
@@ -250,7 +254,7 @@ struct MockLLM: LLMProtocol {
         let config = OrchestratorConfig(mcpEnabled: false, a2aEnabled: false)
         let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config)
         
-        let tools = await orchestrator.availableTools
+        let tools = await orchestrator.allAvailableTools
         #expect(tools.isEmpty)
     }
     
@@ -261,13 +265,13 @@ struct MockLLM: LLMProtocol {
         // Test with MCP enabled but no manager provided
         let config1 = OrchestratorConfig(mcpEnabled: true, a2aEnabled: false)
         let orchestrator1 = SwiftAgentKitOrchestrator(llm: mockLLM, config: config1)
-        let tools1 = await orchestrator1.availableTools
+        let tools1 = await orchestrator1.allAvailableTools
         #expect(tools1.isEmpty)
         
         // Test with A2A enabled but no manager provided
         let config2 = OrchestratorConfig(mcpEnabled: false, a2aEnabled: true)
         let orchestrator2 = SwiftAgentKitOrchestrator(llm: mockLLM, config: config2)
-        let tools2 = await orchestrator2.availableTools
+        let tools2 = await orchestrator2.allAvailableTools
         #expect(tools2.isEmpty)
     }
 } 

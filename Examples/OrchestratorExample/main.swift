@@ -17,6 +17,10 @@ struct MockLLM: LLMProtocol {
         return model
     }
     
+    func getCapabilities() -> [LLMCapability] {
+        return [.completion, .tools]
+    }
+    
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         // Check if this is a tool response (contains tool messages)
         let hasToolMessages = messages.contains { $0.role == .tool }
