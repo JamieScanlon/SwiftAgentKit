@@ -116,6 +116,11 @@ public actor SwiftAgentKitOrchestrator {
                     // Publish the message
                     publishMessage(responseMessage)
                     
+                    // Finish and nil out the partial content stream continuation since streaming is complete
+                    partialContentStreamContinuation?.finish()
+                    partialContentStreamContinuation = nil
+                    currentPartialContentStream = nil
+                    
                     if response.hasToolCalls {
                         
                         // Execute tool calls

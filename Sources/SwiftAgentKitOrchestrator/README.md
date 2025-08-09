@@ -44,19 +44,23 @@ let conversation = [
     Message(id: UUID(), role: .assistant, content: "Hi there!")
 ]
 
-let conversationStream = orchestrator.updateConversation(conversation, availableTools: [])
+// Get the message stream for complete messages
+let messageStream = await orchestrator.messageStream
 var finalConversation: [Message]?
 
-for try await result in conversationStream {
-    switch result {
-    case .stream(let message):
-        // Handle streaming chunks
-        print("Received: \(message.content)")
-    case .complete(let conversation):
-        // Handle final conversation history
-        finalConversation = conversation
+// Listen for complete messages
+Task {
+    for await message in messageStream {
+        print("Received complete message: \(message.content)")
+        finalConversation = finalConversation ?? []
+        finalConversation?.append(message)
     }
 }
+
+// Process the conversation (this will publish to the streams)
+try await orchestrator.updateConversation(conversation, availableTools: [])
+
+// Note: The orchestrator automatically manages stream lifecycle and cleanup
 
 // Example with available tools
 let availableTools = [
@@ -83,6 +87,7 @@ let toolConversationStream = orchestrator.updateConversation(conversationWithToo
 - **Tool Integration**: Use MCP tools for enhanced capabilities
 - **Agent Communication**: Connect with other agents via A2A
 - **Cross-platform**: Works on macOS, iOS, and visionOS
+- **Automatic Stream Management**: Handles streaming lifecycle and cleanup automatically
 
 ## Configuration
 
@@ -100,11 +105,28 @@ The orchestrator provides an `updateConversation` method that:
 
 - Takes an array of messages representing the conversation thread
 - Takes an optional array of available tools that can be used during conversation processing
-- Returns a stream of `StreamResult<Message, [Message]>` containing both streaming chunks and final conversation history
 - Supports both synchronous and streaming responses based on configuration
 - Preserves the original message order
 - Handles errors gracefully with proper logging
-- Uses the `StreamResult` type for standardized streaming + final result pattern
+- Automatically manages streaming lifecycle and cleanup
+
+### Streaming Behavior
+
+When `streamingEnabled` is `true`, the orchestrator:
+
+- Publishes partial content chunks to the `partialContentStream` as they arrive
+- Automatically finishes and cleans up the partial content stream when streaming completes
+- Publishes the final complete message to the `messageStream`
+- Handles tool calls and recursive conversation updates seamlessly
+
+### Stream Management
+
+The orchestrator provides two main streams:
+
+- **`messageStream`**: Publishes complete messages (user, assistant, and tool messages)
+- **`partialContentStream`**: Publishes streaming text chunks during LLM responses
+
+Both streams are automatically managed and cleaned up when appropriate. The partial content stream is automatically finished when streaming completes, ensuring proper resource management.
 
 ## Examples
 

@@ -150,4 +150,12 @@ This modular design allows for:
 - Easy testing of individual components
 - Custom implementations of specific functionality
 - Better separation of concerns
-- Improved maintainability 
+- Improved maintainability
+
+## Related Modules
+
+For higher-level orchestration capabilities, see:
+- **SwiftAgentKitOrchestrator**: LLM orchestrator with MCP and A2A support
+- **SwiftAgentKitMCP**: Model Context Protocol support
+- **SwiftAgentKitA2A**: Agent-to-Agent communication
+- **SwiftAgentKitAdapters**: AI provider adapters and tool-aware architecture 
