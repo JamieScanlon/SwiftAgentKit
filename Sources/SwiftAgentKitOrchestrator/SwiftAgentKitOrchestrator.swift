@@ -115,7 +115,7 @@ public actor SwiftAgentKitOrchestrator {
                     partialContentStreamContinuation?.finish()
                     partialContentStreamContinuation = nil
                     currentPartialContentStream = nil
-                    
+
                     // Convert LLMResponse to Message for conversation history
                     let responseMessage = Message(id: UUID(), role: .assistant, content: response.content)
                     updatedMessages.append(responseMessage)
@@ -200,11 +200,13 @@ public actor SwiftAgentKitOrchestrator {
     
     /// Publish a message to the stream
     private func publishMessage(_ message: Message) {
+        logger.info("Publishing message: \(message.content.prefix(10))...")
         messageStreamContinuation?.yield(message)
     }
     
     /// Publish partial content to the partial content stream
     private func publishPartialContent(_ content: String) {
+        logger.info("Publishing partial content: \(content.prefix(10))...")
         partialContentStreamContinuation?.yield(content)
     }
     
@@ -214,6 +216,7 @@ public actor SwiftAgentKitOrchestrator {
             self.messageStreamContinuation = continuation
         }
         self.currentMessageStream = stream
+        logger.info("Created message stream")
         return stream
     }
     
@@ -223,6 +226,7 @@ public actor SwiftAgentKitOrchestrator {
             self.partialContentStreamContinuation = continuation
         }
         self.currentPartialContentStream = stream
+        logger.info("Created partial content stream")
         return stream
     }
     
