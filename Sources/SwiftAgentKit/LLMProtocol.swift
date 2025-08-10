@@ -92,6 +92,25 @@ public extension LLMProtocol {
             additionalParameters: config.additionalParameters
         )
     }
+    
+    /// A helper method for extracting a `ToolCall` from message content.
+    /// This method uses `ToolCall.processModelResponse()` to look for tool calls within a message string.
+    /// - Parameters:
+    ///   - from: Raw message content from the LLM response.
+    ///   - availableTools: An array of available tools. This should be the same list of available tools used in the `LLMRequestConfig` when the originalt message was sent to the LLM
+    /// - Returns: An `LLMResponse`
+    func llmResponse(from content: String, availableTools: [ToolDefinition]) -> LLMResponse {
+        var toolCalls: [ToolCall] = []
+        let (processedText, toolCallString) = ToolCall.processModelResponse(content: content, availableTools: availableTools.map({$0.name}))
+        
+        // Parse any tool calls found in text
+        if let toolCallString, let toolCall = ToolCall.parse(toolCallString) {
+            toolCalls.append(toolCall)
+        }
+        
+        let response = LLMResponse(content: processedText, toolCalls: toolCalls)
+        return response
+    }
 }
 
 /// An enumeration representing the exact model capability

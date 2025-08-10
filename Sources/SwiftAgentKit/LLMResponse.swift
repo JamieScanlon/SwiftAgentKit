@@ -99,6 +99,53 @@ public extension LLMResponse {
             isComplete: true
         )
     }
+    
+    func appending(toolCalls: [ToolCall]) -> LLMResponse {
+        var updatedToolCalls = self.toolCalls
+        updatedToolCalls.append(contentsOf: toolCalls)
+        return LLMResponse(
+            content: content,
+            toolCalls: updatedToolCalls,
+            metadata: metadata,
+            isComplete: isComplete
+        )
+    }
+    
+    func updatingContent(with newContent: String) -> LLMResponse {
+        return LLMResponse(
+            content: newContent,
+            toolCalls: toolCalls,
+            metadata: metadata,
+            isComplete: isComplete
+        )
+    }
+    
+    func updatingMetadata(with newMetadata: LLMMetadata?) -> LLMResponse {
+        return LLMResponse(
+            content: content,
+            toolCalls: toolCalls,
+            metadata: newMetadata,
+            isComplete: isComplete
+        )
+    }
+    
+    func markingComplete() -> LLMResponse {
+        return LLMResponse(
+            content: content,
+            toolCalls: toolCalls,
+            metadata: metadata,
+            isComplete: true
+        )
+    }
+    
+    func markingIncomplete() -> LLMResponse {
+        return LLMResponse(
+            content: content,
+            toolCalls: toolCalls,
+            metadata: metadata,
+            isComplete: false
+        )
+    }
 }
 
 /// Convenience properties for common use cases
