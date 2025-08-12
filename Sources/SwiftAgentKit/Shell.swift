@@ -5,6 +5,7 @@
 //  Created by Marvin Scanlon on 4/12/25.
 //
 
+#if os(macOS) || os(Linux) || os(Windows)
 import Foundation
 
 public struct Shell {
@@ -59,3 +60,4 @@ public struct Shell {
         return (inPipe: inPipe, outPipe: outPipe)
     }
 }
+#endif
