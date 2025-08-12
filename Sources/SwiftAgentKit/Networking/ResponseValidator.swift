@@ -21,6 +21,8 @@ public struct ResponseValidator {
             if let errorData = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let message = errorData["message"] as? String {
                 errorMessage = message
+            } else if let stringValue = String(data: data, encoding: .utf8) {
+                errorMessage = stringValue
             }
             throw APIError.serverError(statusCode: statusCode, message: errorMessage)
         }

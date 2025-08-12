@@ -24,27 +24,34 @@ public struct RequestBuilder {
             request.addValue(value, forHTTPHeaderField: key)
         }
         
-        // Add parameters
-        if let parameters = parameters {
-            switch method {
-            case .get, .delete:
-                if var components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
-                    components.queryItems = parameters.map { key, value in
-                        URLQueryItem(name: key, value: "\(value)")
-                    }
-                    request.url = components.url
+        // Add query parameters for GET/DELETE
+        if let parameters = parameters, (method == .get || method == .delete) {
+            if var components = URLComponents(url: url, resolvingAgainstBaseURL: true) {
+                components.queryItems = parameters.map { key, value in
+                    URLQueryItem(name: key, value: "\(value)")
                 }
-            case .post, .put, .patch:
-                do {
-                    if let data = body {
-                        request.httpBody = data
-                    } else {
-                        request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
-                    }
-                } catch {
-                    throw APIError.requestFailed(error)
-                }
+                request.url = components.url
             }
+        }
+
+        // Add body for POST/PUT/PATCH
+        switch method {
+        case .post, .put, .patch:
+            do {
+                if let data = body {
+                    request.httpBody = data
+                } else if let parameters = parameters {
+                    // Validate JSON before attempting serialization to avoid Objective-C exceptions
+                    guard JSONSerialization.isValidJSONObject(parameters) else {
+                        throw APIError.invalidJSON
+                    }
+                    request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
+                }
+            } catch {
+                throw APIError.requestFailed(error)
+            }
+        default:
+            break
         }
         return request
     }

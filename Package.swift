@@ -122,6 +122,7 @@ let package = Package(
                 "SwiftAgentKit",
                 "SwiftAgentKitA2A",
                 "SwiftAgentKitMCP",
+                "SwiftAgentKitAdapters",
                 .product(name: "Logging", package: "swift-log"),
             ],
             exclude: ["README.md"]),
