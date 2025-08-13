@@ -122,11 +122,28 @@ extension Tool {
         var returnValue: [String: Any] = ["type": "function"]
         var properties: [String: Any] = [:]
         var required: [String] = []
-        if let paramsObject: [String: Value] = inputSchema?.objectValue {
-            if let propertiesObject = paramsObject["properties"]?.objectValue as? [String: Value] {
+        if case .object(let schema) = inputSchema {
+            if case .array(let requiredValues) = schema["required"] {
+                required = requiredValues.compactMap { value in
+                    if case .string(let stringValue) = value { return stringValue }
+                    return nil
+                }
+            }
+            if case .object(let propertiesObject) = schema["properties"] {
                 for (key, value) in propertiesObject {
-                    properties[key] = ["type": value.objectValue?["type"]?.stringValue ?? "string", "description": value.objectValue?["description"]?.stringValue ?? ""]
-                    required.append(key)
+                    guard case .object(let objectValue) = value else { continue }
+                    var typeString = "string"
+                    var descriptionString = ""
+                    if case .string(let stringValue) = objectValue["type"] {
+                        typeString = stringValue
+                    }
+                    if case .string(let stringValue) = objectValue["description"] {
+                        descriptionString = stringValue
+                    }
+                    properties[key] = [
+                        "type": typeString,
+                        "description": descriptionString
+                    ]
                 }
             }
         }
