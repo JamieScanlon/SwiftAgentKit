@@ -111,6 +111,15 @@ public extension LLMResponse {
         )
     }
     
+    func removingToolCalls() -> LLMResponse {
+        return LLMResponse(
+            content: content,
+            toolCalls: [],
+            metadata: metadata,
+            isComplete: isComplete
+        )
+    }
+    
     func updatingContent(with newContent: String) -> LLMResponse {
         return LLMResponse(
             content: newContent,
