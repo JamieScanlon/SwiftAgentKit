@@ -55,6 +55,14 @@ public struct ToolAwareAdapter: AgentAdapter {
         baseAdapter.skills
     }
     
+    public var agentName: String {
+        baseAdapter.agentName
+    }
+    
+    public var agentDescription: String {
+        baseAdapter.agentDescription
+    }
+    
     public var defaultInputModes: [String] { baseAdapter.defaultInputModes }
     public var defaultOutputModes: [String] { baseAdapter.defaultOutputModes }
     

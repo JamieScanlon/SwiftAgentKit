@@ -177,6 +177,14 @@ func customAdapterExample() async {
             ]
         }
         
+        var agentName: String {
+            "Multi-Provider Agent"
+        }
+        
+        var agentDescription: String {
+            "An A2A-compliant agent that provides text generation capabilities using multiple AI providers for redundancy and fallback."
+        }
+        
         var defaultInputModes: [String] { ["text/plain"] }
         var defaultOutputModes: [String] { ["text/plain"] }
         

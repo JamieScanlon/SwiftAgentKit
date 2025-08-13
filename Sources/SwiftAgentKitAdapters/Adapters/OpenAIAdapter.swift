@@ -118,6 +118,14 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
         ]
     }
     
+    public var agentName: String {
+        "OpenAI Agent"
+    }
+    
+    public var agentDescription: String {
+        "An A2A-compliant agent that provides text generation capabilities using OpenAI's language models."
+    }
+    
     public var defaultInputModes: [String] { ["text/plain"] }
     public var defaultOutputModes: [String] { ["text/plain"] }
     

@@ -94,6 +94,14 @@ public struct GeminiAdapter: AgentAdapter {
         ]
     }
     
+    public var agentName: String {
+        "Google Gemini Agent"
+    }
+    
+    public var agentDescription: String {
+        "An A2A-compliant agent that provides text generation, code generation, analysis, and multimodal processing capabilities using Google's Gemini models."
+    }
+    
     public var defaultInputModes: [String] { ["text/plain"] }
     public var defaultOutputModes: [String] { ["text/plain"] }
     

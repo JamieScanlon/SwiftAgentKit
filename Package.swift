@@ -52,6 +52,12 @@ let package = Package(
         .executable(
             name: "OrchestratorExample",
             targets: ["OrchestratorExample"]),
+        .executable(
+            name: "AgentCardConfigExample",
+            targets: ["AgentCardConfigExample"]),
+        .executable(
+            name: "LLMProtocolAdapterExample",
+            targets: ["LLMProtocolAdapterExample"]),
     ],
     dependencies: [
         // Core dependencies
@@ -186,11 +192,29 @@ let package = Package(
         .executableTarget(
             name: "OrchestratorExample",
             dependencies: [
-                "SwiftAgentKit",
                 "SwiftAgentKitOrchestrator",
                 .product(name: "Logging", package: "swift-log"),
             ],
             path: "Examples/OrchestratorExample"),
+        
+        .executableTarget(
+            name: "AgentCardConfigExample",
+            dependencies: [
+                "SwiftAgentKitA2A",
+                "SwiftAgentKitAdapters",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/AgentCardConfigExample"),
+        
+        .executableTarget(
+            name: "LLMProtocolAdapterExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitA2A",
+                "SwiftAgentKitAdapters",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/LLMProtocolAdapterExample"),
         
         // Test targets
         .testTarget(

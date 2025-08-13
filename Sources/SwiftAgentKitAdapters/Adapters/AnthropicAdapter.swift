@@ -94,6 +94,14 @@ public struct AnthropicAdapter: AgentAdapter {
         ]
     }
     
+    public var agentName: String {
+        "Anthropic Claude Agent"
+    }
+    
+    public var agentDescription: String {
+        "An A2A-compliant agent that provides text generation, code generation, analysis, and reasoning capabilities using Anthropic's Claude models."
+    }
+    
     public var defaultInputModes: [String] { ["text/plain"] }
     public var defaultOutputModes: [String] { ["text/plain"] }
     

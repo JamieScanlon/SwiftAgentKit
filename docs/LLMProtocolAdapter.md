@@ -321,6 +321,8 @@ public struct LLMProtocolAdapter: AgentAdapter {
     public init(llm: LLMProtocol, configuration: Configuration)
     public init(llm: LLMProtocol, model: String?, maxTokens: Int?, temperature: Double?, topP: Double?, systemPrompt: String?, additionalParameters: JSON?)
     
+    public var agentName: String
+    public var agentDescription: String
     public var cardCapabilities: AgentCard.AgentCapabilities
     public var skills: [AgentCard.AgentSkill]
     public var defaultInputModes: [String]

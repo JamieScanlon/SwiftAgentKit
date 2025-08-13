@@ -127,6 +127,14 @@ import SwiftAgentKitA2A
 
 // Implement the AgentAdapter protocol
 struct MyAgentAdapter: AgentAdapter {
+    var agentName: String {
+        "My Custom Agent"
+    }
+    
+    var agentDescription: String {
+        "A custom A2A-compliant agent that provides text generation capabilities."
+    }
+    
     var cardCapabilities: AgentCard.AgentCapabilities {
         .init(streaming: true, pushNotifications: false)
     }

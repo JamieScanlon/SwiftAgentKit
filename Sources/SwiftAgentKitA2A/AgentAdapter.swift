@@ -3,6 +3,8 @@
 /// Contract every model‑specific adapter must fulfil.
 public protocol AgentAdapter: Sendable {
     // MARK: metadata used to auto‑build AgentCard
+    var agentName: String { get }
+    var agentDescription: String { get }
     var cardCapabilities: AgentCard.AgentCapabilities { get }
     var skills: [AgentCard.AgentSkill]                { get }
     var defaultInputModes: [String]         { get }

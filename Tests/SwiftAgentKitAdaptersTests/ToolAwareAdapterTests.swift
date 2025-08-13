@@ -219,6 +219,14 @@ private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
         [.init(id: "test", name: "Test", description: "Test skill", tags: [], examples: [], inputModes: [], outputModes: [])]
     }
     
+    var agentName: String {
+        "Mock Tool-Aware Agent"
+    }
+    
+    var agentDescription: String {
+        "A mock agent adapter for testing tool-aware functionality."
+    }
+    
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     

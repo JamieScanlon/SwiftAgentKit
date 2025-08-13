@@ -284,6 +284,14 @@ You can create custom adapters by implementing the `AgentAdapter` protocol:
 
 ```swift
 struct CustomAdapter: AgentAdapter {
+    var agentName: String {
+        "Custom Agent"
+    }
+    
+    var agentDescription: String {
+        "A custom A2A-compliant agent with custom skill implementation."
+    }
+    
     var cardCapabilities: AgentCard.AgentCapabilities {
         .init(streaming: true, pushNotifications: false, stateTransitionHistory: true)
     }

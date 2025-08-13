@@ -111,8 +111,51 @@ struct TestLLM: LLMProtocol {
         #expect(adapter.cardCapabilities.pushNotifications == false)
         #expect(adapter.cardCapabilities.stateTransitionHistory == true)
         #expect(adapter.skills.count == 2)
-        #expect(adapter.defaultInputModes == ["text"])
-        #expect(adapter.defaultOutputModes == ["text"])
+        #expect(adapter.defaultInputModes == ["text/plain"])
+        #expect(adapter.defaultOutputModes == ["text/plain"])
+    }
+    
+    @Test("LLMProtocolAdapter should support custom agent configuration")
+    func testCustomAgentConfiguration() throws {
+        let testLLM = TestLLM(model: "test-model")
+        
+        let customSkills = [
+            AgentCard.AgentSkill(
+                id: "custom-skill",
+                name: "Custom Skill",
+                description: "A custom skill for testing",
+                tags: ["custom", "test"],
+                inputModes: ["text/plain", "application/json"],
+                outputModes: ["text/plain", "application/json"]
+            )
+        ]
+        
+        let customCapabilities = AgentCard.AgentCapabilities(
+            streaming: false,
+            pushNotifications: true,
+            stateTransitionHistory: false
+        )
+        
+        let adapter = LLMProtocolAdapter(
+            llm: testLLM,
+            model: "test-model",
+            agentName: "Custom Test Agent",
+            agentDescription: "A custom test agent with specific configuration",
+            cardCapabilities: customCapabilities,
+            skills: customSkills,
+            defaultInputModes: ["text/plain", "application/json"],
+            defaultOutputModes: ["text/plain", "application/json"]
+        )
+        
+        #expect(adapter.agentName == "Custom Test Agent")
+        #expect(adapter.agentDescription == "A custom test agent with specific configuration")
+        #expect(adapter.cardCapabilities.streaming == false)
+        #expect(adapter.cardCapabilities.pushNotifications == true)
+        #expect(adapter.cardCapabilities.stateTransitionHistory == false)
+        #expect(adapter.skills.count == 1)
+        #expect(adapter.skills.first?.id == "custom-skill")
+        #expect(adapter.defaultInputModes == ["text/plain", "application/json"])
+        #expect(adapter.defaultOutputModes == ["text/plain", "application/json"])
     }
     
     @Test("LLMProtocolAdapter should handle basic message sending")

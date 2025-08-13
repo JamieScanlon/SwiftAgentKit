@@ -106,10 +106,49 @@ func testLLMProtocolAdapter() async {
     
     // Test basic properties
     print("✓ Adapter created successfully")
+    print("  - Agent name: \(adapter.agentName)")
+    print("  - Agent description: \(adapter.agentDescription)")
     print("  - Capabilities: streaming=\(adapter.cardCapabilities.streaming), pushNotifications=\(adapter.cardCapabilities.pushNotifications)")
     print("  - Skills: \(adapter.skills.count)")
     print("  - Input modes: \(adapter.defaultInputModes)")
     print("  - Output modes: \(adapter.defaultOutputModes)")
+    
+    // Test custom configuration
+    print("\nTesting custom configuration...")
+    let customAdapter = LLMProtocolAdapter(
+        llm: exampleLLM,
+        model: "example-llm-v1",
+        maxTokens: 500,
+        temperature: 0.3,
+        systemPrompt: "You are a specialized coding assistant.",
+        agentName: "Custom Coding Agent",
+        agentDescription: "A specialized agent for coding tasks and technical questions",
+        cardCapabilities: AgentCard.AgentCapabilities(
+            streaming: false,
+            pushNotifications: true,
+            stateTransitionHistory: true
+        ),
+        skills: [
+            AgentCard.AgentSkill(
+                id: "code-generation",
+                name: "Code Generation",
+                description: "Generate code in various programming languages",
+                tags: ["coding", "programming"],
+                inputModes: ["text/plain", "application/json"],
+                outputModes: ["text/plain", "application/json"]
+            )
+        ],
+        defaultInputModes: ["text/plain", "application/json"],
+        defaultOutputModes: ["text/plain", "application/json"]
+    )
+    
+    print("✓ Custom adapter created successfully")
+    print("  - Agent name: \(customAdapter.agentName)")
+    print("  - Agent description: \(customAdapter.agentDescription)")
+    print("  - Capabilities: streaming=\(customAdapter.cardCapabilities.streaming), pushNotifications=\(customAdapter.cardCapabilities.pushNotifications)")
+    print("  - Skills: \(customAdapter.skills.count)")
+    print("  - Input modes: \(customAdapter.defaultInputModes)")
+    print("  - Output modes: \(customAdapter.defaultOutputModes)")
     
     // Test message handling
     let store = TaskStore()
@@ -131,8 +170,8 @@ func testLLMProtocolAdapter() async {
         if let history = task.history, history.count >= 2 {
             let response = history[1]
             print("  - Response role: \(response.role)")
-            if let textPart = response.parts.first?.text {
-                print("  - Response content: \(textPart)")
+            if case .text(let text) = response.parts.first {
+                print("  - Response content: \(text)")
             }
         }
     } catch {
@@ -184,8 +223,16 @@ struct LLMProtocolAdapterExample {
             model: "example-llm-v1",
             maxTokens: 1000,
             temperature: 0.7,
-            systemPrompt: "You are a helpful assistant powered by the ExampleLLM."
+            systemPrompt: "You are a helpful assistant powered by the ExampleLLM.",
+            agentName: "Example LLM Agent",
+            agentDescription: "A demonstration agent using the ExampleLLM implementation"
         )
+        
+        logger.info("Created LLMProtocolAdapter:")
+        logger.info("  - Agent name: \(adapter.agentName)")
+        logger.info("  - Agent description: \(adapter.agentDescription)")
+        logger.info("  - Skills: \(adapter.skills.count)")
+        logger.info("  - Capabilities: streaming=\(adapter.cardCapabilities.streaming)")
         
         // Create an A2A server with the adapter
         let server = A2AServer(port: 4245, adapter: adapter)

@@ -29,8 +29,8 @@ public actor A2AServer {
         self.adapter = adapter
         // derive AgentCard from adapter metadata
         self.agentCard = AgentCard(
-            name: "Generic A2A Server",
-            description: "Auto‑generated agent exposing \(adapter.skills.map{$0.name}.joined(separator:",")).",
+            name: adapter.agentName,
+            description: adapter.agentDescription,
             url: "http://localhost:\(port)",
             version: "0.1.3",
             capabilities: adapter.cardCapabilities,

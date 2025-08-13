@@ -26,13 +26,27 @@ public struct LLMProtocolAdapter: AgentAdapter {
         public let systemPrompt: String?
         public let additionalParameters: JSON?
         
+        // MARK: - Agent Configuration
+        public let agentName: String
+        public let agentDescription: String
+        public let cardCapabilities: AgentCard.AgentCapabilities
+        public let skills: [AgentCard.AgentSkill]
+        public let defaultInputModes: [String]
+        public let defaultOutputModes: [String]
+        
         public init(
             model: String,
             maxTokens: Int? = nil,
             temperature: Double? = nil,
             topP: Double? = nil,
             systemPrompt: String? = nil,
-            additionalParameters: JSON? = nil
+            additionalParameters: JSON? = nil,
+            agentName: String? = nil,
+            agentDescription: String? = nil,
+            cardCapabilities: AgentCard.AgentCapabilities? = nil,
+            skills: [AgentCard.AgentSkill]? = nil,
+            defaultInputModes: [String]? = nil,
+            defaultOutputModes: [String]? = nil
         ) {
             self.model = model
             self.maxTokens = maxTokens
@@ -40,6 +54,35 @@ public struct LLMProtocolAdapter: AgentAdapter {
             self.topP = topP
             self.systemPrompt = systemPrompt
             self.additionalParameters = additionalParameters
+            
+            // Set agent properties with defaults if not provided
+            self.agentName = agentName ?? "LLM Protocol Agent"
+            self.agentDescription = agentDescription ?? "An A2A-compliant agent that provides text generation and conversation capabilities using any LLM that implements the LLMProtocol interface."
+            self.cardCapabilities = cardCapabilities ?? .init(
+                streaming: true,
+                pushNotifications: false,
+                stateTransitionHistory: true
+            )
+            self.skills = skills ?? [
+                .init(
+                    id: "text-generation",
+                    name: "text-generation",
+                    description: "Generate text responses using the underlying LLM",
+                    tags: ["llm", "text"],
+                    inputModes: ["text/plain"],
+                    outputModes: ["text/plain"]
+                ),
+                .init(
+                    id: "conversation",
+                    name: "conversation",
+                    description: "Engage in conversational interactions",
+                    tags: ["llm", "conversation"],
+                    inputModes: ["text/plain"],
+                    outputModes: ["text/plain"]
+                )
+            ]
+            self.defaultInputModes = defaultInputModes ?? ["text/plain"]
+            self.defaultOutputModes = defaultOutputModes ?? ["text/plain"]
         }
     }
     
@@ -67,7 +110,13 @@ public struct LLMProtocolAdapter: AgentAdapter {
         temperature: Double? = nil,
         topP: Double? = nil,
         systemPrompt: String? = nil,
-        additionalParameters: JSON? = nil
+        additionalParameters: JSON? = nil,
+        agentName: String? = nil,
+        agentDescription: String? = nil,
+        cardCapabilities: AgentCard.AgentCapabilities? = nil,
+        skills: [AgentCard.AgentSkill]? = nil,
+        defaultInputModes: [String]? = nil,
+        defaultOutputModes: [String]? = nil
     ) {
         let config = Configuration(
             model: model ?? llm.getModelName(),
@@ -75,48 +124,41 @@ public struct LLMProtocolAdapter: AgentAdapter {
             temperature: temperature,
             topP: topP,
             systemPrompt: systemPrompt,
-            additionalParameters: additionalParameters
+            additionalParameters: additionalParameters,
+            agentName: agentName,
+            agentDescription: agentDescription,
+            cardCapabilities: cardCapabilities,
+            skills: skills,
+            defaultInputModes: defaultInputModes,
+            defaultOutputModes: defaultOutputModes
         )
         self.init(llm: llm, configuration: config)
     }
     
     // MARK: - AgentAdapter Implementation
     
+    public var agentName: String {
+        config.agentName
+    }
+    
+    public var agentDescription: String {
+        config.agentDescription
+    }
+    
     public var cardCapabilities: AgentCard.AgentCapabilities {
-        .init(
-            streaming: true,
-            pushNotifications: false,
-            stateTransitionHistory: true
-        )
+        config.cardCapabilities
     }
     
     public var skills: [AgentCard.AgentSkill] {
-        [
-            .init(
-                id: "text-generation",
-                name: "text-generation",
-                description: "Generate text responses using the underlying LLM",
-                tags: ["llm", "text"],
-                inputModes: ["text"],
-                outputModes: ["text"]
-            ),
-            .init(
-                id: "conversation",
-                name: "conversation",
-                description: "Engage in conversational interactions",
-                tags: ["llm", "conversation"],
-                inputModes: ["text"],
-                outputModes: ["text"]
-            )
-        ]
+        config.skills
     }
     
     public var defaultInputModes: [String] {
-        ["text"]
+        config.defaultInputModes
     }
     
     public var defaultOutputModes: [String] {
-        ["text"]
+        config.defaultOutputModes
     }
     
     // MARK: - Message Handling

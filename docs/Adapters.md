@@ -147,6 +147,14 @@ import SwiftAgentKitA2A
 import SwiftAgentKitAdapters
 
 struct MyCustomAdapter: AgentAdapter {
+    var agentName: String {
+        "My Custom Agent"
+    }
+    
+    var agentDescription: String {
+        "A custom A2A-compliant agent with custom skill implementation."
+    }
+    
     var cardCapabilities: AgentCard.AgentCapabilities {
         .init(
             streaming: true,
@@ -197,7 +205,47 @@ struct MultiProviderAdapter: AgentAdapter {
         self.anthropicAdapter = AnthropicAdapter(apiKey: anthropicKey)
     }
     
-    // ... implement AgentAdapter protocol
+    var agentName: String {
+        "Multi-Provider Agent"
+    }
+    
+    var agentDescription: String {
+        "An A2A-compliant agent that provides redundancy and fallback using multiple AI providers."
+    }
+    
+    var cardCapabilities: AgentCard.AgentCapabilities {
+        .init(
+            streaming: true,
+            pushNotifications: false,
+            stateTransitionHistory: true
+        )
+    }
+    
+    var skills: [AgentCard.AgentSkill] {
+        [
+            .init(
+                id: "openai-skill",
+                name: "OpenAI Skill",
+                description: "Provides text generation and code generation capabilities from OpenAI.",
+                tags: ["openai"],
+                examples: ["Tell me about Swift."],
+                inputModes: ["text/plain"],
+                outputModes: ["text/plain"]
+            ),
+            .init(
+                id: "anthropic-skill",
+                name: "Anthropic Skill",
+                description: "Provides text generation and code generation capabilities from Anthropic.",
+                tags: ["anthropic"],
+                examples: ["What is the capital of France?"],
+                inputModes: ["text/plain"],
+                outputModes: ["text/plain"]
+            )
+        ]
+    }
+    
+    var defaultInputModes: [String] { ["text/plain"] }
+    var defaultOutputModes: [String] { ["text/plain"] }
     
     func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
         // Try OpenAI first, then Anthropic as fallback
@@ -206,6 +254,10 @@ struct MultiProviderAdapter: AgentAdapter {
         } catch {
             return try await anthropicAdapter.handleSend(params, store: store)
         }
+    }
+    
+    func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Implement streaming logic here
     }
 }
 ```
