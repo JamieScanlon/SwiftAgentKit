@@ -146,19 +146,28 @@ public actor A2AServer {
         guard agentCard.capabilities.streaming == true else {
             return Response(status: .notImplemented)
         }
+        guard isAuthorized(req) else {
+            return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
+        }
         let params = try req.content.decode(MessageSendParams.self)
         let adapter = self.adapter  // Capture adapter before the task
         let res = Response(status:.ok)
         let store = taskStore
         res.headers.replaceOrAdd(name:.contentType, value:"text/event-stream")
+        res.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
+        res.headers.replaceOrAdd(name: .connection, value: "keep-alive")
         let bodyStream = AsyncStream<ByteBuffer> { cont in
             Task.detached {
-                try await adapter.handleStream(params, store: store) { ev in
-                    if let data = try? self.encoder.encode(ev), let json = String(data: data, encoding:.utf8) {
-                        var buf = ByteBufferAllocator().buffer(capacity: json.count+8)
-                        buf.writeString("data: \(json)\n\n")
-                        cont.yield(buf)
+                do {
+                    try await adapter.handleStream(params, store: store) { ev in
+                        if let data = try? self.encoder.encode(ev), let json = String(data: data, encoding:.utf8) {
+                            var buf = ByteBufferAllocator().buffer(capacity: json.count+8)
+                            buf.writeString("data: \(json)\n\n")
+                            cont.yield(buf)
+                        }
                     }
+                } catch {
+                    // Ensure the stream finishes even if the adapter throws
                 }
                 cont.finish()
             }
@@ -168,6 +177,7 @@ public actor A2AServer {
                 for await buffer in bodyStream {
                     _ = writer.write(.buffer(buffer))
                 }
+                _ = writer.write(.end)
             }
         })
         return res
@@ -321,6 +331,7 @@ public actor A2AServer {
                 for await buffer in stream {
                     _ = writer.write(.buffer(buffer))
                 }
+                _ = writer.write(.end)
             }
         })
         return response
