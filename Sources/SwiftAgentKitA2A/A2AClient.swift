@@ -83,7 +83,7 @@ public actor A2AClient {
         
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Any] ?? [:]
         
-        let response: [String: Sendable] = try await apiManager.jsonRequest("message/send", method: .post, parameters: jsonParams)
+        let response: [String: Sendable] = try await apiManager.jsonRequest("message/send", method: .post, parameters: jsonParams, headers: authHeaders)
         
         // Parse the response to determine if it's a message or task
         if let result = response["result"] as? [String: Any] {
@@ -118,7 +118,7 @@ public actor A2AClient {
         
         return AsyncStream { continuation in
             Task {
-                let sseStream = await apiManager.sseRequest("message/stream", method: HTTPMethod.post, parameters: jsonParams)
+                let sseStream = await apiManager.sseRequest("message/stream", method: HTTPMethod.post, parameters: jsonParams, headers: authHeaders)
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 
@@ -196,7 +196,7 @@ public actor A2AClient {
         
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Any] ?? [:]
         
-        return try await apiManager.decodableRequest("tasks/get", method: .post, parameters: jsonParams)
+        return try await apiManager.decodableRequest("tasks/get", method: .post, parameters: jsonParams, headers: authHeaders)
     }
     
     /// Cancels a running task
@@ -209,7 +209,7 @@ public actor A2AClient {
         
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Any] ?? [:]
         
-        return try await apiManager.decodableRequest("tasks/cancel", method: .post, parameters: jsonParams)
+        return try await apiManager.decodableRequest("tasks/cancel", method: .post, parameters: jsonParams, headers: authHeaders)
     }
     
     /// Sets push notification configuration for a task
@@ -222,7 +222,7 @@ public actor A2AClient {
         
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Any] ?? [:]
         
-        return try await apiManager.decodableRequest("tasks/pushNotificationConfig/set", method: .post, parameters: jsonParams)
+        return try await apiManager.decodableRequest("tasks/pushNotificationConfig/set", method: .post, parameters: jsonParams, headers: authHeaders)
     }
     
     /// Gets push notification configuration for a task
@@ -235,7 +235,7 @@ public actor A2AClient {
         
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Any] ?? [:]
         
-        return try await apiManager.decodableRequest("tasks/pushNotificationConfig/get", method: .post, parameters: jsonParams)
+        return try await apiManager.decodableRequest("tasks/pushNotificationConfig/get", method: .post, parameters: jsonParams, headers: authHeaders)
     }
     
     /// Resubscribes to a task's event stream
@@ -250,7 +250,7 @@ public actor A2AClient {
         
         return AsyncStream { continuation in
             Task {
-                let sseStream = await apiManager.sseRequest("tasks/resubscribe", method: HTTPMethod.post, parameters: jsonParams)
+                let sseStream = await apiManager.sseRequest("tasks/resubscribe", method: HTTPMethod.post, parameters: jsonParams, headers: authHeaders)
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
                 
@@ -326,7 +326,7 @@ public actor A2AClient {
             throw A2AClientError.notInitialized
         }
         
-        return try await apiManager.decodableRequest("agent/authenticatedExtendedCard", method: .post)
+        return try await apiManager.decodableRequest("agent/authenticatedExtendedCard", method: .post, headers: authHeaders)
     }
     
     // MARK: - Private
@@ -336,6 +336,15 @@ public actor A2AClient {
     private var bootCall: A2AConfig.ServerBootCall?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+    private var authHeaders: [String: String]? {
+        if let token = server.token, !token.isEmpty {
+            return ["Authorization": "Bearer \(token)"]
+        }
+        if let apiKey = server.apiKey, !apiKey.isEmpty {
+            return ["X-API-Key": apiKey]
+        }
+        return nil
+    }
     
     /// Fetches the agent card from the standard location
     /// According to A2A spec: https://{server_domain}/.well-known/agent.json
@@ -345,7 +354,7 @@ public actor A2AClient {
             throw A2AClientError.notInitialized
         }
         
-        return try await apiManager.decodableRequest(".well-known/agent.json")
+        return try await apiManager.decodableRequest(".well-known/agent.json", headers: authHeaders)
     }
     
 }
