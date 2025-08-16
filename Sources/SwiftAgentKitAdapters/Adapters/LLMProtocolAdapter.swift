@@ -350,7 +350,9 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     eventSink(streamingEvent)
                     
                 case .complete(let response):
-                    fullContent += response.content
+
+                    // the response.content sould contain the full response
+                    fullContent = response.content
                     
                     // Create artifact update event for final response
                     let artifact = Artifact(
@@ -367,7 +369,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                         contextId: contextId,
                         kind: "artifact-update",
                         artifact: artifact,
-                        append: true,
+                        append: false,
                         lastChunk: true,
                         metadata: nil
                     )
@@ -622,8 +624,10 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     eventSink(streamingEvent)
                     
                 case .complete(let response):
-                    fullContent += response.content
+                    // the response.content sould contain the full response
+                    fullContent = response.content
                     
+                    // Create artifact update event for final response
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
                         parts: [.text(text: response.content)],
@@ -638,7 +642,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                         contextId: contextId,
                         kind: "artifact-update",
                         artifact: artifact,
-                        append: true,
+                        append: false,
                         lastChunk: true,
                         metadata: nil
                     )
