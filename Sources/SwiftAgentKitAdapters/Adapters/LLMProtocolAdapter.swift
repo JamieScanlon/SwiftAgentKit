@@ -324,7 +324,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     // Create artifact update event for streaming
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
-                        parts: [.text(text: fullContent)],
+                        parts: [.text(text: response.content)],
                         name: "llm-response",
                         description: "Streaming response from LLM",
                         metadata: nil,
@@ -336,7 +336,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                         contextId: contextId,
                         kind: "artifact-update",
                         artifact: artifact,
-                        append: false,
+                        append: true,
                         lastChunk: false,
                         metadata: nil
                     )
@@ -355,7 +355,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     // Create artifact update event for final response
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
-                        parts: [.text(text: fullContent)],
+                        parts: [.text(text: response.content)],
                         name: "llm-response",
                         description: "Streaming response from LLM",
                         metadata: nil,
@@ -367,7 +367,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                         contextId: contextId,
                         kind: "artifact-update",
                         artifact: artifact,
-                        append: false,
+                        append: true,
                         lastChunk: true,
                         metadata: nil
                     )
@@ -596,7 +596,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
-                        parts: [.text(text: fullContent)],
+                        parts: [.text(text: response.content)],
                         name: "llm-response",
                         description: "Streaming response from LLM",
                         metadata: nil,
@@ -608,7 +608,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                         contextId: contextId,
                         kind: "artifact-update",
                         artifact: artifact,
-                        append: false,
+                        append: true,
                         lastChunk: false,
                         metadata: nil
                     )
@@ -626,7 +626,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
-                        parts: [.text(text: fullContent)],
+                        parts: [.text(text: response.content)],
                         name: "llm-response",
                         description: "Streaming response from LLM",
                         metadata: nil,
@@ -638,7 +638,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                         contextId: contextId,
                         kind: "artifact-update",
                         artifact: artifact,
-                        append: false,
+                        append: true,
                         lastChunk: true,
                         metadata: nil
                     )
