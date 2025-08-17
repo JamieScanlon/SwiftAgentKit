@@ -176,7 +176,7 @@ public actor A2AServer {
         do {
             rpcRequest = try req.content.decode(JSONRPCRequest<MessageSendParams>.self)
         } catch {
-            return jsonRPCErrorResponse(code: ErrorCode.invalidParams.rawValue, message: "Could not decode JSON-RPC request", status: .badRequest)
+            return jsonRPCErrorResponse(code: ErrorCode.invalidParams.rawValue, message: "Could not decode JSON-RPC request: \(error)", status: .badRequest)
         }
         let params = rpcRequest.params
         let requestId = rpcRequest.id
