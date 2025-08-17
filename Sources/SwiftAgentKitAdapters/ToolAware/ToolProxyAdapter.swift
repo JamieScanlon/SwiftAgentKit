@@ -274,7 +274,7 @@ extension LLMResponse {
     ///   - from: Raw message content from the LLM response.
     ///   - availableTools: An array of available tools. This should be the same list of available tools used in the `LLMRequestConfig` when the originalt message was sent to the LLM
     /// - Returns: An `LLMResponse`
-    static func llmResponse(from content: String, availableTools: [ToolDefinition]) -> LLMResponse {
+    public static func llmResponse(from content: String, availableTools: [ToolDefinition]) -> LLMResponse {
         var toolCalls: [ToolCall] = []
         let (processedText, toolCallString) = ToolCall.parseToolCallFromString(content: content, availableTools: availableTools.map({$0.name}))
         
