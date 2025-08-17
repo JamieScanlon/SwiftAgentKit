@@ -14,3 +14,8 @@ public protocol AgentAdapter: Sendable {
     func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws
     func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws
 }
+
+extension AgentAdapter {
+    
+    //
+}

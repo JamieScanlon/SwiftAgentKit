@@ -236,6 +236,9 @@ private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
     
     func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         // Mock implementation
+        
+        let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
+        
         // Update task with completed status
         let completedStatus = TaskStatus(
             state: .completed,
@@ -256,7 +259,7 @@ private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
         
         let completedResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
-            id: 1,
+            id: requestId,
             result: completedEvent
         )
         
@@ -288,6 +291,9 @@ private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
     }
     
     func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        
+        let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
+        
         // Update task with completed status
         let completedStatus = TaskStatus(
             state: .completed,
@@ -308,7 +314,7 @@ private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
         
         let completedResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
-            id: 1,
+            id: requestId,
             result: completedEvent
         )
         

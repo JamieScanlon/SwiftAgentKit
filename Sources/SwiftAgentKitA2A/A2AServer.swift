@@ -169,13 +169,27 @@ public actor A2AServer {
         guard isAuthorized(req) else {
             return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
         }
-        let params = try req.content.decode(MessageSendParams.self)
+        // Decode JSON-RPC request envelope to capture request id and params
+        let rpcRequest = try req.content.decode(JSONRPCRequest<MessageSendParams>.self)
+        let params = rpcRequest.params
+        let requestId = rpcRequest.id
         let adapter = self.adapter  // Capture adapter before the task
         let res = Response(status:.ok)
         let store = taskStore
         res.headers.replaceOrAdd(name:.contentType, value:"text/event-stream")
         res.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
         res.headers.replaceOrAdd(name: .connection, value: "keep-alive")
+        
+        // Update the MessageSendParams metadata to include the requestId
+        // This is so the id can be used in the responses
+        let updatedParams: MessageSendParams = {
+            var returnValue = params
+            if var metadataObject = (returnValue.metadata ?? (try! .init([:]))).literalValue as? [String: Any] {
+                metadataObject["requestId"] = requestId
+                returnValue.metadata = try? .init(metadataObject)
+            }
+            return returnValue
+        }()
         
         // Create initial task
         
@@ -189,7 +203,7 @@ public actor A2AServer {
                 state: .submitted,
                 timestamp: ISO8601DateFormatter().string(from: .init())
             ),
-            history: [params.message]
+            history: [updatedParams.message]
         )
         
         await taskStore.addTask(task: task)
@@ -197,10 +211,11 @@ public actor A2AServer {
         let bodyStream = AsyncStream<ByteBuffer> { cont in
             Task.detached {
                 do {
-                    try await adapter.handleStream(params, task: task, store: store) { ev in
+                    try await adapter.handleStream(updatedParams, task: task, store: store) { ev in
                         if let data = try? self.encoder.encode(ev), let json = String(data: data, encoding:.utf8) {
-                            var buf = ByteBufferAllocator().buffer(capacity: json.count+8)
-                            buf.writeString("data: \(json)\n\n")
+                            let wrapped = "{\"jsonrpc\":\"2.0\",\"id\":\(requestId),\"result\":\(json)}"
+                            var buf = ByteBufferAllocator().buffer(capacity: wrapped.count+8)
+                            buf.writeString("data: \(wrapped)\n\n")
                             cont.yield(buf)
                         }
                     }
@@ -310,7 +325,10 @@ public actor A2AServer {
     /// - Parameter req: the `Request`
     /// - Returns: a `Response` object
     private func handleTaskResubscribe(_ req: Request) async throws -> Response {
-        let taskIdParams = try req.content.decode(TaskIdParams.self)
+        // tasks/resubscribe also uses JSON-RPC envelope to echo id
+        let rpcRequest = try req.content.decode(JSONRPCRequest<TaskIdParams>.self)
+        let taskIdParams = rpcRequest.params
+        let requestId = rpcRequest.id
         guard let task = await self.taskStore.getTask(id: taskIdParams.taskId) else {
             return jsonRPCErrorResponse(code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
         }
@@ -320,8 +338,9 @@ public actor A2AServer {
             func send<T: Encodable>(_ obj: T) {
                 if let data = try? encoder.encode(obj),
                    let json = String(data: data, encoding: .utf8) {
-                    var buffer = ByteBufferAllocator().buffer(capacity: json.count + 8)
-                    buffer.writeString("data: \(json)\n\n")
+                    let wrapped = "{\"jsonrpc\":\"2.0\",\"id\":\(requestId),\"result\":\(json)}"
+                    var buffer = ByteBufferAllocator().buffer(capacity: wrapped.count + 8)
+                    buffer.writeString("data: \(wrapped)\n\n")
                     continuation.yield(buffer)
                 }
             }
@@ -329,32 +348,26 @@ public actor A2AServer {
             let isComplete = (task.status.state == .completed || task.status.state == .failed || task.status.state == .canceled)
             
             if let artifact = task.artifacts?.last {
-                send(SendStreamingMessageSuccessResponse(
-                    jsonrpc: "2.0",
-                    id: 1,
-                    result: TaskArtifactUpdateEvent(
-                        taskId: task.id,
-                        contextId: task.contextId,
-                        kind: "artifact-update",
-                        artifact: artifact,
-                        append: false,
-                        lastChunk: isComplete,
-                        metadata: nil
-                    )
-                ))
-            }
-            
-            send(SendStreamingMessageSuccessResponse(
-                jsonrpc: "2.0",
-                id: 1,
-                result: TaskStatusUpdateEvent(
+                let ev = TaskArtifactUpdateEvent(
                     taskId: task.id,
                     contextId: task.contextId,
-                    kind: "status-update",
-                    status: TaskStatus(state: task.status.state, message: task.status.message, timestamp: now),
-                    final: isComplete
+                    kind: "artifact-update",
+                    artifact: artifact,
+                    append: false,
+                    lastChunk: isComplete,
+                    metadata: nil
                 )
-            ))
+                send(ev)
+            }
+
+            let statusEv = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "status-update",
+                status: TaskStatus(state: task.status.state, message: task.status.message, timestamp: now),
+                final: isComplete
+            )
+            send(statusEv)
             
             continuation.finish()
         }

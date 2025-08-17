@@ -207,9 +207,41 @@ public struct TaskStatus: Codable, Sendable {
 
 // Request Structures
 public struct MessageSendParams: Codable, Sendable {
+    /// The message being sent to the server.
     public let message: A2AMessage
-    public init(message: A2AMessage) {
+    /// Optional additional message configuration.
+    public var configuration: MessageSendConfiguration? = nil
+    /// Request-specific metadata.
+    public var metadata: JSON? = nil
+
+    public init(message: A2AMessage, configuration: MessageSendConfiguration? = nil, metadata: JSON? = nil) {
         self.message = message
+        self.configuration = configuration
+        self.metadata = metadata
+    }
+}
+
+/// Configuration for the send message request.
+public struct MessageSendConfiguration: Codable, Sendable {
+    /// Accepted output modalities by the client.
+    public let acceptedOutputModes: [String]
+    /// Number of recent messages to be retrieved.
+    public var historyLength: Int? = nil
+    /// Where the server should send notifications when disconnected.
+    public var pushNotificationConfig: PushNotificationConfig? = nil
+    /// If the server should treat the client as a blocking request.
+    public var blocking: Bool? = nil
+
+    public init(
+        acceptedOutputModes: [String],
+        historyLength: Int? = nil,
+        pushNotificationConfig: PushNotificationConfig? = nil,
+        blocking: Bool? = nil
+    ) {
+        self.acceptedOutputModes = acceptedOutputModes
+        self.historyLength = historyLength
+        self.pushNotificationConfig = pushNotificationConfig
+        self.blocking = blocking
     }
 }
 
@@ -497,6 +529,19 @@ public struct JSONRPCErrorResponse: Codable, Sendable {
         self.jsonrpc = jsonrpc
         self.id = id
         self.error = error
+    }
+}
+
+/// JSON-RPC 2.0 request envelope used to carry params and id for RPC calls
+public struct JSONRPCRequest<T: Decodable & Sendable>: Decodable, Sendable {
+    public let jsonrpc: String
+    public let id: Int
+    public let params: T
+
+    public init(jsonrpc: String = "2.0", id: Int, params: T) {
+        self.jsonrpc = jsonrpc
+        self.id = id
+        self.params = params
     }
 }
 

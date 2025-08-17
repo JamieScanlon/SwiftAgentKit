@@ -175,6 +175,8 @@ public struct GeminiAdapter: AgentAdapter {
     
     public func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
+        let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
+        
         // Update working status
         let workingStatus = TaskStatus(
             state: .working,
@@ -195,7 +197,7 @@ public struct GeminiAdapter: AgentAdapter {
         
         let workingResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
-            id: 1,
+            id: requestId,
             result: workingEvent
         )
         eventSink(workingResponse)
@@ -241,7 +243,7 @@ public struct GeminiAdapter: AgentAdapter {
                 
                 let artifactResponse = SendStreamingMessageSuccessResponse(
                     jsonrpc: "2.0",
-                    id: 1,
+                    id: requestId,
                     result: artifactEvent
                 )
                 eventSink(artifactResponse)
@@ -274,7 +276,7 @@ public struct GeminiAdapter: AgentAdapter {
             
             let finalArtifactResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
-                id: 1,
+                id: requestId,
                 result: finalArtifactEvent
             )
             eventSink(finalArtifactResponse)
@@ -299,7 +301,7 @@ public struct GeminiAdapter: AgentAdapter {
             
             let completedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
-                id: 1,
+                id: requestId,
                 result: completedEvent
             )
             
@@ -328,7 +330,7 @@ public struct GeminiAdapter: AgentAdapter {
             
             let failedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
-                id: 1,
+                id: requestId,
                 result: failedEvent
             )
             

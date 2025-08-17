@@ -79,6 +79,11 @@ Task {
             role: "user",
             parts: [.text(text: "Hello, can you help me with a task?")],
             messageId: UUID().uuidString
+        ),
+        configuration: MessageSendConfiguration(
+            acceptedOutputModes: ["text/plain"],
+            historyLength: 5,
+            blocking: true
         )
     )
     
@@ -102,6 +107,10 @@ Task {
             role: "user",
             parts: [.text(text: "Generate a long response")],
             messageId: UUID().uuidString
+        ),
+        configuration: MessageSendConfiguration(
+            acceptedOutputModes: ["text/plain"],
+            blocking: false
         )
     )
     
@@ -190,7 +199,7 @@ struct MyAgentAdapter: AgentAdapter {
             status: working,
             final: false
         )
-        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: workingEvent))
+        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: requestId, result: workingEvent))
         
         // Stream a few artifact chunks
         for i in 1...3 {
@@ -209,7 +218,7 @@ struct MyAgentAdapter: AgentAdapter {
                 append: true,
                 lastChunk: i == 3
             )
-            eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: artifactEvent))
+            eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: requestId, result: artifactEvent))
         }
         
         // Completed status
@@ -222,7 +231,7 @@ struct MyAgentAdapter: AgentAdapter {
             status: completed,
             final: true
         )
-        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: completedEvent))
+        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: requestId, result: completedEvent))
     }
 }
 

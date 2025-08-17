@@ -230,6 +230,8 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
     
     public func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
+        let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
+        
         // Update to working state
         let workingStatus = TaskStatus(
             state: .working,
@@ -250,7 +252,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
         
         let workingResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
-            id: 1,
+            id: requestId,
             result: workingEvent
         )
         eventSink(workingResponse)
@@ -305,7 +307,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     
                     let streamingEvent = SendStreamingMessageSuccessResponse(
                         jsonrpc: "2.0",
-                        id: 1,
+                        id: requestId,
                         result: artifactEvent
                     )
                     
@@ -341,7 +343,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     
                     let streamingEvent = SendStreamingMessageSuccessResponse(
                         jsonrpc: "2.0",
-                        id: 1,
+                        id: requestId,
                         result: artifactEvent
                     )
                     
@@ -369,7 +371,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
             
             let completedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
-                id: 1,
+                id: requestId,
                 result: completedEvent
             )
             
@@ -398,7 +400,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
             
             let failedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
-                id: 1,
+                id: requestId,
                 result: failedEvent
             )
             
@@ -488,6 +490,8 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
     
     public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
+        let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
+        
         // Update to working state
         let workingStatus = TaskStatus(
             state: .working,
@@ -508,7 +512,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
         
         let workingResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
-            id: 1,
+            id: requestId,
             result: workingEvent
         )
         eventSink(workingResponse)
@@ -562,7 +566,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     
                     let streamingEvent = SendStreamingMessageSuccessResponse(
                         jsonrpc: "2.0",
-                        id: 1,
+                        id: requestId,
                         result: artifactEvent
                     )
                     
@@ -597,7 +601,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     
                     let streamingEvent = SendStreamingMessageSuccessResponse(
                         jsonrpc: "2.0",
-                        id: 1,
+                        id: requestId,
                         result: artifactEvent
                     )
                     
@@ -627,7 +631,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
             
             let completedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
-                id: 1,
+                id: requestId,
                 result: completedEvent
             )
             
@@ -657,7 +661,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
             
             let failedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
-                id: 1,
+                id: requestId,
                 result: failedEvent
             )
             
