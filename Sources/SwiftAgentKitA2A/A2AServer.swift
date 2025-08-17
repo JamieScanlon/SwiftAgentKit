@@ -164,13 +164,20 @@ public actor A2AServer {
     
     private func handleMessageStream(_ req: Request) async throws -> Response {
         guard agentCard.capabilities.streaming == true else {
-            return Response(status: .notImplemented)
+            let httpResponseStatus: HTTPResponseStatus = .notImplemented
+            return jsonRPCErrorResponse(code: Int(httpResponseStatus.code), message: "Streaming is not supported for this agent", status: httpResponseStatus)
         }
         guard isAuthorized(req) else {
-            return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
+            let httpResponseStatus: HTTPResponseStatus = .unauthorized
+            return jsonRPCErrorResponse(code: Int(httpResponseStatus.code), message: "Unauthorized", status: httpResponseStatus)
         }
         // Decode JSON-RPC request envelope to capture request id and params
-        let rpcRequest = try req.content.decode(JSONRPCRequest<MessageSendParams>.self)
+        let rpcRequest: JSONRPCRequest<MessageSendParams>
+        do {
+            rpcRequest = try req.content.decode(JSONRPCRequest<MessageSendParams>.self)
+        } catch {
+            return jsonRPCErrorResponse(code: ErrorCode.invalidParams.rawValue, message: "Could not decode JSON-RPC request", status: .badRequest)
+        }
         let params = rpcRequest.params
         let requestId = rpcRequest.id
         let adapter = self.adapter  // Capture adapter before the task
@@ -179,6 +186,8 @@ public actor A2AServer {
         res.headers.replaceOrAdd(name:.contentType, value:"text/event-stream")
         res.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
         res.headers.replaceOrAdd(name: .connection, value: "keep-alive")
+        res.headers.replaceOrAdd(name: .cacheControl, value: "no-transform")
+        res.headers.replaceOrAdd(name: "X-Accel-Buffering", value: "no")
         
         // Update the MessageSendParams metadata to include the requestId
         // This is so the id can be used in the responses
@@ -191,22 +200,45 @@ public actor A2AServer {
             return returnValue
         }()
         
-        // Create initial task
+        // Validate task continuation -
+        // if the request's MessageSendParams contains a `taskId` it is assumed that this is an attempt to
+        // reconnect with an existing task. In this case we need to validate that the task exists and is still running
+        var isExistingTask = false
+        if let taskId = updatedParams.message.taskId {
+            guard let foundTask = await taskStore.getTask(id: taskId) else {
+                return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .badRequest)
+            }
+            // cannot be completed, canceled, rejected, or failed
+            guard foundTask.status.state != .completed && foundTask.status.state != .failed && foundTask.status.state != .canceled && foundTask.status.state != .rejected else {
+                return jsonRPCErrorResponse(id: requestId, code: ErrorCode.invalidRequest.rawValue, message: "A task which has reached a terminal state (completed, canceled, rejected, or failed) can't be restarted", status: .badRequest)
+            }
+            isExistingTask = true
+        }
         
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
+        // Create task
         
-        let task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: [updatedParams.message]
-        )
+        let taskId = isExistingTask ? updatedParams.message.taskId ?? UUID().uuidString : UUID().uuidString
+        let contextId = updatedParams.message.contextId ?? UUID().uuidString
         
-        await taskStore.addTask(task: task)
+        let task: A2ATask = await {
+            if isExistingTask {
+                return await taskStore.getTask(id: taskId)!
+            } else {
+                let aTask = A2ATask(
+                    id: taskId,
+                    contextId: contextId,
+                    status: TaskStatus(
+                        state: .submitted,
+                        timestamp: ISO8601DateFormatter().string(from: .init())
+                    ),
+                    history: [updatedParams.message]
+                )
+                await taskStore.addTask(task: aTask)
+                return aTask
+            }
+        }()
+        
+        // TODO: implement resubscribing to an existing task rather than restarting it which is what the current behavior is doing
         
         let bodyStream = AsyncStream<ByteBuffer> { cont in
             Task.detached {
@@ -368,6 +400,8 @@ public actor A2AServer {
                 final: isComplete
             )
             send(statusEv)
+            
+            // TODO: reconnect and stream the task events here
             
             continuation.finish()
         }
