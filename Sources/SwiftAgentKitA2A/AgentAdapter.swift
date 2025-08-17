@@ -11,6 +11,6 @@ public protocol AgentAdapter: Sendable {
     var defaultOutputModes: [String]        { get }
     
     // MARK: required handlers
-    func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask
-    func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws
+    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws
+    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws
 }

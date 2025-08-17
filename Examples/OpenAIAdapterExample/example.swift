@@ -55,14 +55,26 @@ struct OpenAIAdapterExample {
             contextId: UUID().uuidString
         )
         
+        let taskID = UUID().uuidString
         let params = MessageSendParams(message: message)
+        var task = A2ATask(
+            id: taskID,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .submitted,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: [params.message]
+        )
+        await taskStore.addTask(task: task)
         
         logger.info("Sending message to OpenAI...")
         
         do {
             // Test non-streaming
-            let task = try await openAIAdapter.handleSend(params, store: taskStore)
+            try await openAIAdapter.handleSend(params, task: task, store: taskStore)
             
+            task = await taskStore.getTask(id: taskID)!
             // The response message can now contain multiple parts:
             // - Text content (.text)
             // - Tool calls (.data with tool call information)
@@ -85,7 +97,7 @@ struct OpenAIAdapterExample {
             
             // Test streaming
             logger.info("Testing streaming...")
-            try await openAIAdapter.handleStream(params, store: taskStore) { @Sendable event in
+            try await openAIAdapter.handleStream(params, task: task, store: taskStore) { @Sendable event in
                 logger.info("Stream event received: \(type(of: event))")
             }
             

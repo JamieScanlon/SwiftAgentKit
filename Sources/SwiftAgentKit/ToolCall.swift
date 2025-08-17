@@ -481,6 +481,47 @@ public struct ToolCall: Sendable {
         return ToolCall(name: functionName, arguments: arguments)
     }
     
+    /// Parses tool call data from JSON format to ToolCall object
+    public static func parseToolCallFromData(_ data: Data) -> ToolCall? {
+        guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let _ = dict["id"] as? String,
+              let type = dict["type"] as? String,
+              type == "function",
+              let functionDict = dict["function"] as? [String: Any],
+              let name = functionDict["name"] as? String,
+              let argumentsString = functionDict["arguments"] as? String else {
+            return nil
+        }
+        
+        // Parse the arguments JSON string into a dictionary
+        guard let argumentsData = argumentsString.data(using: .utf8),
+              let argumentsDict = try? JSONSerialization.jsonObject(with: argumentsData) as? [String: Any] else {
+            return nil
+        }
+        
+        // Convert the arguments to the expected format
+        var toolCallArguments: [String: Sendable] = [:]
+        for (key, value) in argumentsDict {
+            if let stringValue = value as? String {
+                toolCallArguments[key] = stringValue
+            } else if let numberValue = value as? NSNumber {
+                toolCallArguments[key] = numberValue
+            } else if let boolValue = value as? Bool {
+                toolCallArguments[key] = boolValue
+            } else if let arrayValue = value as? [String] {
+                toolCallArguments[key] = arrayValue
+            } else if let dictValue = value as? [String: String] {
+                toolCallArguments[key] = dictValue
+            } else if let intValue = value as? Int {
+                toolCallArguments[key] = intValue
+            } else if let doubleValue = value as? Double {
+                toolCallArguments[key] = doubleValue
+            }
+        }
+        
+        return ToolCall(name: name, arguments: toolCallArguments)
+    }
+    
     private static func parseJsonFormat(_ jsonString: String) -> ToolCall? {
         guard let data = jsonString.data(using: .utf8) else {
             return nil

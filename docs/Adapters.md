@@ -180,13 +180,16 @@ struct MyCustomAdapter: AgentAdapter {
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
-        // Implement your custom logic here
-        // This could call external APIs, process data, etc.
+    // New API: update the provided task and write artifacts
+    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
+        await store.updateTaskStatus(id: task.id, status: TaskStatus(state: .working))
+        let artifact = Artifact(artifactId: UUID().uuidString, parts: [.text(text: "processed")])
+        await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+        await store.updateTaskStatus(id: task.id, status: TaskStatus(state: .completed))
     }
     
-    func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        // Implement streaming logic here
+    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Stream TaskStatusUpdateEvent and TaskArtifactUpdateEvent while updating TaskStore
     }
 }
 ```
@@ -247,17 +250,22 @@ struct MultiProviderAdapter: AgentAdapter {
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
+    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
         // Try OpenAI first, then Anthropic as fallback
         do {
-            return try await openAIAdapter.handleSend(params, store: store)
+            try await openAIAdapter.handleSend(params, task: task, store: store)
         } catch {
-            return try await anthropicAdapter.handleSend(params, store: store)
+            try await anthropicAdapter.handleSend(params, task: task, store: store)
         }
     }
     
-    func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        // Implement streaming logic here
+    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Delegate streaming; whichever adapter succeeds first updates the store and emits events
+        do {
+            try await openAIAdapter.handleStream(params, task: task, store: store, eventSink: eventSink)
+        } catch {
+            try await anthropicAdapter.handleStream(params, task: task, store: store, eventSink: eventSink)
+        }
     }
 }
 ```

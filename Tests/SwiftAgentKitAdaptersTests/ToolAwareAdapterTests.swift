@@ -12,21 +12,14 @@ struct ToolAwareAdapterTests {
         // Create a mock adapter that implements ToolAwareAgentAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
-        
-        // Create a message with text-based tool calls
-        let message = A2AMessage(
-            role: "assistant",
-            parts: [.text(text: "Here is the answer: search_tool(query=\"test\")")],
-            messageId: "test-message"
-        )
+        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Process the response
-        let (processedMessage, toolCalls) = await toolAwareAdapter.processResponseForToolCalls(message, availableTools: ["search_tool"])
+        let (processedParts, toolCalls) = await ToolCall.processResponseForToolCalls([.text(text: "Here is the answer: search_tool(query=\"test\")")], availableTools: ["search_tool"])
         
         // Verify the text was processed correctly
-        #expect(processedMessage.parts.count == 1)
-        if case .text(let text) = processedMessage.parts[0] {
+        #expect(processedParts.count == 1)
+        if case .text(let text) = processedParts[0] {
             #expect(text == "Here is the answer: ")
         } else {
             #expect(false, "Expected text part")
@@ -43,7 +36,7 @@ struct ToolAwareAdapterTests {
         // Create a mock adapter that implements ToolAwareAgentAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Create tool call data in the format used by OpenAI adapter
         let toolCallDict: [String: Any] = [
@@ -56,22 +49,17 @@ struct ToolAwareAdapterTests {
         ]
         let toolCallData = try JSONSerialization.data(withJSONObject: toolCallDict)
         
-        // Create a message with data-based tool calls
-        let message = A2AMessage(
-            role: "assistant",
-            parts: [
+        let parts: [A2AMessagePart] = [
                 .text(text: "I'll calculate the sum for you."),
                 .data(data: toolCallData)
-            ],
-            messageId: "test-message"
-        )
+            ]
         
         // Process the response
-        let (processedMessage, toolCalls) = await toolAwareAdapter.processResponseForToolCalls(message, availableTools: [])
+        let (processedParts, toolCalls) = await ToolCall.processResponseForToolCalls(parts, availableTools: [])
         
         // Verify the text was preserved
-        #expect(processedMessage.parts.count == 1)
-        if case .text(let text) = processedMessage.parts[0] {
+        #expect(processedParts.count == 1)
+        if case .text(let text) = processedParts[0] {
             #expect(text == "I'll calculate the sum for you.")
         } else {
             #expect(false, "Expected text part")
@@ -89,7 +77,7 @@ struct ToolAwareAdapterTests {
         // Create a mock adapter that implements ToolAwareAgentAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Create tool call data
         let toolCallDict: [String: Any] = [
@@ -103,21 +91,17 @@ struct ToolAwareAdapterTests {
         let toolCallData = try JSONSerialization.data(withJSONObject: toolCallDict)
         
         // Create a message with mixed content: text with embedded tool call + data-based tool call
-        let message = A2AMessage(
-            role: "assistant",
-            parts: [
+        let parts: [A2AMessagePart] = [
                 .text(text: "Let me check the weather: get_weather(city=\"London\") and also get the weather for New York."),
                 .data(data: toolCallData)
-            ],
-            messageId: "test-message"
-        )
+            ]
         
         // Process the response
-        let (processedMessage, toolCalls) = await toolAwareAdapter.processResponseForToolCalls(message, availableTools: ["get_weather"])
+        let (processedParts, toolCalls) = await ToolCall.processResponseForToolCalls(parts, availableTools: ["get_weather"])
         
         // Verify the text was processed correctly (embedded tool call removed)
-        #expect(processedMessage.parts.count == 1)
-        if case .text(let text) = processedMessage.parts[0] {
+        #expect(processedParts.count == 1)
+        if case .text(let text) = processedParts[0] {
             #expect(text == "Let me check the weather:  and also get the weather for New York.")
         } else {
             #expect(false, "Expected text part")
@@ -141,7 +125,7 @@ struct ToolAwareAdapterTests {
         // Create a mock adapter that implements ToolAwareAgentAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Create a message with no tool calls
         let message = A2AMessage(
@@ -151,11 +135,11 @@ struct ToolAwareAdapterTests {
         )
         
         // Process the response
-        let (processedMessage, toolCalls) = await toolAwareAdapter.processResponseForToolCalls(message, availableTools: [])
+        let (processedParts, toolCalls) = await ToolCall.processResponseForToolCalls([.text(text: "This is a regular response without any tool calls.")], availableTools: [])
         
         // Verify the text was preserved
-        #expect(processedMessage.parts.count == 1)
-        if case .text(let text) = processedMessage.parts[0] {
+        #expect(processedParts.count == 1)
+        if case .text(let text) = processedParts[0] {
             #expect(text == "This is a regular response without any tool calls.")
         } else {
             #expect(false, "Expected text part")
@@ -170,34 +154,30 @@ struct ToolAwareAdapterTests {
         // Create a mock adapter that implements ToolAwareAgentAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Create invalid data
         let invalidData = "This is not JSON".data(using: .utf8)!
         
         // Create a message with invalid data
-        let message = A2AMessage(
-            role: "assistant",
-            parts: [
+        let parts: [A2AMessagePart] = [
                 .text(text: "Here is some text."),
                 .data(data: invalidData)
-            ],
-            messageId: "test-message"
-        )
+            ]
         
         // Process the response
-        let (processedMessage, toolCalls) = await toolAwareAdapter.processResponseForToolCalls(message, availableTools: [])
+        let (processedParts, toolCalls) = await ToolCall.processResponseForToolCalls(parts, availableTools: [])
         
         // Verify the text was preserved
-        #expect(processedMessage.parts.count == 2)
-        if case .text(let text) = processedMessage.parts[0] {
+        #expect(processedParts.count == 2)
+        if case .text(let text) = processedParts[0] {
             #expect(text == "Here is some text.")
         } else {
             #expect(false, "Expected text part")
         }
         
         // Verify the invalid data was preserved as-is
-        if case .data(let data) = processedMessage.parts[1] {
+        if case .data(let data) = processedParts[1] {
             #expect(data == invalidData)
         } else {
             #expect(false, "Expected data part")
@@ -230,21 +210,108 @@ private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
+    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
         // Mock implementation
-        return A2ATask(id: "test", contextId: "test", status: TaskStatus(state: .completed, message: nil, timestamp: ""), history: [])
+        // Create response Artifact
+        let responseArtifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.text(text: "test content")]
+        )
+        
+        // Update the task store with the artifact
+        await store.updateTaskArtifacts(
+            id: task.id,
+            artifacts: [responseArtifact]
+        )
+        
+        // Update task with completed status and add messages to history
+        await store.updateTaskStatus(
+            id: task.id,
+            status: TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+        )
     }
     
-    func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         // Mock implementation
+        // Update task with completed status
+        let completedStatus = TaskStatus(
+            state: .completed,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        )
+        await store.updateTaskStatus(
+            id: task.id,
+            status: completedStatus
+        )
+        
+        let completedEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
+            kind: "status-update",
+            status: completedStatus,
+            final: true
+        )
+        
+        let completedResponse = SendStreamingMessageSuccessResponse(
+            jsonrpc: "2.0",
+            id: 1,
+            result: completedEvent
+        )
+        
+        eventSink(completedResponse)
     }
     
-    func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore) async throws -> A2ATask {
+    func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore) async throws {
         // Mock implementation
-        return A2ATask(id: "test", contextId: "test", status: TaskStatus(state: .completed, message: nil, timestamp: ""), history: [])
+        // Create response Artifact
+        let responseArtifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.text(text: "test")]
+        )
+        
+        // Update the task artifacts
+        await store.updateTaskArtifacts(
+            id: task.id,
+            artifacts: [responseArtifact]
+        )
+        
+        // Update task with completed status and add messages to history
+        await store.updateTaskStatus(
+            id: task.id,
+            status: TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+        )
     }
     
-    func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        // Mock implementation
+    func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Update task with completed status
+        let completedStatus = TaskStatus(
+            state: .completed,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        )
+        await store.updateTaskStatus(
+            id: task.id,
+            status: completedStatus
+        )
+        
+        let completedEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
+            kind: "status-update",
+            status: completedStatus,
+            final: true
+        )
+        
+        let completedResponse = SendStreamingMessageSuccessResponse(
+            jsonrpc: "2.0",
+            id: 1,
+            result: completedEvent
+        )
+        
+        eventSink(completedResponse)
     }
 } 

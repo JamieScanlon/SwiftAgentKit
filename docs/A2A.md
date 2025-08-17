@@ -7,7 +7,7 @@ The A2A module provides support for the [Agent-to-Agent (A2A) protocol](https://
 - **A2AClient**: Connects to and communicates with A2A servers
 - **A2AServer**: Creates an A2A-compliant server that other agents can connect to
 - **A2AConfig**: Configuration for A2A servers and boot calls
-- **AgentAdapter**: Protocol for implementing custom agent behavior
+- **AgentAdapter**: Protocol for implementing custom agent behavior. Handlers now receive an existing `A2ATask` and write updates (status and `artifacts`) to the shared `TaskStore` instead of returning a response directly.
 
 ## Example: Loading A2A Config and Using A2AManager
 
@@ -153,77 +153,76 @@ struct MyAgentAdapter: AgentAdapter {
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
-        // Create a task for processing the message
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        let task = A2ATask(
-            id: taskId,
-            contextId: contextId,
+    // New API: update the provided task in the TaskStore
+    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
+        // Mark working
+        await store.updateTaskStatus(
+            id: task.id,
             status: TaskStatus(state: .working)
         )
         
-        // Store the task
-        await store.storeTask(task)
+        // Simulate processing
+        try await Task.sleep(for: .seconds(1))
         
-        // Process the message asynchronously
-        Task {
-            // Simulate processing
-            try await Task.sleep(for: .seconds(2))
-            
-            // Create response message
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: [.text(text: "I processed your request: \(params.message.parts)")],
-                messageId: UUID().uuidString,
-                taskId: taskId
-            )
-            
-            // Update task with completed status
-            var updatedTask = task
-            updatedTask.status = TaskStatus(
-                state: .completed,
-                message: responseMessage
-            )
-            await store.storeTask(updatedTask)
-        }
+        // Produce an artifact as the result
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.text(text: "I processed your request: \(params.message.parts)")]
+        )
+        await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
         
-        return task
+        // Mark completed
+        await store.updateTaskStatus(
+            id: task.id,
+            status: TaskStatus(state: .completed)
+        )
     }
     
-    func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        // Handle streaming requests
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        let task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(state: .working)
+    // New API: stream status and artifact updates; do not return a value
+    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Working status
+        let working = TaskStatus(state: .working)
+        await store.updateTaskStatus(id: task.id, status: working)
+        let workingEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
+            kind: "status-update",
+            status: working,
+            final: false
         )
+        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: workingEvent))
         
-        await store.storeTask(task)
-        
-        // Stream status updates
-        for i in 1...5 {
+        // Stream a few artifact chunks
+        for i in 1...3 {
             try await Task.sleep(for: .seconds(1))
-            
-            let statusUpdate = TaskStatusUpdateEvent(
-                taskId: taskId,
-                status: TaskStatus(
-                    state: i == 5 ? .completed : .working,
-                    message: A2AMessage(
-                        role: "assistant",
-                        parts: [.text(text: "Processing step \(i)/5")],
-                        messageId: UUID().uuidString,
-                        taskId: taskId
-                    )
-                )
+            let artifact = Artifact(
+                artifactId: UUID().uuidString,
+                parts: [.text(text: "Chunk #\(i)")],
+                name: "example-artifact"
             )
-            
-            eventSink(statusUpdate)
+            await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+            let artifactEvent = TaskArtifactUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "artifact-update",
+                artifact: artifact,
+                append: true,
+                lastChunk: i == 3
+            )
+            eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: artifactEvent))
         }
+        
+        // Completed status
+        let completed = TaskStatus(state: .completed)
+        await store.updateTaskStatus(id: task.id, status: completed)
+        let completedEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
+            kind: "status-update",
+            status: completed,
+            final: true
+        )
+        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: completedEvent))
     }
 }
 

@@ -607,22 +607,31 @@ public struct TaskArtifactUpdateEvent: Codable, Sendable {
 }
 
 public actor TaskStore {
+    
     private var tasks: [String: A2ATask] = [:]
+    
     public init() {}
+    
     public func addTask(task: A2ATask) {
         tasks[task.id] = task
     }
+    
     public func getTask(id: String) -> A2ATask? {
         return tasks[id]
     }
-    public func updateTask(id: String, status: TaskStatus) -> Bool {
+    
+    @discardableResult
+    public func updateTaskStatus(id: String, status: TaskStatus) -> Bool {
         guard var task = tasks[id] else { return false }
         task.status = status
-        if let message = status.message {
-            var hist = task.history ?? []
-            hist.append(message)
-            task.history = hist
-        }
+        tasks[id] = task
+        return true
+    }
+    
+    @discardableResult
+    public func updateTaskArtifacts(id: String, artifacts: [Artifact]) -> Bool {
+        guard var task = tasks[id] else { return false }
+        task.artifacts = artifacts
         tasks[id] = task
         return true
     }

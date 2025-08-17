@@ -163,38 +163,13 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
     
     // MARK: - Message Handling
     
-    public func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        // Create initial task
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        var task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: task)
+    public func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
+        await store.updateTaskStatus(
+            id: task.id,
             status: TaskStatus(
                 state: .working,
-                message: message,
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
         )
@@ -216,87 +191,69 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
             // Call the LLM
             let response = try await llm.send(messages, config: llmConfig)
             
-            // Create response message
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: [.text(text: response.content)],
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
+            // Create response Artifact
+            let responseArtifact = Artifact(
+                artifactId: UUID().uuidString,
+                parts: [.text(text: response.content)]
+            )
+            
+            // Update the task store with the artifact
+            await store.updateTaskArtifacts(
+                id: task.id,
+                artifacts: [responseArtifact]
             )
             
             // Update task with completed status and add messages to history
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .completed,
-                    message: responseMessage,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
-            
-            // Add both the user message and assistant response to task history
-            var updatedTask = await store.getTask(id: taskId) ?? task
-            updatedTask.history = [message, responseMessage]
-            await store.addTask(task: updatedTask)
-            
-            // Get final task state
-            task = await store.getTask(id: taskId) ?? task
             
         } catch {
             logger.error("LLM call failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .failed,
-                    message: message,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
             
-            task = await store.getTask(id: taskId) ?? task
+            throw error
         }
-        
-        return task
     }
     
-    public func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        // Create initial task
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        var task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: task)
+    public func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
-            status: TaskStatus(
-                state: .working,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            )
+        let workingStatus = TaskStatus(
+            state: .working,
+            timestamp: ISO8601DateFormatter().string(from: .init())
         )
+        await store.updateTaskStatus(
+            id: task.id,
+            status: workingStatus
+        )
+        
+        let workingEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
+            kind: "status-update",
+            status: workingStatus,
+            final: false
+        )
+        
+        let workingResponse = SendStreamingMessageSuccessResponse(
+            jsonrpc: "2.0",
+            id: 1,
+            result: workingEvent
+        )
+        eventSink(workingResponse)
         
         do {
             // Convert A2A message to SwiftAgentKit Message
@@ -315,6 +272,8 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
             // Stream from the LLM
             let stream = llm.stream(messages, config: llmConfig)
             var fullContent = ""
+            var partialArtifacts: [Artifact] = []
+            var finalArtifact: Artifact?
             
             for try await result in stream {
                 switch result {
@@ -325,15 +284,18 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
                         parts: [.text(text: response.content)],
-                        name: "llm-response",
-                        description: "Streaming response from LLM",
+                        name: "partial-llm-response",
+                        description: "Partial S=streaming response from LLM",
                         metadata: nil,
                         extensions: []
                     )
                     
+                    partialArtifacts.append(artifact)
+                    await store.updateTaskArtifacts(id: task.id, artifacts: partialArtifacts)
+                    
                     let artifactEvent = TaskArtifactUpdateEvent(
-                        taskId: taskId,
-                        contextId: contextId,
+                        taskId: task.id,
+                        contextId: task.contextId,
                         kind: "artifact-update",
                         artifact: artifact,
                         append: true,
@@ -358,15 +320,18 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
                         parts: [.text(text: response.content)],
-                        name: "llm-response",
-                        description: "Streaming response from LLM",
+                        name: "final-llm-response",
+                        description: "Final streaming response from LLM",
                         metadata: nil,
                         extensions: []
                     )
                     
+                    finalArtifact = artifact
+                    await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+                    
                     let artifactEvent = TaskArtifactUpdateEvent(
-                        taskId: taskId,
-                        contextId: contextId,
+                        taskId: task.id,
+                        contextId: task.contextId,
                         kind: "artifact-update",
                         artifact: artifact,
                         append: false,
@@ -384,42 +349,60 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                 }
             }
             
-            // Create final response message
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: [.text(text: fullContent)],
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
-            )
-            
             // Update task with completed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .completed,
-                    message: responseMessage,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
+            let completedStatus = TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: completedStatus
             )
             
-            // Add both the user message and assistant response to task history
-            var updatedTask = await store.getTask(id: taskId) ?? task
-            updatedTask.history = [message, responseMessage]
-            await store.addTask(task: updatedTask)
+            let completedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "status-update",
+                status: completedStatus,
+                final: true
+            )
+            
+            let completedResponse = SendStreamingMessageSuccessResponse(
+                jsonrpc: "2.0",
+                id: 1,
+                result: completedEvent
+            )
+            
+            eventSink(completedResponse)
             
         } catch {
             logger.error("LLM streaming failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .failed,
-                    message: message,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
+            let failedStatus = TaskStatus(
+                state: .failed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
             )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: failedStatus
+            )
+            
+            let failedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "status-update",
+                status: failedStatus,
+                final: true
+            )
+            
+            let failedResponse = SendStreamingMessageSuccessResponse(
+                jsonrpc: "2.0",
+                id: 1,
+                result: failedEvent
+            )
+            
+            eventSink(failedResponse)
             
             throw error
         }
@@ -427,38 +410,13 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
     
     // MARK: - ToolAwareAgentAdapter Methods
     
-    public func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore) async throws -> A2ATask {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        // Create initial task
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        var task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: task)
+    public func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore) async throws {
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
+        await store.updateTaskStatus(
+            id: task.id,
             status: TaskStatus(
                 state: .working,
-                message: message,
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
         )
@@ -491,87 +449,69 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                 }
             }
             
-            // Create response message
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: responseParts,
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
+            // Create response Artifact
+            let responseArtifact = Artifact(
+                artifactId: UUID().uuidString,
+                parts: responseParts
+            )
+            
+            // Update the task artifacts
+            await store.updateTaskArtifacts(
+                id: task.id,
+                artifacts: [responseArtifact]
             )
             
             // Update task with completed status and add messages to history
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .completed,
-                    message: responseMessage,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
-            
-            // Add both the user message and assistant response to task history
-            var updatedTask = await store.getTask(id: taskId) ?? task
-            updatedTask.history = [message, responseMessage]
-            await store.addTask(task: updatedTask)
-            
-            // Get final task state
-            task = await store.getTask(id: taskId) ?? task
             
         } catch {
             logger.error("LLM call (tools) failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .failed,
-                    message: message,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
             
-            task = await store.getTask(id: taskId) ?? task
+            throw error
         }
-        
-        return task
     }
     
-    public func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        // Create initial task
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        var task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: task)
+    public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
-            status: TaskStatus(
-                state: .working,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            )
+        let workingStatus = TaskStatus(
+            state: .working,
+            timestamp: ISO8601DateFormatter().string(from: .init())
         )
+        await store.updateTaskStatus(
+            id: task.id,
+            status: workingStatus
+        )
+        
+        let workingEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
+            kind: "status-update",
+            status: workingStatus,
+            final: false
+        )
+        
+        let workingResponse = SendStreamingMessageSuccessResponse(
+            jsonrpc: "2.0",
+            id: 1,
+            result: workingEvent
+        )
+        eventSink(workingResponse)
         
         do {
             // Convert A2A message to SwiftAgentKit Message
@@ -590,6 +530,8 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
             // Stream from the LLM
             let stream = llm.stream(messages, config: llmConfig)
             var fullContent = ""
+            var partialArtifacts: [Artifact] = []
+            var finalArtifact: Artifact?
             
             for try await result in stream {
                 switch result {
@@ -599,15 +541,18 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
                         parts: [.text(text: response.content)],
-                        name: "llm-response",
-                        description: "Streaming response from LLM",
+                        name: "partial-llm-response",
+                        description: "Parial streaming response from LLM",
                         metadata: nil,
                         extensions: []
                     )
                     
+                    partialArtifacts.append(artifact)
+                    await store.updateTaskArtifacts(id: task.id, artifacts: partialArtifacts)
+                    
                     let artifactEvent = TaskArtifactUpdateEvent(
-                        taskId: taskId,
-                        contextId: contextId,
+                        taskId: task.id,
+                        contextId: task.contextId,
                         kind: "artifact-update",
                         artifact: artifact,
                         append: true,
@@ -631,15 +576,18 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
                         parts: [.text(text: response.content)],
-                        name: "llm-response",
-                        description: "Streaming response from LLM",
+                        name: "final-llm-response",
+                        description: "Final streaming response from LLM",
                         metadata: nil,
                         extensions: []
                     )
                     
+                    finalArtifact = artifact
+                    await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+                    
                     let artifactEvent = TaskArtifactUpdateEvent(
-                        taskId: taskId,
-                        contextId: contextId,
+                        taskId: task.id,
+                        contextId: task.contextId,
                         kind: "artifact-update",
                         artifact: artifact,
                         append: false,
@@ -657,42 +605,63 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                 }
             }
             
-            // Create final response message (text only for streaming)
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: [.text(text: fullContent)],
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
-            )
+            // TODO: Make tool calls
             
             // Update task with completed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .completed,
-                    message: responseMessage,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
+            let completedStatus = TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: completedStatus
             )
             
-            // Add both the user message and assistant response to task history
-            var updatedTask = await store.getTask(id: taskId) ?? task
-            updatedTask.history = [message, responseMessage]
-            await store.addTask(task: updatedTask)
+            let completedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "status-update",
+                status: completedStatus,
+                final: true
+            )
+            
+            let completedResponse = SendStreamingMessageSuccessResponse(
+                jsonrpc: "2.0",
+                id: 1,
+                result: completedEvent
+            )
+            
+            eventSink(completedResponse)
             
         } catch {
             logger.error("LLM streaming (tools) failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .failed,
-                    message: message,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
+            
+            let failedStatus = TaskStatus(
+                state: .failed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
             )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: failedStatus
+            )
+            
+            let failedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "status-update",
+                status: failedStatus,
+                final: true
+            )
+            
+            let failedResponse = SendStreamingMessageSuccessResponse(
+                jsonrpc: "2.0",
+                id: 1,
+                result: failedEvent
+            )
+            
+            eventSink(failedResponse)
             
             throw error
         }

@@ -178,22 +178,30 @@ struct TestLLM: LLMProtocol {
         
         let params = MessageSendParams(message: message)
         
-        // Send the message
-        let task = try await adapter.handleSend(params, store: store)
+        // Create and register a task
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
         
-        #expect(task.status.state == .completed)
-        #expect(task.history?.count == 2) // User message + assistant response
-        #expect(task.history?[1].role == "assistant")
-        if let history = task.history, history.count >= 2 {
-            let response = history[1]
-            if let firstPart = response.parts.first {
-                switch firstPart {
-                case .text(let text):
-                    #expect(text.contains("Hello, how are you?"))
-                default:
-                    #expect(false, "Expected text part")
-                }
+        // Send the message
+        try await adapter.handleSend(params, task: task, store: store)
+        
+        // Verify task state and artifacts
+        if let updatedTask = await store.getTask(id: task.id) {
+            #expect(updatedTask.status.state == .completed)
+            #expect((updatedTask.artifacts?.count ?? 0) == 1)
+            if let artifact = updatedTask.artifacts?.first,
+               let firstPart = artifact.parts.first,
+               case .text(let text) = firstPart {
+                #expect(text.contains("Hello, how are you?"))
+            } else {
+                #expect(false, "Expected text artifact part")
             }
+        } else {
+            #expect(false, "Task not found in store")
         }
     }
     
@@ -217,8 +225,16 @@ struct TestLLM: LLMProtocol {
         
         let params = MessageSendParams(message: message)
         
+        // Create and register a task
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
+        
         // Stream the message
-        try await adapter.handleStream(params, store: store) { event in
+        try await adapter.handleStream(params, task: task, store: store) { event in
             receivedEvents.append(event)
         }
         
@@ -246,7 +262,14 @@ struct TestLLM: LLMProtocol {
         )
         
         let params1 = MessageSendParams(message: message1)
-        let task1 = try await adapter.handleSend(params1, store: store)
+        // Create task1 and register
+        let task1 = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task1)
+        try await adapter.handleSend(params1, task: task1, store: store)
         
         // Second message (should include history)
         let message2 = A2AMessage(
@@ -256,12 +279,22 @@ struct TestLLM: LLMProtocol {
         )
         
         let params2 = MessageSendParams(message: message2)
-        let task2 = try await adapter.handleSend(params2, store: store)
+        // Create task2 with prior history and register
+        let task2 = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted),
+            history: [message1]
+        )
+        await store.addTask(task: task2)
+        try await adapter.handleSend(params2, task: task2, store: store)
         
-        #expect(task1.status.state == .completed)
-        #expect(task2.status.state == .completed)
-        #expect(task1.history?.count == 2)
-        #expect(task2.history?.count == 2)
+        let updatedTask1 = await store.getTask(id: task1.id)
+        let updatedTask2 = await store.getTask(id: task2.id)
+        #expect(updatedTask1?.status.state == .completed)
+        #expect(updatedTask2?.status.state == .completed)
+        #expect((updatedTask1?.artifacts?.count ?? 0) == 1)
+        #expect((updatedTask2?.artifacts?.count ?? 0) == 1)
     }
     
     @Test("LLMProtocolAdapter should handle system prompts")
@@ -282,21 +315,27 @@ struct TestLLM: LLMProtocol {
         )
         
         let params = MessageSendParams(message: message)
-        let task = try await adapter.handleSend(params, store: store)
+        // Create and register a task
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
         
-        #expect(task.status.state == .completed)
-        // The TestLLM doesn't actually use the system prompt, so we just verify the task completed
-        // In a real implementation, the LLM would use the system prompt
-        if let history = task.history, history.count >= 2 {
-            let response = history[1]
-            if let firstPart = response.parts.first {
-                switch firstPart {
-                case .text(let text):
-                    #expect(text.contains("Say hello")) // Verify it responded to the user message
-                default:
-                    #expect(false, "Expected text part")
-                }
+        let _ = try await adapter.handleSend(params, task: task, store: store)
+        
+        if let updatedTask = await store.getTask(id: task.id) {
+            #expect(updatedTask.status.state == .completed)
+            if let artifact = updatedTask.artifacts?.first,
+               let firstPart = artifact.parts.first,
+               case .text(let text) = firstPart {
+                #expect(text.contains("Say hello"))
+            } else {
+                #expect(false, "Expected text artifact part")
             }
+        } else {
+            #expect(false, "Task not found in store")
         }
     }
     
@@ -317,9 +356,26 @@ struct TestLLM: LLMProtocol {
         )
         
         let params = MessageSendParams(message: message)
-        let task = try await adapter.handleSend(params, store: store)
+        // Create and register a task
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
         
-        #expect(task.status.state == .failed)
+        do {
+            try await adapter.handleSend(params, task: task, store: store)
+            #expect(false, "Expected handleSend to throw")
+        } catch {
+            // Expected
+        }
+        
+        if let updatedTask = await store.getTask(id: task.id) {
+            #expect(updatedTask.status.state == .failed)
+        } else {
+            #expect(false, "Task not found in store")
+        }
     }
     
     @Test("LLMProtocolAdapter should convert A2A roles correctly")
@@ -343,9 +399,15 @@ struct TestLLM: LLMProtocol {
             )
             
             let params = MessageSendParams(message: message)
-            let task = try await adapter.handleSend(params, store: store)
-            
-            #expect(task.status.state == .completed)
+            let task = A2ATask(
+                id: UUID().uuidString,
+                contextId: UUID().uuidString,
+                status: TaskStatus(state: .submitted)
+            )
+            await store.addTask(task: task)
+            try await adapter.handleSend(params, task: task, store: store)
+            let updatedTask = await store.getTask(id: task.id)
+            #expect(updatedTask?.status.state == .completed)
         }
     }
 } 

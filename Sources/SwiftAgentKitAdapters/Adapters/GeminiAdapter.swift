@@ -118,170 +118,97 @@ public struct GeminiAdapter: AgentAdapter {
     
     // MARK: - AgentAdapter Methods
     
-    public func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
+    public func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
         
-        // Create initial task
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        var task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: [params.message]
-        )
-        
-        await store.addTask(task: task)
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
+        await store.updateTaskStatus(
+            id: task.id,
             status: TaskStatus(
                 state: .working,
-                message: message,
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
         )
         
         do {
             // Get conversation history from task store
-            let conversationHistory = await store.getTask(id: taskId)?.history
+            let conversationHistory = await store.getTask(id: task.id)?.history
             
             // Call Gemini API with conversation history
             let response = try await callGemini(messageParts: params.message.parts, conversationHistory: conversationHistory)
             
-            // Create response message
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: [.text(text: response)],
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
+            // Create response artifact
+            let responseArtifact = Artifact(
+                artifactId: UUID().uuidString,
+                parts: [.text(text: response)]
+            )
+            
+            await store.updateTaskArtifacts(
+                id: task.id,
+                artifacts: [responseArtifact]
             )
             
             // Update task with completed status
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .completed,
-                    message: responseMessage,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
-            
-            // Get final task state
-            task = await store.getTask(id: taskId) ?? task
             
         } catch {
             logger.error("Gemini API call failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .failed,
-                    message: message,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
             
-            task = await store.getTask(id: taskId) ?? task
+            throw error
         }
-        
-        return task
     }
     
-    public func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
+    public func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
+        // Update working status
+        let workingStatus = TaskStatus(
+            state: .working,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        )
+        await store.updateTaskStatus(
+            id: task.id,
+            status: workingStatus
         )
         
-        let baseTask = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: [params.message]
-        )
-        
-        await store.addTask(task: baseTask)
-        
-        // Emit submitted status
-        let submitted = TaskStatusUpdateEvent(
-            taskId: taskId,
-            contextId: contextId,
+        let workingEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
             kind: "status-update",
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
+            status: workingStatus,
             final: false
         )
-        let submittedResponse = SendStreamingMessageSuccessResponse(
-            jsonrpc: "2.0",
-            id: 1,
-            result: submitted
-        )
-        eventSink(submittedResponse)
         
-        // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
-            status: TaskStatus(
-                state: .working,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            )
-        )
-        
-        let working = TaskStatusUpdateEvent(
-            taskId: taskId,
-            contextId: contextId,
-            kind: "status-update",
-            status: TaskStatus(
-                state: .working,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            final: false
-        )
         let workingResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
             id: 1,
-            result: working
+            result: workingEvent
         )
         eventSink(workingResponse)
         
         do {
             // Get conversation history from task store
-            let conversationHistory = await store.getTask(id: taskId)?.history
+            let conversationHistory = await store.getTask(id: task.id)?.history
             
             // Stream from Gemini API with conversation history
             let stream = try await streamFromGemini(messageParts: params.message.parts, conversationHistory: conversationHistory)
             
             var accumulatedText = ""
+            var accumulatedArtifacts: [Artifact] = []
             
             for await chunk in stream {
                 accumulatedText += chunk
@@ -289,16 +216,22 @@ public struct GeminiAdapter: AgentAdapter {
                 // Create artifact update event
                 let artifact = Artifact(
                     artifactId: UUID().uuidString,
-                    parts: [.text(text: accumulatedText)],
+                    parts: [.text(text: chunk)],
                     name: "gemini-response",
                     description: "Streaming response from Google Gemini",
                     metadata: nil,
                     extensions: []
                 )
                 
+                accumulatedArtifacts.append(artifact)
+                await store.updateTaskArtifacts(
+                    id: task.id,
+                    artifacts: accumulatedArtifacts
+                )
+                
                 let artifactEvent = TaskArtifactUpdateEvent(
-                    taskId: taskId,
-                    contextId: contextId,
+                    taskId: task.id,
+                    contextId: task.contextId,
                     kind: "artifact-update",
                     artifact: artifact,
                     append: false,
@@ -324,9 +257,14 @@ public struct GeminiAdapter: AgentAdapter {
                 extensions: []
             )
             
+            await store.updateTaskArtifacts(
+                id: task.id,
+                artifacts: [finalArtifact]
+            )
+            
             let finalArtifactEvent = TaskArtifactUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
+                taskId: task.id,
+                contextId: task.contextId,
                 kind: "artifact-update",
                 artifact: finalArtifact,
                 append: false,
@@ -342,74 +280,61 @@ public struct GeminiAdapter: AgentAdapter {
             eventSink(finalArtifactResponse)
             
             // Create final response message
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: [.text(text: accumulatedText)],
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
+            let completedStatus = TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: completedStatus
             )
             
-            // Update task with completed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .completed,
-                    message: responseMessage,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
-            )
-            
-            // Emit final status update
-            let completed = TaskStatusUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
+            let completedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
                 kind: "status-update",
-                status: TaskStatus(
-                    state: .completed,
-                    message: responseMessage,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                ),
+                status: completedStatus,
                 final: true
             )
+            
             let completedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
                 id: 1,
-                result: completed
+                result: completedEvent
             )
+            
             eventSink(completedResponse)
             
         } catch {
             logger.error("Gemini streaming failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .failed,
-                    message: message,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
+            let failedStatus = TaskStatus(
+                state: .failed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: failedStatus
             )
             
-            // Emit failed status
-            let failed = TaskStatusUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
+            let failedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
                 kind: "status-update",
-                status: TaskStatus(
-                    state: .failed,
-                    message: message,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                ),
+                status: failedStatus,
                 final: true
             )
+            
             let failedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
                 id: 1,
-                result: failed
+                result: failedEvent
             )
+            
             eventSink(failedResponse)
+            
+            throw error
         }
     }
     

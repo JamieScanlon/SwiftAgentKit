@@ -36,34 +36,17 @@ struct CustomNamedAdapter: AgentAdapter {
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
+    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
         
-        let message = A2AMessage(
-            role: "assistant",
-            parts: [.text(text: "Hello from \(name)!")],
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.text(text: "Hello from \(name)!")]
         )
         
-        let task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .completed,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: task)
-        return task
+        await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
     }
     
-    func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         // Simple streaming implementation
         let taskId = UUID().uuidString
         let contextId = UUID().uuidString
@@ -101,7 +84,7 @@ struct CustomNamedAdapter: AgentAdapter {
             history: []
         )
         
-        _ = await store.updateTask(id: taskId, status: updatedTask.status)
+        await store.updateTaskStatus(id: taskId, status: updatedTask.status)
         
         // Send completion event
         let completionEvent = TaskStatusUpdateEvent(
@@ -116,7 +99,6 @@ struct CustomNamedAdapter: AgentAdapter {
     }
 }
 
-@main
 struct AgentCardConfigExample {
     static func main() async {
         print("=== Agent Card Configuration Example ===\n")

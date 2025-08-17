@@ -160,9 +160,19 @@ func testLLMProtocolAdapter() async {
     )
     
     let params = MessageSendParams(message: message)
+    let task = A2ATask(
+        id: UUID().uuidString,
+        contextId: UUID().uuidString,
+        status: TaskStatus(
+            state: .submitted,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        ),
+        history: [params.message]
+    )
+    await store.addTask(task: task)
     
     do {
-        let task = try await adapter.handleSend(params, store: store)
+        try await adapter.handleSend(params, task: task, store: store)
         print("✓ Message handling successful")
         print("  - Task state: \(task.status.state)")
         print("  - History count: \(task.history?.count ?? 0)")
@@ -183,7 +193,7 @@ func testLLMProtocolAdapter() async {
     var receivedEvents = 0
     
     do {
-        try await adapter.handleStream(params, store: store) { event in
+        try await adapter.handleStream(params, task: task, store: store) { event in
             receivedEvents += 1
             print("  - Received streaming event \(receivedEvents)")
         }
@@ -198,7 +208,6 @@ func testLLMProtocolAdapter() async {
 
 // MARK: - Main Example
 
-@main
 struct LLMProtocolAdapterExample {
     static func main() async throws {
         // Set up logging

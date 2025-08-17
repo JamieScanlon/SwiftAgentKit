@@ -180,38 +180,13 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
     
     // MARK: - AgentAdapter Methods
     
-    public func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        // Create initial task
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        var task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: task)
+    public func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
+        await store.updateTaskStatus(
+            id: task.id,
             status: TaskStatus(
                 state: .working,
-                message: message,
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
         )
@@ -226,123 +201,67 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             // Call OpenAI API with conversation context
             let response = try await callOpenAI(prompt: prompt, conversationHistory: conversationHistory)
             
-            // Create response message
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: [.text(text: response)],
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
+            // Create response Artifact
+            let responseArtifact = Artifact(
+                artifactId: UUID().uuidString,
+                parts: [.text(text: response)]
+            )
+            
+            // Update the task store with the artifact
+            await store.updateTaskArtifacts(
+                id: task.id,
+                artifacts: [responseArtifact]
             )
             
             // Update task with completed status and add messages to history
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .completed,
-                    message: responseMessage,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
-            
-            // Add both the user message and assistant response to task history
-            var updatedTask = await store.getTask(id: taskId) ?? task
-            updatedTask.history = [message, responseMessage]
-            await store.addTask(task: updatedTask)
-            
-            // Get final task state
-            task = await store.getTask(id: taskId) ?? task
             
         } catch {
             logger.error("OpenAI API call failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .failed,
-                    message: message,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
             
-            task = await store.getTask(id: taskId) ?? task
+            throw error
         }
-        
-        return task
     }
     
-
-    
-    public func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        let baseTask = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: baseTask)
-        
-        // Emit submitted status
-        let submitted = TaskStatusUpdateEvent(
-            taskId: taskId,
-            contextId: contextId,
-            kind: "status-update",
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            final: false
-        )
-        let submittedResponse = SendStreamingMessageSuccessResponse(
-            jsonrpc: "2.0",
-            id: 1,
-            result: submitted
-        )
-        eventSink(submittedResponse)
+    public func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
-            status: TaskStatus(
-                state: .working,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            )
+        let workingStatus = TaskStatus(
+            state: .working,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        )
+        await store.updateTaskStatus(
+            id: task.id,
+            status: workingStatus
         )
         
-        let working = TaskStatusUpdateEvent(
-            taskId: taskId,
-            contextId: contextId,
+        let workingEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
             kind: "status-update",
-            status: TaskStatus(
-                state: .working,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
+            status: workingStatus,
             final: false
         )
+        
         let workingResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
             id: 1,
-            result: working
+            result: workingEvent
         )
         eventSink(workingResponse)
         
@@ -351,12 +270,14 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             let prompt = extractTextFromParts(params.message.parts)
             
             // Build conversation history if available
-            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: baseTask.history)
+            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task.history)
             
             // Stream from OpenAI API
             let stream = try await streamFromOpenAI(prompt: prompt, conversationHistory: conversationHistory)
             
             var accumulatedText = ""
+            var partialArtifacts: [Artifact] = []
+            var finalArtifact: Artifact?
             
             for try await chunk in stream {
                 accumulatedText += chunk
@@ -364,19 +285,22 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
                 // Create artifact update event
                 let artifact = Artifact(
                     artifactId: UUID().uuidString,
-                    parts: [.text(text: accumulatedText)],
+                    parts: [.text(text: chunk)],
                     name: "openai-response",
                     description: "Streaming response from OpenAI",
                     metadata: nil,
                     extensions: []
                 )
                 
+                partialArtifacts.append(artifact)
+                await store.updateTaskArtifacts(id: task.id, artifacts: partialArtifacts)
+                
                 let artifactEvent = TaskArtifactUpdateEvent(
-                    taskId: taskId,
-                    contextId: contextId,
+                    taskId: task.id,
+                    contextId: task.contextId,
                     kind: "artifact-update",
                     artifact: artifact,
-                    append: false,
+                    append: true,
                     lastChunk: false,
                     metadata: nil
                 )
@@ -390,7 +314,7 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             }
             
             // Final artifact with complete response
-            let finalArtifact = Artifact(
+            let artifact = Artifact(
                 artifactId: UUID().uuidString,
                 parts: [.text(text: accumulatedText)],
                 name: "openai-response",
@@ -399,11 +323,14 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
                 extensions: []
             )
             
+            finalArtifact = artifact
+            await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+            
             let finalArtifactEvent = TaskArtifactUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
+                taskId: task.id,
+                contextId: task.contextId,
                 kind: "artifact-update",
-                artifact: finalArtifact,
+                artifact: artifact,
                 append: false,
                 lastChunk: true,
                 metadata: nil
@@ -417,79 +344,61 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             eventSink(finalArtifactResponse)
             
             // Create final response message
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: [.text(text: accumulatedText)],
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
+            let completedStatus = TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: completedStatus
             )
             
-            // Update task with completed status and add messages to history
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .completed,
-                    message: responseMessage,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
-            )
-            
-            // Add both the user message and assistant response to task history
-            var updatedTask = await store.getTask(id: taskId) ?? baseTask
-            updatedTask.history = [message, responseMessage]
-            await store.addTask(task: updatedTask)
-            
-            // Emit final status update
-            let completed = TaskStatusUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
+            let completedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
                 kind: "status-update",
-                status: TaskStatus(
-                    state: .completed,
-                    message: responseMessage,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                ),
+                status: completedStatus,
                 final: true
             )
+            
             let completedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
                 id: 1,
-                result: completed
+                result: completedEvent
             )
+            
             eventSink(completedResponse)
             
         } catch {
             logger.error("OpenAI streaming failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .failed,
-                    message: message,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
+            let failedStatus = TaskStatus(
+                state: .failed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: failedStatus
             )
             
-            // Emit failed status
-            let failed = TaskStatusUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
+            let failedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
                 kind: "status-update",
-                status: TaskStatus(
-                    state: .failed,
-                    message: message,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                ),
+                status: failedStatus,
                 final: true
             )
+            
             let failedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
                 id: 1,
-                result: failed
+                result: failedEvent
             )
+            
             eventSink(failedResponse)
+            
+            throw error
         }
     }
     
@@ -614,38 +523,13 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
     
     // MARK: - ToolAwareAgentAdapter Methods
     
-    public func handleSendWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore) async throws -> A2ATask {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        // Create initial task
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        var task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: task)
+    public func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore) async throws {
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
+        await store.updateTaskStatus(
+            id: task.id,
             status: TaskStatus(
                 state: .working,
-                message: message,
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
         )
@@ -670,121 +554,67 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             // Convert response to message parts (handles text content and tool calls)
             let messageParts = convertOpenAIResponseToMessageParts(response)
             
-            // Create response message with all content types
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: messageParts,
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
+            // Create response Artifact
+            let responseArtifact = Artifact(
+                artifactId: UUID().uuidString,
+                parts: messageParts
+            )
+            
+            // Update the task artifacts
+            await store.updateTaskArtifacts(
+                id: task.id,
+                artifacts: [responseArtifact]
             )
             
             // Update task with completed status and add messages to history
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .completed,
-                    message: responseMessage,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
-            
-            // Add both the user message and assistant response to task history
-            var updatedTask = await store.getTask(id: taskId) ?? task
-            updatedTask.history = [message, responseMessage]
-            await store.addTask(task: updatedTask)
-            
-            // Get final task state
-            task = await store.getTask(id: taskId) ?? task
             
         } catch {
             logger.error("OpenAI API call with tools failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
+            await store.updateTaskStatus(
+                id: task.id,
                 status: TaskStatus(
                     state: .failed,
-                    message: message,
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
             
-            task = await store.getTask(id: taskId) ?? task
+            throw error
         }
-        
-        return task
     }
     
-    public func handleStreamWithTools(_ params: MessageSendParams, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        let message = A2AMessage(
-            role: params.message.role,
-            parts: params.message.parts,
-            messageId: UUID().uuidString,
-            taskId: taskId,
-            contextId: contextId
-        )
-        
-        let baseTask = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: baseTask)
-        
-        // Emit submitted status
-        let submitted = TaskStatusUpdateEvent(
-            taskId: taskId,
-            contextId: contextId,
-            kind: "status-update",
-            status: TaskStatus(
-                state: .submitted,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            final: false
-        )
-        let submittedResponse = SendStreamingMessageSuccessResponse(
-            jsonrpc: "2.0",
-            id: 1,
-            result: submitted
-        )
-        eventSink(submittedResponse)
+    public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
         // Update to working state
-        _ = await store.updateTask(
-            id: taskId,
-            status: TaskStatus(
-                state: .working,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            )
+        let workingStatus = TaskStatus(
+            state: .working,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        )
+        await store.updateTaskStatus(
+            id: task.id,
+            status: workingStatus
         )
         
-        let working = TaskStatusUpdateEvent(
-            taskId: taskId,
-            contextId: contextId,
+        let workingEvent = TaskStatusUpdateEvent(
+            taskId: task.id,
+            contextId: task.contextId,
             kind: "status-update",
-            status: TaskStatus(
-                state: .working,
-                message: message,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
+            status: workingStatus,
             final: false
         )
+        
         let workingResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
             id: 1,
-            result: working
+            result: workingEvent
         )
         eventSink(workingResponse)
         
@@ -793,7 +623,7 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             let prompt = extractTextFromParts(params.message.parts)
             
             // Build conversation history if available
-            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: baseTask.history)
+            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task.history)
             
             // Convert tool calls to OpenAI tool format
             let tools = availableToolCalls.map { tool in
@@ -806,6 +636,8 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             let stream = try await streamFromOpenAIWithTools(prompt: prompt, conversationHistory: conversationHistory, tools: tools)
             
             var accumulatedText = ""
+            var partialArtifacts: [Artifact] = []
+            var finalArtifact: Artifact?
             
             for try await chunk in stream {
                 accumulatedText += chunk
@@ -813,107 +645,123 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
                 // Create artifact update event
                 let artifact = Artifact(
                     artifactId: UUID().uuidString,
-                    parts: [.text(text: accumulatedText)],
+                    parts: [.text(text: chunk)],
                     name: "openai-response",
                     description: "Streaming response from OpenAI with tools",
                     metadata: nil,
                     extensions: []
                 )
                 
+                partialArtifacts.append(artifact)
+                await store.updateTaskArtifacts(id: task.id, artifacts: partialArtifacts)
+                
                 let artifactEvent = TaskArtifactUpdateEvent(
-                    taskId: taskId,
-                    contextId: contextId,
+                    taskId: task.id,
+                    contextId: task.contextId,
                     kind: "artifact-update",
-                    artifact: artifact
+                    artifact: artifact,
+                    append: true,
+                    lastChunk: false,
+                    metadata: nil
                 )
+                
                 let artifactResponse = SendStreamingMessageSuccessResponse(
                     jsonrpc: "2.0",
                     id: 1,
                     result: artifactEvent
                 )
+                
                 eventSink(artifactResponse)
             }
             
-            // Create final response message with all content types
-            var finalParts: [A2AMessagePart] = []
-            
-            // Add text content if present
-            if !accumulatedText.isEmpty {
-                finalParts.append(.text(text: accumulatedText))
-            }
-            
-            // Add tool calls if present (for streaming, we'd need to accumulate tool calls from the stream)
-            // Note: This is a simplified implementation. In a full implementation, you'd need to
-            // accumulate tool calls from the streaming response as well.
-            
-            let responseMessage = A2AMessage(
-                role: "assistant",
-                parts: finalParts,
-                messageId: UUID().uuidString,
-                taskId: taskId,
-                contextId: contextId
+            // Create artifact update event for final response
+            let artifact = Artifact(
+                artifactId: UUID().uuidString,
+                parts: [.text(text: accumulatedText)],
+                name: "final-llm-response",
+                description: "Final streaming response from LLM",
+                metadata: nil,
+                extensions: []
             )
+            
+            finalArtifact = artifact
+            await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+            
+            let artifactEvent = TaskArtifactUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
+                kind: "artifact-update",
+                artifact: artifact,
+                append: false,
+                lastChunk: true,
+                metadata: nil
+            )
+            
+            let streamingEvent = SendStreamingMessageSuccessResponse(
+                jsonrpc: "2.0",
+                id: 1,
+                result: artifactEvent
+            )
+            
+            eventSink(streamingEvent)
             
             // Update task with completed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .completed,
-                    message: responseMessage,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
+            let completedStatus = TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: completedStatus
             )
             
-            // Emit completed status
-            let completed = TaskStatusUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
+            let completedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
                 kind: "status-update",
-                status: TaskStatus(
-                    state: .completed,
-                    message: responseMessage,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                ),
+                status: completedStatus,
                 final: true
             )
+            
             let completedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
                 id: 1,
-                result: completed
+                result: completedEvent
             )
+            
             eventSink(completedResponse)
             
         } catch {
             logger.error("OpenAI streaming with tools failed: \(error)")
             
             // Update task with failed status
-            _ = await store.updateTask(
-                id: taskId,
-                status: TaskStatus(
-                    state: .failed,
-                    message: message,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                )
+            
+            let failedStatus = TaskStatus(
+                state: .failed,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            )
+            await store.updateTaskStatus(
+                id: task.id,
+                status: failedStatus
             )
             
-            // Emit failed status
-            let failed = TaskStatusUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
+            let failedEvent = TaskStatusUpdateEvent(
+                taskId: task.id,
+                contextId: task.contextId,
                 kind: "status-update",
-                status: TaskStatus(
-                    state: .failed,
-                    message: message,
-                    timestamp: ISO8601DateFormatter().string(from: .init())
-                ),
+                status: failedStatus,
                 final: true
             )
+            
             let failedResponse = SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
                 id: 1,
-                result: failed
+                result: failedEvent
             )
+            
             eventSink(failedResponse)
+            
+            throw error
         }
     }
     

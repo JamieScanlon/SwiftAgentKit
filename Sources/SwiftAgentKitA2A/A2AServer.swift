@@ -135,8 +135,28 @@ public actor A2AServer {
             return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
         }
         let params = try req.content.decode(MessageSendParams.self)
-        let task = try await adapter.handleSend(params, store: taskStore)
-        let data = try encoder.encode(task)
+        
+        // Create initial task
+        
+        let taskId = UUID().uuidString
+        let contextId = UUID().uuidString
+        
+        let task = A2ATask(
+            id: taskId,
+            contextId: contextId,
+            status: TaskStatus(
+                state: .submitted,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: [params.message]
+        )
+        
+        await taskStore.addTask(task: task)
+        
+        try await adapter.handleSend(params, task: task, store: taskStore)
+        
+        let updatedTask = await taskStore.getTask(id: taskId)
+        let data = try encoder.encode(updatedTask)
         let response = Response(status: .ok)
         response.body = .init(data: data)
         return response
@@ -156,10 +176,28 @@ public actor A2AServer {
         res.headers.replaceOrAdd(name:.contentType, value:"text/event-stream")
         res.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
         res.headers.replaceOrAdd(name: .connection, value: "keep-alive")
+        
+        // Create initial task
+        
+        let taskId = UUID().uuidString
+        let contextId = UUID().uuidString
+        
+        let task = A2ATask(
+            id: taskId,
+            contextId: contextId,
+            status: TaskStatus(
+                state: .submitted,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: [params.message]
+        )
+        
+        await taskStore.addTask(task: task)
+        
         let bodyStream = AsyncStream<ByteBuffer> { cont in
             Task.detached {
                 do {
-                    try await adapter.handleStream(params, store: store) { ev in
+                    try await adapter.handleStream(params, task: task, store: store) { ev in
                         if let data = try? self.encoder.encode(ev), let json = String(data: data, encoding:.utf8) {
                             var buf = ByteBufferAllocator().buffer(capacity: json.count+8)
                             buf.writeString("data: \(json)\n\n")
@@ -221,7 +259,7 @@ public actor A2AServer {
         if task.status.state != .completed && task.status.state != .failed && task.status.state != .canceled {
             var aStatus = task.status
             aStatus.state = .canceled
-            _ = await self.taskStore.updateTask(id: taskId, status: aStatus)
+            _ = await self.taskStore.updateTaskStatus(id: taskId, status: aStatus)
         }
         
         guard let updatedTask = await self.taskStore.getTask(id: taskId) else {
@@ -266,6 +304,11 @@ public actor A2AServer {
         return response
     }
     
+    /// On resubscribe upt to two events are sent immediately:
+    ///  - A `TaskArtifactUpdateEvent` to communicate the last artifact. This event is not sent if there are no artifacts.
+    ///  - A `TaskStatusUpdateEvent` to communicate the current status of the task
+    /// - Parameter req: the `Request`
+    /// - Returns: a `Response` object
     private func handleTaskResubscribe(_ req: Request) async throws -> Response {
         let taskIdParams = try req.content.decode(TaskIdParams.self)
         guard let task = await self.taskStore.getTask(id: taskIdParams.taskId) else {
@@ -283,43 +326,35 @@ public actor A2AServer {
                 }
             }
             
-            let contextId = task.status.message?.contextId ?? UUID().uuidString
+            let isComplete = (task.status.state == .completed || task.status.state == .failed || task.status.state == .canceled)
+            
+            if let artifact = task.artifacts?.last {
+                send(SendStreamingMessageSuccessResponse(
+                    jsonrpc: "2.0",
+                    id: 1,
+                    result: TaskArtifactUpdateEvent(
+                        taskId: task.id,
+                        contextId: task.contextId,
+                        kind: "artifact-update",
+                        artifact: artifact,
+                        append: false,
+                        lastChunk: isComplete,
+                        metadata: nil
+                    )
+                ))
+            }
             
             send(SendStreamingMessageSuccessResponse(
                 jsonrpc: "2.0",
                 id: 1,
                 result: TaskStatusUpdateEvent(
                     taskId: task.id,
-                    contextId: contextId,
+                    contextId: task.contextId,
                     kind: "status-update",
                     status: TaskStatus(state: task.status.state, message: task.status.message, timestamp: now),
-                    final: (task.status.state == .completed || task.status.state == .failed || task.status.state == .canceled)
+                    final: isComplete
                 )
             ))
-            
-            if let message = task.status.message {
-                let artifact = Artifact(
-                    artifactId: UUID().uuidString,
-                    parts: message.parts,
-                    name: "echo",
-                    description: "Previously completed artifact",
-                    metadata: nil,
-                    extensions: []
-                )
-                send(SendStreamingMessageSuccessResponse(
-                    jsonrpc: "2.0",
-                    id: 1,
-                    result: TaskArtifactUpdateEvent(
-                        taskId: task.id,
-                        contextId: contextId,
-                        kind: "artifact-update",
-                        artifact: artifact,
-                        append: false,
-                        lastChunk: true,
-                        metadata: nil
-                    )
-                ))
-            }
             
             continuation.finish()
         }

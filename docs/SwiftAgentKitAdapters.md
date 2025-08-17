@@ -9,7 +9,7 @@ This module includes adapters for:
 - **Anthropic** - Claude models (claude-3-5-sonnet, claude-3-opus, etc.)
 - **Google Gemini** - Gemini models (gemini-1.5-flash, gemini-1.5-pro, etc.)
 
-All adapters implement the `AgentAdapter` protocol from `SwiftAgentKitA2A`, allowing them to be used with A2A servers.
+All adapters implement the `AgentAdapter` protocol from `SwiftAgentKitA2A`, allowing them to be used with A2A servers. As of the latest API, adapter handlers accept an existing `A2ATask` and write results as `artifacts` and status updates into a shared `TaskStore` rather than returning a response object.
 
 ## Tool-Aware Adapters
 
@@ -303,12 +303,18 @@ struct CustomAdapter: AgentAdapter {
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
-        // Your custom implementation
+    // New API: update the provided task in the TaskStore
+    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
+        // Mark working
+        await store.updateTaskStatus(id: task.id, status: TaskStatus(state: .working))
+        // Produce an artifact and complete
+        let artifact = Artifact(artifactId: UUID().uuidString, parts: [.text(text: "result text")])
+        await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+        await store.updateTaskStatus(id: task.id, status: TaskStatus(state: .completed))
     }
     
-    func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        // Your custom streaming implementation
+    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Emit status and artifact update events while updating the store
     }
 }
 ```

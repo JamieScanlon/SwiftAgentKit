@@ -51,9 +51,19 @@ struct ToolAwareExample {
         )
         
         let params1 = MessageSendParams(message: message1)
+        let task1 = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .submitted,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: [params1.message]
+        )
+        await taskStore.addTask(task: task1)
         
         do {
-            let task1 = try await builderAdapter.handleSend(params1, store: taskStore)
+            try await builderAdapter.handleSend(params1, task: task1, store: taskStore)
             if let responseMessage = task1.status.message,
                let firstPart = responseMessage.parts.first,
                case .text(let text) = firstPart {
@@ -74,9 +84,19 @@ struct ToolAwareExample {
         )
         
         let params2 = MessageSendParams(message: message2)
+        let task2 = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .submitted,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: [params2.message]
+        )
+        await taskStore.addTask(task: task2)
         
         do {
-            let task2 = try await toolAwareOpenAI.handleSend(params2, store: taskStore)
+            try await toolAwareOpenAI.handleSend(params2,task: task2, store: taskStore)
             if let responseMessage = task2.status.message,
                let firstPart = responseMessage.parts.first,
                case .text(let text) = firstPart {
@@ -97,9 +117,19 @@ struct ToolAwareExample {
         )
         
         let params3 = MessageSendParams(message: message3)
+        let task3 = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .submitted,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: [params3.message]
+        )
+        await taskStore.addTask(task: task3)
         
         do {
-            let task3 = try await toolAwareAnthropic.handleSend(params3, store: taskStore)
+            try await toolAwareAnthropic.handleSend(params3, task: task3, store: taskStore)
             if let responseMessage = task3.status.message,
                let firstPart = responseMessage.parts.first,
                case .text(let text) = firstPart {
@@ -120,9 +150,19 @@ struct ToolAwareExample {
         )
         
         let params4 = MessageSendParams(message: message4)
+        let task4 = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .submitted,
+                timestamp: ISO8601DateFormatter().string(from: .init())
+            ),
+            history: [params4.message]
+        )
+        await taskStore.addTask(task: task4)
         
         do {
-            try await toolAwareOpenAI.handleStream(params4, store: taskStore) { @Sendable event in
+            try await toolAwareOpenAI.handleStream(params4, task: task4, store: taskStore) { @Sendable event in
                 logger.info("Stream event: \(type(of: event))")
             }
         } catch {

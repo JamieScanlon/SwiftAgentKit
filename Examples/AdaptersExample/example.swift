@@ -49,6 +49,8 @@ func adaptersExample() async {
     )
     
     let geminiServer = A2AServer(port: 4248, adapter: geminiAdapter)
+    let taskID = UUID().uuidString
+    let contextId = UUID().uuidString
     
     // --- GeminiAdapter direct usage example ---
     let geminiTaskStore = TaskStore()
@@ -59,13 +61,24 @@ func adaptersExample() async {
             // .file(data: imageData, url: nil) // Uncomment and provide imageData for multimodal
         ],
         messageId: UUID().uuidString,
-        taskId: UUID().uuidString,
-        contextId: UUID().uuidString
+        taskId: taskID,
+        contextId: contextId
     )
     let geminiParams = MessageSendParams(message: geminiMessage)
+    let task = A2ATask(
+        id: taskID,
+        contextId: contextId,
+        status: TaskStatus(
+            state: .submitted,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        ),
+        history: [geminiParams.message]
+    )
+    await geminiTaskStore.addTask(task: task)
+    
     logger.info("Sending message to GeminiAdapter (non-streaming)...")
     do {
-        let task = try await geminiAdapter.handleSend(geminiParams, store: geminiTaskStore)
+        try await geminiAdapter.handleSend(geminiParams, task: task, store: geminiTaskStore)
         if let firstPart = task.status.message?.parts.first, case .text(let text) = firstPart {
             logger.info("GeminiAdapter response: \(text)")
         } else {
@@ -76,7 +89,7 @@ func adaptersExample() async {
     }
     logger.info("Sending message to GeminiAdapter (streaming)...")
     do {
-        try await geminiAdapter.handleStream(geminiParams, store: geminiTaskStore) { @Sendable event in
+        try await geminiAdapter.handleStream(geminiParams, task: task, store: geminiTaskStore) { @Sendable event in
             logger.info("GeminiAdapter stream event: \(type(of: event))")
         }
     } catch {
@@ -188,7 +201,7 @@ func customAdapterExample() async {
         var defaultInputModes: [String] { ["text/plain"] }
         var defaultOutputModes: [String] { ["text/plain"] }
         
-        func handleSend(_ params: MessageSendParams, store: TaskStore) async throws -> A2ATask {
+        func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
             let taskId = UUID().uuidString
             let contextId = UUID().uuidString
             
@@ -215,22 +228,20 @@ func customAdapterExample() async {
             
             // Try OpenAI first, then Anthropic as fallback
             do {
-                let result = try await openAIAdapter.handleSend(params, store: store)
-                return result
+                try await openAIAdapter.handleSend(params, task: task, store: store)
             } catch {
                 logger.warning("OpenAI failed, trying Anthropic: \(error)")
-                let result = try await anthropicAdapter.handleSend(params, store: store)
-                return result
+                try await anthropicAdapter.handleSend(params, task: task, store: store)
             }
         }
         
-        func handleStream(_ params: MessageSendParams, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+        func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
             // Try OpenAI first, then Anthropic as fallback
             do {
-                try await openAIAdapter.handleStream(params, store: store, eventSink: eventSink)
+                try await openAIAdapter.handleStream(params, task: task, store: store, eventSink: eventSink)
             } catch {
                 logger.warning("OpenAI streaming failed, trying Anthropic: \(error)")
-                try await anthropicAdapter.handleStream(params, store: store, eventSink: eventSink)
+                try await anthropicAdapter.handleStream(params, task: task, store: store, eventSink: eventSink)
             }
         }
     }
