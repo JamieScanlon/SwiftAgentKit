@@ -25,12 +25,12 @@ struct ToolAwareExample {
         let anthropicAdapter = AnthropicAdapter(apiKey: "your-anthropic-key")
         
         // Create tool-aware adapters
-        let toolAwareOpenAI = ToolAwareAdapter(
+        let toolAwareOpenAI = ToolProxyAdapter(
             baseAdapter: openAIAdapter,
             toolManager: toolManager
         )
         
-        let toolAwareAnthropic = ToolAwareAdapter(
+        let toolAwareAnthropic = ToolProxyAdapter(
             baseAdapter: anthropicAdapter,
             toolManager: toolManager
         )

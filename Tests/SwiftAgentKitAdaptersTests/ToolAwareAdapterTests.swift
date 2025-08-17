@@ -4,15 +4,15 @@ import SwiftAgentKit
 import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
 
-@Suite("ToolAwareAdapter Tests")
+@Suite("ToolProxyAdapter Tests")
 struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - Text-based tool calls")
     func testProcessResponseForToolCallsTextBased() async throws {
-        // Create a mock adapter that implements ToolAwareAgentAdapter
+        // Create a mock adapter that implements ToolAwareAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Process the response
         let (processedParts, toolCalls) = await ToolCall.processResponseForToolCalls([.text(text: "Here is the answer: search_tool(query=\"test\")")], availableTools: ["search_tool"])
@@ -33,10 +33,10 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - Data-based tool calls")
     func testProcessResponseForToolCallsDataBased() async throws {
-        // Create a mock adapter that implements ToolAwareAgentAdapter
+        // Create a mock adapter that implements ToolAwareAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Create tool call data in the format used by OpenAI adapter
         let toolCallDict: [String: Any] = [
@@ -74,10 +74,10 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - Mixed content types")
     func testProcessResponseForToolCallsMixedContent() async throws {
-        // Create a mock adapter that implements ToolAwareAgentAdapter
+        // Create a mock adapter that implements ToolAwareAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Create tool call data
         let toolCallDict: [String: Any] = [
@@ -122,10 +122,10 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - No tool calls")
     func testProcessResponseForToolCallsNoToolCalls() async throws {
-        // Create a mock adapter that implements ToolAwareAgentAdapter
+        // Create a mock adapter that implements ToolAwareAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Create a message with no tool calls
         let message = A2AMessage(
@@ -151,10 +151,10 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - Invalid data")
     func testProcessResponseForToolCallsInvalidData() async throws {
-        // Create a mock adapter that implements ToolAwareAgentAdapter
+        // Create a mock adapter that implements ToolAwareAdapter
         let mockAdapter = MockToolAwareAdapter()
         let toolManager = ToolManager()
-        let _ = ToolAwareAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
+        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
         
         // Create invalid data
         let invalidData = "This is not JSON".data(using: .utf8)!
@@ -190,7 +190,7 @@ struct ToolAwareAdapterTests {
 
 // MARK: - Mock Adapter
 
-private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
+private struct MockToolAwareAdapter: ToolAwareAdapter {
     var cardCapabilities: AgentCard.AgentCapabilities {
         .init(streaming: true, pushNotifications: false, stateTransitionHistory: true)
     }
@@ -266,7 +266,7 @@ private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
         eventSink(completedResponse)
     }
     
-    func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore) async throws {
+    func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore) async throws {
         // Mock implementation
         // Create response Artifact
         let responseArtifact = Artifact(
@@ -290,7 +290,7 @@ private struct MockToolAwareAdapter: ToolAwareAgentAdapter {
         )
     }
     
-    func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
         

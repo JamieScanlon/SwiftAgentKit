@@ -14,7 +14,7 @@ import EasyJSON
 /// A generic AgentAdapter that wraps any LLMProtocol implementation
 /// This adapter provides a bridge between the A2A protocol and any LLM
 /// that implements the LLMProtocol interface.
-public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
+public struct LLMProtocolAdapter: ToolAwareAdapter {
     
     // MARK: - Configuration
     
@@ -160,8 +160,6 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
     public var defaultOutputModes: [String] {
         config.defaultOutputModes
     }
-    
-    // MARK: - Message Handling
     
     public func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
         
@@ -412,7 +410,7 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
     
     // MARK: - ToolAwareAgentAdapter Methods
     
-    public func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore) async throws {
+    public func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore) async throws {
         
         // Update to working state
         await store.updateTaskStatus(
@@ -426,6 +424,14 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
         do {
             // Convert A2A message to SwiftAgentKit Message
             let messages = try convertA2AMessageToMessages(params.message, taskHistory: task.history)
+            let availableToolCalls: [ToolDefinition] = await {
+                var returnValue = [ToolDefinition]()
+                for provider in toolProviders {
+                    let tools = await provider.availableTools()
+                    returnValue.append(contentsOf: tools)
+                }
+                return returnValue
+            }()
             
             // Create LLM request configuration WITH tools
             let llmConfig = LLMRequestConfig(
@@ -438,16 +444,27 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
             )
             
             // Call the LLM
-            let response = try await llm.send(messages, config: llmConfig)
+            let initialresponse = try await llm.send(messages, config: llmConfig)
+            
+            // Look at the text response for any tool calls not parsed automatically
+            var llmResponse = LLMResponse.llmResponse(from: initialresponse.content, availableTools: availableToolCalls)
+            // Add the Tool calls the LLM identified automatically
+            llmResponse = llmResponse.appending(toolCalls: initialresponse.toolCalls)
             
             // Build message parts from response content and tool calls
+            // Add the non tool call content
             var responseParts: [A2AMessagePart] = []
-            if !response.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                responseParts.append(.text(text: response.content))
+            if !llmResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                responseParts.append(.text(text: llmResponse.content))
             }
-            for toolCall in response.toolCalls {
-                if let data = toolCallToOpenAIStyleData(toolCall) {
-                    responseParts.append(.data(data: data))
+            
+            // Execute the tool calls and add the tool content
+            for toolCall in llmResponse.toolCalls {
+                for provider in toolProviders {
+                    let result = try await provider.executeTool(toolCall)
+                    if result.success {
+                        responseParts.append(.text(text: result.content))
+                    }
                 }
             }
             
@@ -488,9 +505,17 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
         }
     }
     
-    public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
+        let availableToolCalls: [ToolDefinition] = await {
+            var returnValue = [ToolDefinition]()
+            for provider in toolProviders {
+                let tools = await provider.availableTools()
+                returnValue.append(contentsOf: tools)
+            }
+            return returnValue
+        }()
         
         // Update to working state
         let workingStatus = TaskStatus(
@@ -576,10 +601,32 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
                     // the response.content sould contain the full response
                     fullContent = response.content
                     
+                    // Look at the text response for any tool calls not parsed automatically
+                    var llmResponse = LLMResponse.llmResponse(from: response.content, availableTools: availableToolCalls)
+                    // Add the Tool calls the LLM identified automatically
+                    llmResponse = llmResponse.appending(toolCalls: response.toolCalls)
+                    
+                    // Build message parts from response content and tool calls
+                    // Add the non tool call content
+                    var responseParts: [A2AMessagePart] = []
+                    if !llmResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        responseParts.append(.text(text: llmResponse.content))
+                    }
+                    
+                    // Execute the tool calls and add the tool content
+                    for toolCall in llmResponse.toolCalls {
+                        for provider in toolProviders {
+                            let result = try await provider.executeTool(toolCall)
+                            if result.success {
+                                responseParts.append(.text(text: result.content))
+                            }
+                        }
+                    }
+                    
                     // Create artifact update event for final response
                     let artifact = Artifact(
                         artifactId: UUID().uuidString,
-                        parts: [.text(text: response.content)],
+                        parts: responseParts,
                         name: "final-llm-response",
                         description: "Final streaming response from LLM",
                         metadata: nil,
@@ -671,50 +718,6 @@ public struct LLMProtocolAdapter: ToolAwareAgentAdapter {
         }
     }
     
-    // MARK: - Tool Conversion Helpers
-    
-    private func toolCallToOpenAIStyleData(_ toolCall: ToolCall) -> Data? {
-        let argsString: String
-        if let jsonString = serializeArgumentsToJSONString(toolCall.arguments) {
-            argsString = jsonString
-        } else {
-            argsString = "{}"
-        }
-        let dict: [String: Any] = [
-            "id": UUID().uuidString,
-            "type": "function",
-            "function": [
-                "name": toolCall.name,
-                "arguments": argsString
-            ]
-        ]
-        return try? JSONSerialization.data(withJSONObject: dict)
-    }
-    
-    private func serializeArgumentsToJSONString(_ arguments: [String: Sendable]) -> String? {
-        var encodableDict: [String: Any] = [:]
-        for (key, value) in arguments {
-            if let v = value as? String {
-                encodableDict[key] = v
-            } else if let v = value as? Int {
-                encodableDict[key] = v
-            } else if let v = value as? Double {
-                encodableDict[key] = v
-            } else if let v = value as? Bool {
-                encodableDict[key] = v
-            } else if let v = value as? NSNumber {
-                encodableDict[key] = v
-            } else if let v = value as? [String] {
-                encodableDict[key] = v
-            } else if let v = value as? [String: String] {
-                encodableDict[key] = v
-            } else {
-                encodableDict[key] = String(describing: value)
-            }
-        }
-        guard let data = try? JSONSerialization.data(withJSONObject: encodableDict) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
     // MARK: - Helper Methods
     
     private func convertA2AMessageToMessages(_ a2aMessage: A2AMessage, taskHistory: [A2AMessage]?) throws -> [Message] {

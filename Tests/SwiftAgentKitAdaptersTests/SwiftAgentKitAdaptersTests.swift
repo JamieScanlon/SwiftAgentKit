@@ -571,12 +571,12 @@ import MCP
         #expect(tools.first?.name == "test_tool")
     }
     
-    // MARK: - ToolAwareAdapter Tests
+    // MARK: - ToolProxyAdapter Tests
     
-    @Test("ToolAwareAdapter should delegate capabilities to base adapter")
+    @Test("ToolProxyAdapter should delegate capabilities to base adapter")
     func testToolAwareAdapterCapabilities() throws {
         let baseAdapter = OpenAIAdapter(apiKey: "test-key")
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: baseAdapter)
+        let toolAwareAdapter = ToolProxyAdapter(baseAdapter: baseAdapter)
         
         #expect(toolAwareAdapter.cardCapabilities.streaming == baseAdapter.cardCapabilities.streaming)
         #expect(toolAwareAdapter.cardCapabilities.pushNotifications == baseAdapter.cardCapabilities.pushNotifications)
@@ -585,32 +585,32 @@ import MCP
         #expect(toolAwareAdapter.defaultOutputModes == baseAdapter.defaultOutputModes)
     }
     
-    @Test("ToolAwareAdapter should work without tool manager")
+    @Test("ToolProxyAdapter should work without tool manager")
     func testToolAwareAdapterWithoutToolManager() async throws {
         let baseAdapter = OpenAIAdapter(apiKey: "test-key")
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: nil)
+        let toolAwareAdapter = ToolProxyAdapter(baseAdapter: baseAdapter, toolManager: nil)
         
         // Should delegate to base adapter when no tool manager is provided
         #expect(toolAwareAdapter.cardCapabilities.streaming == baseAdapter.cardCapabilities.streaming)
     }
     
-    @Test("ToolAwareAdapter should work with tool manager")
+    @Test("ToolProxyAdapter should work with tool manager")
     func testToolAwareAdapterWithToolManager() async throws {
         let baseAdapter = OpenAIAdapter(apiKey: "test-key")
         let customProvider = CustomTestToolProvider()
         let toolManager = ToolManager(providers: [customProvider])
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
+        let toolAwareAdapter = ToolProxyAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
         
         // Should still delegate capabilities to base adapter
         #expect(toolAwareAdapter.cardCapabilities.streaming == baseAdapter.cardCapabilities.streaming)
     }
     
-    @Test("ToolAwareAdapter should handle basic message processing")
+    @Test("ToolProxyAdapter should handle basic message processing")
     func testToolAwareAdapterBasicMessageProcessing() async throws {
         let baseAdapter = OpenAIAdapter(apiKey: "test-key")
         let customProvider = CustomTestToolProvider()
         let toolManager = ToolManager(providers: [customProvider])
-        let toolAwareAdapter = ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
+        let toolAwareAdapter = ToolProxyAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
         
         // Test that the adapter can be created and has the expected capabilities
         #expect(toolAwareAdapter.cardCapabilities.streaming == true)

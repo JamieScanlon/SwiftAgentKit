@@ -20,8 +20,12 @@ public struct ToolCall: Sendable {
     /// Processes a string to extract tool calls in various formats.
     ///
     /// This function can detect and extract tool calls from text content in two main formats:
-    /// 1. **Direct format**: Tool calls that appear directly in the content (e.g., `"search_tool(query)"`)
-    /// 2. **Wrapped format**: Tool calls wrapped in special tags (e.g., `"<|python_tag|>search_tool(query)<|eom_id|>"`)
+    /// 1. **Direct format**: Tool calls that appear directly in the content. Formats:
+    ///   - `function_name(arg1="arg1", arg2="arg2")`
+    ///   - `{"type": "function", "name": "function_name", "parameters": {"p1": "p1", "p2": "p2"}}`
+    /// 2. **Wrapped format**: Tool calls wrapped in special tags. Ex:
+    ///   - `<|python_tag|>function_name(arg1="arg1", arg2="arg2")<|eom_id|>`
+    ///   - `<|python_start|>{"type": "function", "name": "function_name", "parameters": {"p1": "p1", "p2": "p2"}}<|python_end|>`
     ///
     /// The function handles various edge cases including:
     /// - Leading/trailing whitespace
@@ -94,7 +98,7 @@ public struct ToolCall: Sendable {
     /// - Warning: For wrapped tool calls with only an opening tag (no closing `<|eom_id|>` tag),
     ///   the function will attempt to extract just the tool call content, but this may include
     ///   extra text if the tool call format is not properly structured.
-    public static func processToolCalls(content: String, availableTools: [String] = []) -> (toolCall: String?, range: Range<String.Index>?) {
+    public static func extractToolCallStringPlusRange(content: String, availableTools: [String] = []) -> (toolCall: String?, range: Range<String.Index>?) {
         guard !content.isEmpty else {
             return (nil, nil)
         }
@@ -139,7 +143,7 @@ public struct ToolCall: Sendable {
         }
         
         // Check for direct JSON format tool calls (not wrapped in tags)
-        if let jsonRange = findDirectJsonToolCall(in: content, availableTools: availableTools) {
+        if let jsonRange = extractJsonToolCallStringRange(in: content, availableTools: availableTools) {
             let jsonContent = String(content[jsonRange])
             return (toolCall: jsonContent, range: jsonRange)
         }
@@ -188,7 +192,7 @@ public struct ToolCall: Sendable {
             let endIndex = content.endIndex
             let toolCallContent = String(content[startIndex..<endIndex])
             // For wrapped tool calls with only opening tag, try to extract just the tool call
-            if let toolCall = extractToolCallFromContent(toolCallContent, availableTools: availableTools) {
+            if let toolCall = extractToolCallStringFromContent(toolCallContent, availableTools: availableTools) {
                 return (toolCall: toolCall, range: range1.lowerBound..<endIndex)
             }
             return (toolCall: toolCallContent, range: range1.lowerBound..<endIndex)
@@ -196,13 +200,18 @@ public struct ToolCall: Sendable {
         let endIndex = range2.lowerBound
         let toolCallContent = String(content[startIndex..<endIndex])
         // For wrapped tool calls, try to extract just the tool call from the content
-        if let extractedToolCall = extractToolCallFromContent(toolCallContent, availableTools: availableTools) {
+        if let extractedToolCall = extractToolCallStringFromContent(toolCallContent, availableTools: availableTools) {
             return (toolCall: extractedToolCall, range: range1.lowerBound..<range2.upperBound)
         }
         return (toolCall: toolCallContent, range: range1.lowerBound..<range2.upperBound)
     }
     
-    private static func findDirectJsonToolCall(in content: String, availableTools: [String]) -> Range<String.Index>? {
+    /// Returns the range of a tool call within the string provided the tool call is in JSON format and the function name is within the available tool call names provided
+    /// - Parameters:
+    ///   - content: String content
+    ///   - availableTools: available tool call names
+    /// - Returns: The range of the tool call string
+    private static func extractJsonToolCallStringRange(in content: String, availableTools: [String]) -> Range<String.Index>? {
         // Look for JSON objects that start with { and contain "type": "function"
         var braceCount = 0
         var startIndex: String.Index?
@@ -224,7 +233,7 @@ public struct ToolCall: Sendable {
                     
                     // Check if it contains "type": "function" and is valid JSON
                     if jsonContent.contains("\"type\": \"function\"") {
-                        if let toolCall = parseJsonFormat(jsonContent) {
+                        if let toolCall = parseToolcallFromJsonString(jsonContent) {
                             if availableTools.isEmpty || availableTools.contains(toolCall.name) {
                                 return jsonRange
                             }
@@ -278,7 +287,7 @@ public struct ToolCall: Sendable {
         return nil
     }
     
-    private static func extractToolCallFromContent(_ content: String, availableTools: [String]) -> String? {
+    private static func extractToolCallStringFromContent(_ content: String, availableTools: [String]) -> String? {
         let trimmedContent = content.trimmingCharacters(in: .whitespaces)
         
         // If no available tools specified, return the trimmed content
@@ -338,9 +347,9 @@ public struct ToolCall: Sendable {
         return nil
     }
     
-    public static func processModelResponse(content: String, availableTools: [String] = []) -> (message: String, toolCall: String?) {
+    public static func parseToolCallFromString(content: String, availableTools: [String] = []) -> (message: String, toolCall: String?) {
         
-        let (toolCall, range) = processToolCalls(content: content, availableTools: availableTools)
+        let (toolCall, range) = extractToolCallStringPlusRange(content: content, availableTools: availableTools)
         if let toolCall {
             if let range {
                 // Check if this is a JSON format tool call by looking for the opening tag
@@ -446,7 +455,7 @@ public struct ToolCall: Sendable {
         
         // Try to parse as JSON format first
         if trimmed.hasPrefix("{") && trimmed.hasSuffix("}") {
-            return parseJsonFormat(trimmed)
+            return parseToolcallFromJsonString(trimmed)
         }
         
         // Find the opening parenthesis
@@ -474,7 +483,7 @@ public struct ToolCall: Sendable {
         var arguments: [String: Sendable] = [:]
         
         if !argsString.isEmpty {
-            let args = parseArguments(argsString)
+            let args = parseToolCallArgumentsFromString(argsString)
             arguments = args
         }
         
@@ -522,7 +531,7 @@ public struct ToolCall: Sendable {
         return ToolCall(name: name, arguments: toolCallArguments)
     }
     
-    private static func parseJsonFormat(_ jsonString: String) -> ToolCall? {
+    private static func parseToolcallFromJsonString(_ jsonString: String) -> ToolCall? {
         guard let data = jsonString.data(using: .utf8) else {
             return nil
         }
@@ -577,7 +586,7 @@ public struct ToolCall: Sendable {
         }
     }
     
-    private static func parseArguments(_ argsString: String) -> [String: Sendable] {
+    private static func parseToolCallArgumentsFromString(_ argsString: String) -> [String: Sendable] {
         var arguments: [String: Sendable] = [:]
         var currentArg = ""
         var currentValue = ""

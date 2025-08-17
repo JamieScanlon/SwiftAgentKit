@@ -12,7 +12,7 @@ import Logging
 import OpenAI
 
 /// OpenAI API adapter for A2A protocol
-public struct OpenAIAdapter: ToolAwareAgentAdapter {
+public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - Configuration
     
@@ -523,9 +523,18 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
         }
     }
     
-    // MARK: - ToolAwareAgentAdapter Methods
+    // MARK: - ToolAwareAdapter Methods
     
-    public func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore) async throws {
+    public func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore) async throws {
+        
+        let availableToolCalls: [ToolDefinition] = await {
+            var returnValue = [ToolDefinition]()
+            for provider in toolProviders {
+                let tools = await provider.availableTools()
+                returnValue.append(contentsOf: tools)
+            }
+            return returnValue
+        }()
         
         // Update to working state
         await store.updateTaskStatus(
@@ -553,13 +562,33 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             // Call OpenAI API with tools
             let response = try await callOpenAIWithTools(prompt: prompt, conversationHistory: conversationHistory, tools: tools)
             
-            // Convert response to message parts (handles text content and tool calls)
-            let messageParts = convertOpenAIResponseToMessageParts(response)
+            // Look at the text response for any tool calls not parsed automatically
+            var llmResponse = LLMResponse.llmResponse(from: response.message.content ?? "", availableTools: availableToolCalls)
+            // Add the Tool calls the LLM identified automatically
+            let myToolCalls = response.message.toolCalls?.map({ $0.toToolCall() }) ?? []
+            llmResponse = llmResponse.appending(toolCalls: myToolCalls)
+            
+            // Build message parts from response content and tool calls
+            // Add the non tool call content
+            var responseParts: [A2AMessagePart] = []
+            if !llmResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                responseParts.append(.text(text: llmResponse.content))
+            }
+            
+            // Execute the tool calls and add the tool content
+            for toolCall in llmResponse.toolCalls {
+                for provider in toolProviders {
+                    let result = try await provider.executeTool(toolCall)
+                    if result.success {
+                        responseParts.append(.text(text: result.content))
+                    }
+                }
+            }
             
             // Create response Artifact
             let responseArtifact = Artifact(
                 artifactId: UUID().uuidString,
-                parts: messageParts
+                parts: responseParts
             )
             
             // Update the task artifacts
@@ -593,9 +622,17 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
         }
     }
     
-    public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, availableToolCalls: [ToolDefinition], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
+        let availableToolCalls: [ToolDefinition] = await {
+            var returnValue = [ToolDefinition]()
+            for provider in toolProviders {
+                let tools = await provider.availableTools()
+                returnValue.append(contentsOf: tools)
+            }
+            return returnValue
+        }()
         
         // Update to working state
         let workingStatus = TaskStatus(
@@ -640,16 +677,19 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             let stream = try await streamFromOpenAIWithTools(prompt: prompt, conversationHistory: conversationHistory, tools: tools)
             
             var accumulatedText = ""
+            var accumulatedTools: [ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall] = []
             var partialArtifacts: [Artifact] = []
             var finalArtifact: Artifact?
             
             for try await chunk in stream {
-                accumulatedText += chunk
+                let text = chunk.content ?? ""
+                accumulatedText += text
+                accumulatedTools.append(contentsOf: chunk.toolCalls ?? [])
                 
                 // Create artifact update event
                 let artifact = Artifact(
                     artifactId: UUID().uuidString,
-                    parts: [.text(text: chunk)],
+                    parts: [.text(text: text)],
                     name: "openai-response",
                     description: "Streaming response from OpenAI with tools",
                     metadata: nil,
@@ -678,10 +718,33 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
                 eventSink(artifactResponse)
             }
             
+            // Look at the text response for any tool calls not parsed automatically
+            var llmResponse = LLMResponse.llmResponse(from: accumulatedText, availableTools: availableToolCalls)
+            // Add the Tool calls the LLM identified automatically
+            let myToolCalls = accumulatedTools.compactMap({ $0.toToolCall() })
+            llmResponse = llmResponse.appending(toolCalls: myToolCalls)
+            
+            // Build message parts from response content and tool calls
+            // Add the non tool call content
+            var responseParts: [A2AMessagePart] = []
+            if !llmResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                responseParts.append(.text(text: llmResponse.content))
+            }
+            
+            // Execute the tool calls and add the tool content
+            for toolCall in llmResponse.toolCalls {
+                for provider in toolProviders {
+                    let result = try await provider.executeTool(toolCall)
+                    if result.success {
+                        responseParts.append(.text(text: result.content))
+                    }
+                }
+            }
+            
             // Create artifact update event for final response
             let artifact = Artifact(
                 artifactId: UUID().uuidString,
-                parts: [.text(text: accumulatedText)],
+                parts: responseParts,
                 name: "final-llm-response",
                 description: "Final streaming response from LLM",
                 metadata: nil,
@@ -815,25 +878,25 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
     
     /// Converts an OpenAI response choice into A2A message parts
     /// Handles text content and tool calls as separate message parts
-    private func convertOpenAIResponseToMessageParts(_ choice: ChatResult.Choice) -> [A2AMessagePart] {
-        var parts: [A2AMessagePart] = []
-        
-        // Add text content if present
-        if let content = choice.message.content, !content.isEmpty {
-            parts.append(.text(text: content))
-        }
-        
-        // Add tool calls if present
-        if let toolCalls = choice.message.toolCalls {
-            for toolCall in toolCalls {
-                // Convert tool call to JSON data for storage
-                let toolCallData = createToolCallData(toolCall)
-                parts.append(.data(data: toolCallData))
-            }
-        }
-        
-        return parts
-    }
+//    private func convertOpenAIResponseToMessageParts(_ choice: ChatResult.Choice) -> [A2AMessagePart] {
+//        var parts: [A2AMessagePart] = []
+//        
+//        // Add text content if present
+//        if let content = choice.message.content, !content.isEmpty {
+//            parts.append(.text(text: content))
+//        }
+//        
+//        // Add tool calls if present
+//        if let toolCalls = choice.message.toolCalls {
+//            for toolCall in toolCalls {
+//                // Convert tool call to JSON data for storage
+//                let toolCallData = createToolCallData(toolCall)
+//                parts.append(.data(data: toolCallData))
+//            }
+//        }
+//        
+//        return parts
+//    }
     
     /// Creates JSON data representation of a tool call
     private func createToolCallData(_ toolCall: ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam) -> Data {
@@ -885,7 +948,7 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
         )
     }
     
-    private func streamFromOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> AsyncThrowingStream<String, Error> {
+    private func streamFromOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> AsyncThrowingStream<ChatStreamResult.Choice.ChoiceDelta, Error> {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
         
@@ -916,12 +979,12 @@ public struct OpenAIAdapter: ToolAwareAgentAdapter {
             user: config.user
         )
         
-        return AsyncThrowingStream<String, Error> { continuation in
+        return AsyncThrowingStream<ChatStreamResult.Choice.ChoiceDelta, Error> { continuation in
             Task {
                 do {
                     for try await result in openAI.chatsStream(query: query) {
-                        if let content = result.choices.first?.delta.content {
-                            continuation.yield(content)
+                        if let choiceDelta = result.choices.first?.delta {
+                            continuation.yield(choiceDelta)
                         }
                     }
                     continuation.finish()
@@ -967,6 +1030,27 @@ enum OpenAIAdapterError: Error, LocalizedError {
 }
 
 // MARK: Format ToolDefinition for OpenAI
+
+extension ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallParam {
+    
+    func toToolCall() -> ToolCall {
+        let argsJSONString = self.function.arguments
+        let args = try? JSONSerialization.jsonObject(with: argsJSONString.data(using: .utf8)!, options: []) as? [String: Sendable]
+        return ToolCall(name: self.function.name, arguments: args ?? [:])
+    }
+}
+
+extension ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall {
+    
+    func toToolCall() -> ToolCall? {
+        if let name = self.function?.name {
+            let argsJSONString = self.function?.arguments ?? ""
+            let args = try? JSONSerialization.jsonObject(with: argsJSONString.data(using: .utf8)!, options: []) as? [String: Sendable]
+            return ToolCall(name: name, arguments: args ?? [:])
+        }
+        return nil
+    }
+}
 
 extension ToolDefinition {
     

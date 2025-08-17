@@ -27,7 +27,7 @@ public struct AdapterBuilder {
     }
     
     /// Set the base LLM adapter that supports tool-aware methods
-    public func withToolAwareLLM(_ adapter: ToolAwareAgentAdapter) -> AdapterBuilder {
+    public func withToolAwareLLM(_ adapter: ToolAwareAdapter) -> AdapterBuilder {
         var builder = self
         builder.baseAdapter = adapter
         return builder
@@ -69,12 +69,12 @@ public struct AdapterBuilder {
             logger.info("Building tool-aware adapter with tool manager")
             
             // Check if the base adapter supports tool-aware methods
-            if let toolAwareAdapter = baseAdapter as? ToolAwareAgentAdapter {
-                return ToolAwareAdapter(baseAdapter: toolAwareAdapter, toolManager: toolManager)
+            if let toolAwareAdapter = baseAdapter as? ToolAwareAdapter {
+                return ToolProxyAdapter(baseAdapter: toolAwareAdapter, toolManager: toolManager)
             } else {
                 // Fall back to the old approach for non-tool-aware adapters
                 // This creates a wrapper that enhances messages with tool information
-                return ToolAwareAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
+                return ToolProxyAdapter(baseAdapter: baseAdapter, toolManager: toolManager)
             }
         }
     }

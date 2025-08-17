@@ -25,7 +25,7 @@ public struct A2AToolProvider: ToolProvider {
                     name: agentCard.name,
                     description: agentCard.description,
                     parameters: [
-                        .init(name: "task", description: "Issue a task for this agent to complete on your behalf.", type: "string", required: true)
+                        .init(name: "instructions", description: "Issue instructions for this agent to complete a task on your behalf.", type: "string", required: true)
                     ],
                     type: .a2aAgent
                 ))
@@ -46,7 +46,7 @@ public struct A2AToolProvider: ToolProvider {
             
             let a2aMessage = A2AMessage(
                 role: "user",
-                parts: [.text(text: toolCall.arguments["input"] as? String ?? "")],
+                parts: [.text(text: toolCall.arguments["instructions"] as? String ?? "")],
                 messageId: UUID().uuidString
             )
             let params = MessageSendParams(message: a2aMessage)

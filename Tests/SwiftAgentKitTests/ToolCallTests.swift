@@ -5,232 +5,232 @@ import Logging
 @Suite("ToolCall Tests")
 struct ToolCallTests {
     
-    @Test("processToolCalls - Empty Content")
+    @Test("extractToolCallStringPlusRange - Empty Content")
     func testProcessToolCallsEmptyContent() throws {
-        let result = ToolCall.processToolCalls(content: "", availableTools: ["test_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: "", availableTools: ["test_tool"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Direct Tool Call with Available Tool")
+    @Test("extractToolCallStringPlusRange - Direct Tool Call with Available Tool")
     func testProcessToolCallsDirectToolCall() throws {
         let content = "test_tool(arg1, arg2)"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["test_tool"])
         #expect(result.toolCall == "test_tool(arg1, arg2)")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Direct Tool Call with Multiple Available Tools")
+    @Test("extractToolCallStringPlusRange - Direct Tool Call with Multiple Available Tools")
     func testProcessToolCallsDirectToolCallMultipleTools() throws {
         let content = "search_tool(query)"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["test_tool", "search_tool", "other_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["test_tool", "search_tool", "other_tool"])
         #expect(result.toolCall == "search_tool(query)")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Direct Tool Call Not in Available Tools")
+    @Test("extractToolCallStringPlusRange - Direct Tool Call Not in Available Tools")
     func testProcessToolCallsDirectToolCallNotAvailable() throws {
         let content = "unknown_tool(arg1)"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["test_tool", "search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["test_tool", "search_tool"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Wrapped Tool Call with Both Tags")
+    @Test("extractToolCallStringPlusRange - Wrapped Tool Call with Both Tags")
     func testProcessToolCallsWrappedToolCall() throws {
         let content = "Some text <|python_tag|>search_tool(query)<|eom_id|> more text"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == "search_tool(query)")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Wrapped Tool Call without Available Tools")
+    @Test("extractToolCallStringPlusRange - Wrapped Tool Call without Available Tools")
     func testProcessToolCallsWrappedToolCallNoAvailableTools() throws {
         let content = "Some text <|python_tag|>search_tool(query)<|eom_id|> more text"
-        let result = ToolCall.processToolCalls(content: content, availableTools: [])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: [])
         #expect(result.toolCall == "search_tool(query)")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Wrapped Tool Call with Only Opening Tag")
+    @Test("extractToolCallStringPlusRange - Wrapped Tool Call with Only Opening Tag")
     func testProcessToolCallsWrappedToolCallOnlyOpeningTag() throws {
         let content = "Some text <|python_tag|>search_tool(query) more text"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == "search_tool(query)")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - No Tool Call Found")
+    @Test("extractToolCallStringPlusRange - No Tool Call Found")
     func testProcessToolCallsNoToolCallFound() throws {
         let content = "This is just regular text without any tool calls"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["test_tool"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Tool Call with Complex Arguments")
+    @Test("extractToolCallStringPlusRange - Tool Call with Complex Arguments")
     func testProcessToolCallsComplexArguments() throws {
         let content = "search_tool(query=\"complex query with spaces\", limit=10, filter=\"active\")"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == "search_tool(query=\"complex query with spaces\", limit=10, filter=\"active\")")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Tool Call with Nested Parentheses")
+    @Test("extractToolCallStringPlusRange - Tool Call with Nested Parentheses")
     func testProcessToolCallsNestedParentheses() throws {
         let content = "search_tool(query=\"test\", options=(limit=10, filter=\"active\"))"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == "search_tool(query=\"test\", options=(limit=10, filter=\"active\"))")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Tool Call with Spaces")
+    @Test("extractToolCallStringPlusRange - Tool Call with Spaces")
     func testProcessToolCallsWithSpaces() throws {
         let content = "  search_tool(query)  "
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == "search_tool(query)")
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Tool Call without Parentheses")
+    @Test("extractToolCallStringPlusRange - Tool Call without Parentheses")
     func testProcessToolCallsWithoutParentheses() throws {
         let content = "search_tool"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Tool Call with Only Opening Parenthesis")
+    @Test("extractToolCallStringPlusRange - Tool Call with Only Opening Parenthesis")
     func testProcessToolCallsOnlyOpeningParenthesis() throws {
         let content = "search_tool("
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Tool Call with Only Closing Parenthesis")
+    @Test("extractToolCallStringPlusRange - Tool Call with Only Closing Parenthesis")
     func testProcessToolCallsOnlyClosingParenthesis() throws {
         let content = "search_tool)"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Tool Call with Special Characters")
+    @Test("extractToolCallStringPlusRange - Tool Call with Special Characters")
     func testProcessToolCallsSpecialCharacters() throws {
         let content = "search_tool(query=\"test@example.com\", path=\"/usr/local/bin\")"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["search_tool"])
         #expect(result.toolCall == "search_tool(query=\"test@example.com\", path=\"/usr/local/bin\")")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Simple Wrapped Tool Call")
+    @Test("extractToolCallStringPlusRange - Simple Wrapped Tool Call")
     func testProcessToolCallsSimpleWrappedToolCall() throws {
         let content = "<|python_tag|>simple_tool()<|eom_id|>"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["simple_tool"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["simple_tool"])
         #expect(result.toolCall == "simple_tool()")
         #expect(result.range != nil)
     }
     
-    @Test("processModelResponse - Empty Content")
+    @Test("parseToolCallFromString - Empty Content")
     func testProcessModelResponseEmptyContent() throws {
-        let result = ToolCall.processModelResponse(content: "", availableTools: ["test_tool"])
+        let result = ToolCall.parseToolCallFromString(content: "", availableTools: ["test_tool"])
         #expect(result.message == "")
         #expect(result.toolCall == nil)
     }
     
-    @Test("processModelResponse - No Tool Call in Content")
+    @Test("parseToolCallFromString - No Tool Call in Content")
     func testProcessModelResponseNoToolCall() throws {
         let content = "This is a regular message without any tool calls"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["test_tool"])
         #expect(result.message == content)
         #expect(result.toolCall == nil)
     }
     
-    @Test("processModelResponse - Direct Tool Call with Available Tool")
+    @Test("parseToolCallFromString - Direct Tool Call with Available Tool")
     func testProcessModelResponseDirectToolCall() throws {
         let content = "Here is the answer: test_tool(arg1, arg2)"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["test_tool"])
         #expect(result.message == "Here is the answer: ")
         #expect(result.toolCall == "test_tool(arg1, arg2)")
     }
     
-    @Test("processModelResponse - Direct Tool Call at Beginning")
+    @Test("parseToolCallFromString - Direct Tool Call at Beginning")
     func testProcessModelResponseDirectToolCallAtBeginning() throws {
         let content = "test_tool(arg1, arg2) Here is the answer"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["test_tool"])
         #expect(result.message == " Here is the answer")
         #expect(result.toolCall == "test_tool(arg1, arg2)")
     }
     
-    @Test("processModelResponse - Direct Tool Call at End")
+    @Test("parseToolCallFromString - Direct Tool Call at End")
     func testProcessModelResponseDirectToolCallAtEnd() throws {
         let content = "Here is the answer test_tool(arg1, arg2)"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["test_tool"])
         #expect(result.message == "Here is the answer ")
         #expect(result.toolCall == "test_tool(arg1, arg2)")
     }
     
-    @Test("processModelResponse - Direct Tool Call with Spaces")
+    @Test("parseToolCallFromString - Direct Tool Call with Spaces")
     func testProcessModelResponseDirectToolCallWithSpaces() throws {
         let content = "  test_tool(arg1, arg2)  "
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["test_tool"])
         #expect(result.message == "    ")
         #expect(result.toolCall == "test_tool(arg1, arg2)")
     }
     
-    @Test("processModelResponse - Direct Tool Call Not in Available Tools")
+    @Test("parseToolCallFromString - Direct Tool Call Not in Available Tools")
     func testProcessModelResponseDirectToolCallNotAvailable() throws {
         let content = "Here is the answer: unknown_tool(arg1)"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["test_tool"])
         #expect(result.message == content)
         #expect(result.toolCall == nil)
     }
     
-    @Test("processModelResponse - Wrapped Tool Call with Both Tags")
+    @Test("parseToolCallFromString - Wrapped Tool Call with Both Tags")
     func testProcessModelResponseWrappedToolCall() throws {
         let content = "Some text <|python_tag|>search_tool(query)<|eom_id|> more text"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == "Some text  more text")
         #expect(result.toolCall == "search_tool(query)")
     }
     
-    @Test("processModelResponse - Wrapped Tool Call at Beginning")
+    @Test("parseToolCallFromString - Wrapped Tool Call at Beginning")
     func testProcessModelResponseWrappedToolCallAtBeginning() throws {
         let content = "<|python_tag|>search_tool(query)<|eom_id|> Here is the answer"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == " Here is the answer")
         #expect(result.toolCall == "search_tool(query)")
     }
     
-    @Test("processModelResponse - Wrapped Tool Call at End")
+    @Test("parseToolCallFromString - Wrapped Tool Call at End")
     func testProcessModelResponseWrappedToolCallAtEnd() throws {
         let content = "Here is the answer <|python_tag|>search_tool(query)<|eom_id|>"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == "Here is the answer ")
         #expect(result.toolCall == "search_tool(query)")
     }
     
-    @Test("processModelResponse - Wrapped Tool Call without Available Tools")
+    @Test("parseToolCallFromString - Wrapped Tool Call without Available Tools")
     func testProcessModelResponseWrappedToolCallNoAvailableTools() throws {
         let content = "Some text <|python_tag|>search_tool(query)<|eom_id|> more text"
-        let result = ToolCall.processModelResponse(content: content, availableTools: [])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: [])
         #expect(result.message == "Some text  more text")
         #expect(result.toolCall == "search_tool(query)")
     }
     
-    @Test("processModelResponse - Wrapped Tool Call with Only Opening Tag")
+    @Test("parseToolCallFromString - Wrapped Tool Call with Only Opening Tag")
     func testProcessModelResponseWrappedToolCallOnlyOpeningTag() throws {
         let content = "Some text <|python_tag|>search_tool(query) more text"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == "Some text ")
         #expect(result.toolCall == "search_tool(query)")
     }
     
-    @Test("processModelResponse - Wrapped Tool Call with Only Opening Tag and No Available Tools")
+    @Test("parseToolCallFromString - Wrapped Tool Call with Only Opening Tag and No Available Tools")
     func testProcessModelResponseWrappedToolCallOnlyOpeningTagNoAvailableTools() throws {
         let content = "Some text <|python_tag|>search_tool(query) more text"
-        let result = ToolCall.processModelResponse(content: content, availableTools: [])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: [])
         #expect(result.message == "Some text ")
         #expect(result.toolCall == "search_tool(query) more text")
     }
@@ -238,71 +238,71 @@ struct ToolCallTests {
     @Test("processModelResponse - Tool Call with Complex Arguments")
     func testProcessModelResponseComplexArguments() throws {
         let content = "Processing: search_tool(query=\"complex query with spaces\", limit=10, filter=\"active\")"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == "Processing: ")
         #expect(result.toolCall == "search_tool(query=\"complex query with spaces\", limit=10, filter=\"active\")")
     }
     
-    @Test("processModelResponse - Tool Call with Nested Parentheses")
+    @Test("parseToolCallFromString - Tool Call with Nested Parentheses")
     func testProcessModelResponseNestedParentheses() throws {
         let content = "Result: search_tool(query=\"test\", options=(limit=10, filter=\"active\"))"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == "Result: ")
         #expect(result.toolCall == "search_tool(query=\"test\", options=(limit=10, filter=\"active\"))")
     }
     
-    @Test("processModelResponse - Multiple Tool Calls (First One Wins)")
+    @Test("parseToolCallFromString - Multiple Tool Calls (First One Wins)")
     func testProcessModelResponseMultipleToolCalls() throws {
         let content = "First: test_tool(arg1) Second: search_tool(query)"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["test_tool", "search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["test_tool", "search_tool"])
         #expect(result.message == "First:  Second: search_tool(query)")
         #expect(result.toolCall == "test_tool(arg1)")
     }
     
-    @Test("processModelResponse - Tool Call with Special Characters")
+    @Test("parseToolCallFromString - Tool Call with Special Characters")
     func testProcessModelResponseSpecialCharacters() throws {
         let content = "Path: search_tool(query=\"test@example.com\", path=\"/usr/local/bin\")"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == "Path: ")
         #expect(result.toolCall == "search_tool(query=\"test@example.com\", path=\"/usr/local/bin\")")
     }
     
-    @Test("processModelResponse - Simple Wrapped Tool Call")
+    @Test("parseToolCallFromString - Simple Wrapped Tool Call")
     func testProcessModelResponseSimpleWrappedToolCall() throws {
         let content = "<|python_tag|>simple_tool()<|eom_id|>"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["simple_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["simple_tool"])
         #expect(result.message == "")
         #expect(result.toolCall == "simple_tool()")
     }
     
-    @Test("processModelResponse - Tool Call with Newlines")
+    @Test("parseToolCallFromString - Tool Call with Newlines")
     func testProcessModelResponseToolCallWithNewlines() throws {
         let content = "Line 1\ntest_tool(arg1)\nLine 3"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["test_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["test_tool"])
         #expect(result.message == "Line 1\n\nLine 3")
         #expect(result.toolCall == "test_tool(arg1)")
     }
     
-    @Test("processModelResponse - Wrapped Tool Call with Newlines")
+    @Test("parseToolCallFromString - Wrapped Tool Call with Newlines")
     func testProcessModelResponseWrappedToolCallWithNewlines() throws {
         let content = "Line 1\n<|python_tag|>search_tool(query)<|eom_id|>\nLine 3"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == "Line 1\n\nLine 3")
         #expect(result.toolCall == "search_tool(query)")
     }
     
-    @Test("processModelResponse - Empty Available Tools")
+    @Test("parseToolCallFromString - Empty Available Tools")
     func testProcessModelResponseEmptyAvailableTools() throws {
         let content = "test_tool(arg1)"
-        let result = ToolCall.processModelResponse(content: content, availableTools: [])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: [])
         #expect(result.message == content)
         #expect(result.toolCall == nil)
     }
     
-    @Test("processModelResponse - Tool Call with Quotes in Arguments")
+    @Test("parseToolCallFromString - Tool Call with Quotes in Arguments")
     func testProcessModelResponseToolCallWithQuotes() throws {
         let content = "Query: search_tool(query=\"Hello 'World'\", name=\"test\")"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["search_tool"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["search_tool"])
         #expect(result.message == "Query: ")
         #expect(result.toolCall == "search_tool(query=\"Hello 'World'\", name=\"test\")")
     }
@@ -567,50 +567,50 @@ struct ToolCallTests {
     
     // MARK: - JSON Format Tool Call Tests
     
-    @Test("processToolCalls - Direct JSON Format Tool Call")
+    @Test("extractToolCallStringPlusRange - Direct JSON Format Tool Call")
     func testProcessToolCallsDirectJsonFormat() throws {
         let content = "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["echo"])
         #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Direct JSON Format Tool Call with Surrounding Text")
+    @Test("extractToolCallStringPlusRange - Direct JSON Format Tool Call with Surrounding Text")
     func testProcessToolCallsDirectJsonFormatWithSurroundingText() throws {
         let content = "Here is the response: {\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}} and more text"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["echo"])
         #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - Direct JSON Format Tool Call Not in Available Tools")
+    @Test("extractToolCallStringPlusRange - Direct JSON Format Tool Call Not in Available Tools")
     func testProcessToolCallsDirectJsonFormatNotAvailable() throws {
         let content = "{\"type\": \"function\", \"name\": \"unknown_tool\", \"parameters\": {\"message\": \"Hello World\"}}"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["echo"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Direct JSON Format Tool Call with Invalid Type")
+    @Test("extractToolCallStringPlusRange - Direct JSON Format Tool Call with Invalid Type")
     func testProcessToolCallsDirectJsonFormatInvalidType() throws {
         let content = "{\"type\": \"message\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World\"}}"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["echo"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processToolCalls - Direct JSON Format Tool Call with Invalid JSON")
+    @Test("extractToolCallStringPlusRange - Direct JSON Format Tool Call with Invalid JSON")
     func testProcessToolCallsDirectJsonFormatInvalidJson() throws {
         let content = "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World\""
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["echo"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["echo"])
         #expect(result.toolCall == nil)
         #expect(result.range == nil)
     }
     
-    @Test("processModelResponse - Direct JSON Format Tool Call")
+    @Test("parseToolCallFromString - Direct JSON Format Tool Call")
     func testProcessModelResponseDirectJsonFormat() throws {
         let content = "Here is the response: {\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}} and more text"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["echo"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["echo"])
         #expect(result.message == "Here is the response:  and more text")
         #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"echo\", \"parameters\": {\"message\": \"Hello World I hear you!\"}}")
     }
@@ -637,42 +637,42 @@ struct ToolCallTests {
     
     // MARK: - JSON Format Tool Call Tests
     
-    @Test("processToolCalls - JSON Format Tool Call")
+    @Test("extractToolCallStringPlusRange - JSON Format Tool Call")
     func testProcessToolCallsJsonFormat() throws {
         let content = "<|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|>"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["add"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["add"])
         #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - JSON Format Tool Call with Surrounding Text")
+    @Test("extractToolCallStringPlusRange - JSON Format Tool Call with Surrounding Text")
     func testProcessToolCallsJsonFormatWithSurroundingText() throws {
         let content = "Here is the result: <|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|> and more text"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["add"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["add"])
         #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - JSON Format Tool Call with Only Opening Tag")
+    @Test("extractToolCallStringPlusRange - JSON Format Tool Call with Only Opening Tag")
     func testProcessToolCallsJsonFormatOnlyOpeningTag() throws {
         let content = "Some text <|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}} more text"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["add"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["add"])
         #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
         #expect(result.range != nil)
     }
     
-    @Test("processToolCalls - JSON Format Tool Call Not in Available Tools")
+    @Test("extractToolCallStringPlusRange - JSON Format Tool Call Not in Available Tools")
     func testProcessToolCallsJsonFormatNotAvailable() throws {
         let content = "<|python_start|>{\"type\": \"function\", \"name\": \"unknown_tool\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|>"
-        let result = ToolCall.processToolCalls(content: content, availableTools: ["add"])
+        let result = ToolCall.extractToolCallStringPlusRange(content: content, availableTools: ["add"])
         #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"unknown_tool\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
         #expect(result.range != nil)
     }
     
-    @Test("processModelResponse - JSON Format Tool Call")
+    @Test("parseToolCallFromString - JSON Format Tool Call")
     func testProcessModelResponseJsonFormat() throws {
         let content = "Here is the result: <|python_start|>{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}<|python_end|> and more text"
-        let result = ToolCall.processModelResponse(content: content, availableTools: ["add"])
+        let result = ToolCall.parseToolCallFromString(content: content, availableTools: ["add"])
         #expect(result.message == "Here is the result:  and more text")
         #expect(result.toolCall == "{\"type\": \"function\", \"name\": \"add\", \"parameters\": {\"a\": 44123, \"b\": 5532}}")
     }

@@ -82,7 +82,7 @@ public struct ToolDefinition: Sendable, Codable {
 
 /// Simple tool manager that coordinates multiple providers
 public struct ToolManager: Sendable {
-    private let providers: [ToolProvider]
+    public let providers: [ToolProvider]
     
     public init(providers: [ToolProvider] = []) {
         self.providers = providers

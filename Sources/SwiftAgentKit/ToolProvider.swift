@@ -6,4 +6,4 @@ public protocol ToolProvider: Sendable {
     var name: String { get }
     func availableTools() async -> [ToolDefinition]
     func executeTool(_ toolCall: ToolCall) async throws -> ToolResult
-} 
+}
