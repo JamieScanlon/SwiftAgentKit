@@ -656,8 +656,6 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 }
             }
             
-            // TODO: Make tool calls
-            
             // Update task with completed status
             let completedStatus = TaskStatus(
                 state: .completed,

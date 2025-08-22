@@ -42,13 +42,35 @@ public actor A2AManager {
             let params: MessageSendParams = .init(message: a2aMessage)
             let contents = try await client.streamMessage(params: params)
             var returnResponses: [LLMResponse] = []
+            var responseText: String = ""
             for await content in contents {
                 switch content.result {
                 case .message(let aMessage):
                     let text = aMessage.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
                     returnResponses.append(LLMResponse.complete(content: text))
-                default:
-                    continue
+                case .task(let task):
+                    var text: String = ""
+                    if let artifacts = task.artifacts {
+                        for artifact in artifacts {
+                            text += artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                        }
+                    }
+                    returnResponses.append(LLMResponse.complete(content: text))
+                case .taskArtifactUpdate(let event):
+                    if event.append == true {
+                        responseText += event.artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                    } else {
+                        responseText = event.artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                    }
+                    if event.lastChunk == true {
+                        returnResponses.append(LLMResponse.complete(content: responseText))
+                        responseText = ""
+                    }
+                case .taskStatusUpdate(let event):
+                    if event.status.state == .completed, !responseText.isEmpty {
+                        returnResponses.append(LLMResponse.complete(content: responseText))
+                        responseText = ""
+                    }
                 }
             }
             return returnResponses
