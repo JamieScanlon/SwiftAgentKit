@@ -244,10 +244,10 @@ public actor A2AServer {
             Task.detached {
                 do {
                     try await adapter.handleStream(updatedParams, task: task, store: store) { ev in
-                        if let data = try? self.encoder.encode(ev), let json = String(data: data, encoding:.utf8) {
-                            let wrapped = "{\"jsonrpc\":\"2.0\",\"id\":\(requestId),\"result\":\(json)}"
-                            var buf = ByteBufferAllocator().buffer(capacity: wrapped.count+8)
-                            buf.writeString("data: \(wrapped)\n\n")
+                        if let data = try? self.encoder.encode(ev),
+                            let jsonString = String(data: data, encoding:.utf8) {
+                            var buf = ByteBufferAllocator().buffer(capacity: jsonString.count+8)
+                            buf.writeString("data: \(jsonString)\n\n")
                             cont.yield(buf)
                         }
                     }
@@ -369,10 +369,9 @@ public actor A2AServer {
         let stream = AsyncStream<ByteBuffer> { continuation in
             func send<T: Encodable>(_ obj: T) {
                 if let data = try? encoder.encode(obj),
-                   let json = String(data: data, encoding: .utf8) {
-                    let wrapped = "{\"jsonrpc\":\"2.0\",\"id\":\(requestId),\"result\":\(json)}"
-                    var buffer = ByteBufferAllocator().buffer(capacity: wrapped.count + 8)
-                    buffer.writeString("data: \(wrapped)\n\n")
+                   let jsonString = String(data: data, encoding: .utf8) {
+                    var buffer = ByteBufferAllocator().buffer(capacity: jsonString.count + 8)
+                    buffer.writeString("data: \(jsonString)\n\n")
                     continuation.yield(buffer)
                 }
             }
