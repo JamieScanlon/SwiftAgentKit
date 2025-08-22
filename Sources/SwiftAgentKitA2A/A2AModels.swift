@@ -533,7 +533,7 @@ public struct JSONRPCErrorResponse: Codable, Sendable {
 }
 
 /// JSON-RPC 2.0 request envelope used to carry params and id for RPC calls
-public struct JSONRPCRequest<T: Decodable & Sendable>: Decodable, Sendable {
+public struct JSONRPCRequest<T: Codable & Sendable>: Codable, Sendable {
     public let jsonrpc: String
     public let id: Int
     public let params: T

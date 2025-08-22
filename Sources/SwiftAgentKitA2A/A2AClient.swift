@@ -114,10 +114,14 @@ public actor A2AClient {
             throw A2AClientError.notInitialized
         }
         
-        let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Sendable] ?? [:]
+        let jsonRPCRequest = JSONRPCRequest<MessageSendParams>(id: requestId, params: params)
+        requestId += 1
+//        let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Sendable] ?? [:]
+        let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(jsonRPCRequest)) as? [String: Sendable] ?? [:]
         
         return AsyncStream { continuation in
             Task {
+                
                 let sseStream = await apiManager.sseRequest("message/stream", method: HTTPMethod.post, parameters: jsonParams, headers: authHeaders)
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
@@ -345,6 +349,7 @@ public actor A2AClient {
         }
         return nil
     }
+    private var requestId: Int = 1
     
     /// Fetches the agent card from the standard location
     /// According to A2A spec: https://{server_domain}/.well-known/agent.json
