@@ -111,11 +111,6 @@ public actor SwiftAgentKitOrchestrator {
                 case .complete(let response):
                     logger.info("Received complete streaming response")
 
-                    // Finish and nil out the partial content stream continuation since streaming is complete
-                    partialContentStreamContinuation?.finish()
-                    partialContentStreamContinuation = nil
-                    currentPartialContentStream = nil
-
                     // Convert LLMResponse to Message for conversation history
                     let responseMessage = Message(id: UUID(), role: .assistant, content: response.content)
                     updatedMessages.append(responseMessage)
@@ -140,6 +135,11 @@ public actor SwiftAgentKitOrchestrator {
                         // Recurse here with the updated message history
                         try await updateConversation(updatedMessages, availableTools: availableTools)
                     }
+                    
+                    // Finish and nil out the partial content stream continuation since streaming is complete
+                    partialContentStreamContinuation?.finish()
+                    partialContentStreamContinuation = nil
+                    currentPartialContentStream = nil
                 }
             }
         } else {
