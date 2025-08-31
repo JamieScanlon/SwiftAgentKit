@@ -6,10 +6,10 @@ import SwiftAgentKitMCP
 @main
 struct MCPServerExample {
     static func main() async {
-        // Set up logging
+        // Set up logging to stderr to avoid interfering with MCP protocol on stdout
         LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardOutput(label: label)
-            handler.logLevel = .info
+            var handler = StreamLogHandler.standardError(label: label)
+            handler.logLevel = .debug  // Set to debug level for more detailed logging
             return handler
         }
         
@@ -90,6 +90,11 @@ struct MCPServerExample {
         }
         
         logger.info("Registered 3 tools: hello_world, add_numbers, get_environment")
+        
+        // Print diagnostic information
+        let diagnosticInfo = await server.diagnosticInfo()
+        logger.info("Server diagnostic info: \(diagnosticInfo)")
+        
         logger.info("Starting MCP server...")
         
         do {
@@ -110,3 +115,4 @@ struct MCPServerExample {
         }
     }
 }
+

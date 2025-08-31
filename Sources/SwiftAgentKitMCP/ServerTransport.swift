@@ -96,42 +96,49 @@ public actor ServerTransport: MCP.Transport {
     private func readLoop() async {
         internalLogger.debug("Starting readLoop in background")
         
-        // For piped input, we need to read all available data first
-        // then keep the stream open for potential future input
-        var hasReadInitialData = false
-        
-        while isConnected {
-            do {
-                // Read available data from stdin
-                let data = FileHandle.standardInput.availableData
+        // Use readabilityHandler approach like ClientTransport for better reliability
+        FileHandle.standardInput.readabilityHandler = { [weak self] handle in
+            guard let self = self else { return }
+            
+            let data = handle.availableData
+            if !data.isEmpty {
+                self.internalLogger.info("Received data: \(data.count) bytes")
                 
-                if !data.isEmpty {
-                    internalLogger.info("Received data: \(data.count) bytes")
+                // Try to parse as JSON to detect message type
+                if let jsonString = String(data: data, encoding: .utf8) {
+                    self.internalLogger.debug("Raw message: \(jsonString)")
                     
-                    // Yield the data to the continuation
-                    messageContinuation?.yield(data)
-                    internalLogger.debug("Successfully yielded data to continuation")
-                    hasReadInitialData = true
-                } else {
-                    // If we've read some data and now there's none, 
-                    // we should keep the stream open but not finish it
-                    if hasReadInitialData {
-                        internalLogger.debug("No more data available, keeping stream open")
-                        // Keep the stream open by not calling finish()
-                        // Just wait a bit longer for potential future input
-                        try await Task.sleep(nanoseconds: 500_000_000) // 0.5 second
-                    } else {
-                        // Small delay to prevent busy waiting
-                        try await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+                    // Check if this looks like a JSON-RPC message
+                    if jsonString.contains("\"jsonrpc\"") {
+                        self.internalLogger.info("Detected JSON-RPC message")
+                        
+                        // Try to extract method name for better logging
+                        if let methodRange = jsonString.range(of: "\"method\"\\s*:\\s*\"([^\"]+)\"", options: .regularExpression) {
+                            let methodString = String(jsonString[methodRange])
+                            self.internalLogger.info("Message method: \(methodString)")
+                        }
                     }
                 }
-            } catch {
-                internalLogger.error("Error reading from stdin: \(error)")
-                break
+                
+                // Yield the data to the continuation - use async task to handle actor isolation
+                Task.detached {
+                    await self.yieldData(data)
+                }
             }
         }
         
+        // Keep the loop alive while connected
+        while isConnected {
+            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+        }
+        
         internalLogger.debug("ReadLoop finished")
+    }
+    
+    /// Helper method to yield data to the continuation (actor-isolated)
+    private func yieldData(_ data: Data) {
+        messageContinuation?.yield(data)
+        internalLogger.debug("Successfully yielded data to continuation")
     }
 }
 

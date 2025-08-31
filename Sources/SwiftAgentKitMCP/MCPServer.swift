@@ -148,6 +148,22 @@ public actor MCPServer {
         logger.info("MCP server stopped")
     }
     
+    /// Diagnostic method to test if the server is properly configured
+    public func diagnosticInfo() async -> [String: String] {
+        var info: [String: String] = [:]
+        info["name"] = name
+        info["version"] = version
+        info["isRunning"] = String(isRunning)
+        info["hasTransport"] = String(transport != nil)
+        info["hasTools"] = String(await toolRegistry.hasTools)
+        
+        if let transport = transport {
+            info["transportType"] = String(describing: type(of: transport))
+        }
+        
+        return info
+    }
+    
     // MARK: - Private Methods
     
     /// Convert MCPToolResult to MCP Tool.Content
