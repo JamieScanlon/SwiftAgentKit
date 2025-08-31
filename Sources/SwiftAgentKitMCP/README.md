@@ -1,0 +1,268 @@
+# SwiftAgentKitMCP - MCP Server Implementation
+
+This module provides tools for building MCP (Model Context Protocol) servers in Swift. It includes a complete server implementation that handles JSON-RPC messages, tool registration, and MCP protocol management.
+
+## Features
+
+- **MCPServer**: Main server class that handles JSON-RPC parsing and routing
+- **ToolRegistry**: Server-side tool management and execution
+- **ServerTransport**: Stdio-based transport for server communication
+- **Automatic MCP Protocol Handling**: Built-in support for MCP methods (initialize, tools/list, tools/call)
+- **Environment Variable Access**: Built-in access to environment variables for custom authentication
+- **Comprehensive Error Handling**: Standard JSON-RPC error codes with extensible custom errors
+
+## Quick Start
+
+### Basic MCP Server
+
+```swift
+import SwiftAgentKitMCP
+
+// Create an MCP server
+let server = MCPServer(name: "my-tool-server", version: "1.0.0")
+
+// Register tools
+await server.registerTool(
+    name: "hello_world",
+    description: "A simple greeting tool",
+    inputSchema: [
+        "type": "object",
+        "properties": "{\"name\": {\"type\": \"string\", \"description\": \"Name to greet\"}}",
+        "required": "[\"name\"]"
+    ]
+        ) { args in
+            let name: String
+            if case .string(let value) = args["name"] {
+                name = value
+            } else {
+                name = "World"
+            }
+            return .success("Hello, \(name)!")
+        }
+
+// Start the server
+try await server.start()
+
+// Keep the server running
+try await Task.sleep(nanoseconds: UInt64.max)
+```
+
+### Tool Registration
+
+Tools are registered with a name, description, input schema, and handler closure:
+
+```swift
+await server.registerTool(
+    name: "calculate",
+    description: "Perform mathematical calculations",
+    inputSchema: [
+        "type": "object",
+        "properties": "{\"operation\": {\"type\": \"string\", \"description\": \"Math operation\"}, \"values\": {\"type\": \"array\", \"description\": \"Values to operate on\"}}",
+        "required": "[\"operation\", \"values\"]"
+    ]
+        ) { args in
+            let operation: String
+            let values: [Double]
+            
+            if case .string(let value) = args["operation"] {
+                operation = value
+            } else {
+                operation = "add"
+            }
+            
+            if case .array(let array) = args["values"] {
+                values = array.compactMap { value in
+                    if case .double(let double) = value {
+                        return double
+                    } else if case .int(let int) = value {
+                        return Double(int)
+                    }
+                    return nil
+                }
+            } else {
+                values = [0, 0]
+            }
+            
+            let result: Double
+            switch operation {
+            case "add":
+                result = values.reduce(0, +)
+            case "multiply":
+                result = values.reduce(1, *)
+            default:
+                return .error("INVALID_OPERATION", "Unknown operation: \(operation)")
+            }
+            
+            return .success("Result: \(result)")
+        }
+```
+
+### Input Schema Format
+
+The `inputSchema` parameter uses a simplified JSON schema format where complex objects are represented as JSON strings:
+
+```swift
+inputSchema: [
+    "type": "object",
+    "properties": "{\"param1\": {\"type\": \"string\"}, \"param2\": {\"type\": \"number\"}}",
+    "required": "[\"param1\"]"
+]
+```
+
+### Tool Results
+
+Tools return `MCPToolResult` which can be either:
+
+```swift
+.success("Operation completed successfully")
+.error("ERROR_CODE", "Error message")
+```
+
+### Tool Arguments
+
+Tool handlers receive arguments as `[String: SendableValue]` where `SendableValue` is a type-safe, Sendable enum:
+
+```swift
+public enum SendableValue: Sendable {
+    case null
+    case bool(Bool)
+    case int(Int)
+    case double(Double)
+    case string(String)
+    case data(Data)
+    case array([SendableValue])
+    case object([String: SendableValue])
+}
+```
+
+This ensures thread safety and eliminates the need for type casting:
+
+```swift
+await server.registerTool(
+    name: "process_data",
+    description: "Process data with type safety",
+    inputSchema: [
+        "type": "object",
+        "properties": "{\"text\": {\"type\": \"string\"}, \"count\": {\"type\": \"number\"}}",
+        "required": "[\"text\", \"count\"]"
+    ]
+) { args in
+    // Type-safe argument extraction
+    let text: String
+    let count: Int
+    
+    if case .string(let value) = args["text"] {
+        text = value
+    } else {
+        return .error("INVALID_TEXT", "Text must be a string")
+    }
+    
+    if case .int(let value) = args["count"] {
+        count = value
+    } else if case .double(let value) = args["count"] {
+        count = Int(value)
+    } else {
+        return .error("INVALID_COUNT", "Count must be a number")
+    }
+    
+    return .success("Processed '\(text)' \(count) times")
+}
+```
+
+### Environment Variables
+
+Access environment variables for custom authentication or configuration:
+
+```swift
+let env = server.environmentVariables
+let apiKey = env["API_KEY"]
+let model = env["MODEL_NAME"]
+```
+
+## Server Lifecycle
+
+### Starting the Server
+
+```swift
+try await server.start()
+```
+
+The server will:
+1. Initialize the transport layer (stdio)
+2. Start listening for incoming JSON-RPC messages
+3. Handle MCP protocol methods automatically
+
+### Stopping the Server
+
+```swift
+await server.stop()
+```
+
+## MCP Protocol Support
+
+The server automatically handles these MCP methods:
+
+- **`initialize`**: Returns server capabilities and information
+- **`tools/list`**: Returns list of registered tools
+- **`tools/call`**: Executes a registered tool
+
+### Capabilities
+
+Server capabilities are automatically determined based on registered components:
+- **Tools**: Available when tools are registered
+- **Prompts**: Available when prompts are registered (future)
+- **Resources**: Available when resources are registered (future)
+
+## Error Handling
+
+The server provides standard JSON-RPC error codes:
+
+- `-32700`: Parse error
+- `-32600`: Invalid request
+- `-32601`: Method not found
+- `-32602`: Invalid params
+- `-32603`: Internal error
+- `-32000`: Custom errors
+
+Custom error codes can be used for application-specific errors:
+
+```swift
+return .error("AUTH_FAILED", "Invalid credentials")
+return .error("RATE_LIMITED", "Too many requests")
+```
+
+## Transport
+
+Currently supports stdio transport for easy integration with MCP clients. The server reads from stdin and writes to stdout, making it compatible with standard MCP client implementations.
+
+## Example
+
+See `Examples/MCPServerExample/main.swift` for a complete working example that demonstrates:
+
+- Server creation and configuration
+- Tool registration with different parameter types
+- Environment variable access
+- Server startup and lifecycle management
+
+## Integration with Existing MCP Clients
+
+The server is compatible with your existing `MCPClient` implementation. You can:
+
+1. Start an MCPServer in one process
+2. Connect to it using MCPClient in another process
+3. Execute tools and receive results
+
+## Future Enhancements
+
+- Network transport support
+- Prompt template management
+- Resource management
+- Advanced authentication systems
+- Configuration file support
+- Metrics and monitoring
+
+## Requirements
+
+- macOS 13.0+ / iOS 16.0+ / visionOS 1.0+
+- Swift 6.0+
+- MCP swift-sdk 0.9.0+

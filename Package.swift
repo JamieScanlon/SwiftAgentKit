@@ -58,6 +58,9 @@ let package = Package(
         .executable(
             name: "LLMProtocolAdapterExample",
             targets: ["LLMProtocolAdapterExample"]),
+        .executable(
+            name: "MCPServerExample",
+            targets: ["MCPServerExample"]),
     ],
     dependencies: [
         // Core dependencies
@@ -106,7 +109,8 @@ let package = Package(
                 .product(name: "MCP", package: "swift-sdk"),
                 .product(name: "EasyJSON", package: "EasyJSON"),
                 .product(name: "Logging", package: "swift-log"),
-            ]),
+            ],
+            exclude: ["README.md"]),
         
         // Adapters module - Standard agent adapters
         .target(
@@ -215,6 +219,15 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ],
             path: "Examples/LLMProtocolAdapterExample"),
+        
+        .executableTarget(
+            name: "MCPServerExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitMCP",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/MCPServerExample"),
         
         // Test targets
         .testTarget(
