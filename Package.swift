@@ -61,6 +61,7 @@ let package = Package(
         .executable(
             name: "MCPServerExample",
             targets: ["MCPServerExample"]),
+
     ],
     dependencies: [
         // Core dependencies
@@ -228,6 +229,7 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ],
             path: "Examples/MCPServerExample"),
+
         
         // Test targets
         .testTarget(

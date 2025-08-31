@@ -26,7 +26,7 @@ public actor MCPServer {
     
     // MARK: - MCP Server
     private var mcpServer: MCP.Server?
-    private var transport: ServerTransport?
+    private var transport: (any MCP.Transport)?
     
     // MARK: - Initialization
     
@@ -67,14 +67,19 @@ public actor MCPServer {
     
     /// Start the MCP server
     public func start() async throws {
+        try await start(transport: ServerTransport())
+    }
+    
+    /// Start the MCP server with a custom transport
+    public func start(transport: any MCP.Transport) async throws {
         guard !isRunning else {
             throw MCPServerError.alreadyRunning
         }
         
         logger.info("Starting MCP server: \(name) v\(version)")
         
-        // Create transport
-        transport = ServerTransport()
+        // Store the provided transport
+        self.transport = transport
         
         // Create MCP server with capabilities
         let capabilities = MCP.Server.Capabilities(
@@ -119,7 +124,7 @@ public actor MCPServer {
         }
         
         // Start the MCP server
-        try await mcpServer?.start(transport: transport!)
+        try await mcpServer?.start(transport: transport)
         
         isRunning = true
         logger.info("MCP server started successfully")
@@ -136,7 +141,7 @@ public actor MCPServer {
         mcpServer = nil
         
         // Stop transport
-        await transport?.stop()
+        await transport?.disconnect()
         transport = nil
         
         isRunning = false

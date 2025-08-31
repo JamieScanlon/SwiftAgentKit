@@ -11,18 +11,24 @@ import MCP
 import System
 
 /// Transport layer for MCP servers using stdio
+/// Based on the successful ClientTransport approach using Pipes and readabilityHandler
 public actor ServerTransport: MCP.Transport {
     private let internalLogger = Logger(label: "ServerTransport")
     
     // MARK: - State
-    private var isListening = false
-    private var messageHandler: ((String) async -> Void)?
+    private var isConnected = false
+    private var messageContinuation: AsyncThrowingStream<Data, Swift.Error>.Continuation?
     
-    // MARK: - Stdio
-    private let stdin = FileHandle.standardInput
-    private let stdout = FileHandle.standardOutput
+    // MARK: - Pipes (like ClientTransport)
+    private let inPipe: Pipe
+    private let outPipe: Pipe
     
-    public init() {}
+    public init() {
+        // Create pipes for stdin/stdout communication
+        // For server mode, we'll read from stdin and write to stdout directly
+        self.inPipe = Pipe()
+        self.outPipe = Pipe()
+    }
     
     // MARK: - MCP Transport Implementation
     
@@ -31,166 +37,118 @@ public actor ServerTransport: MCP.Transport {
     }
     
     public func connect() async throws {
-        guard !isListening else {
-            throw ServerTransportError.alreadyListening
+        guard !isConnected else {
+            throw ServerTransportError.alreadyConnected
         }
         
-        internalLogger.info("Starting to listen for messages on stdin")
-        isListening = true
+        internalLogger.info("ServerTransport connecting...")
+        isConnected = true
+        
+        // Start reading loop in background
+        Task.detached {
+            await self.readLoop()
+        }
+        
+        internalLogger.info("ServerTransport connected and reading loop started")
     }
     
     public func disconnect() async {
-        guard isListening else { return }
+        guard isConnected else { return }
         
-        internalLogger.info("Stopping message listening")
-        isListening = false
+        internalLogger.info("ServerTransport disconnecting...")
+        isConnected = false
+        
+        // Stop the readability handler
+        outPipe.fileHandleForReading.readabilityHandler = nil
+        
+        // Finish the message continuation
+        messageContinuation?.finish()
+        
+        internalLogger.info("ServerTransport disconnected")
     }
     
     public func send(_ data: Data) async throws {
-        guard isListening else {
-            throw ServerTransportError.notListening
+        guard isConnected else {
+            throw ServerTransportError.notConnected
         }
         
-        try stdout.write(contentsOf: data)
-        try stdout.synchronize()
+        internalLogger.debug("ServerTransport sending \(data.count) bytes")
         
-        internalLogger.debug("Sent data: \(data.count) bytes")
+        // Write directly to stdout
+        try FileHandle.standardOutput.write(contentsOf: data)
+        try FileHandle.standardOutput.synchronize()
+        
+        internalLogger.debug("ServerTransport sent data successfully")
     }
     
     public func receive() -> AsyncThrowingStream<Data, Swift.Error> {
+        internalLogger.debug("ServerTransport creating receive stream")
+        
         return AsyncThrowingStream { continuation in
-            Task {
-                while isListening {
-                    do {
-                        let data = try await readDataFromStdin()
-                        continuation.yield(data)
-                    } catch {
-                        continuation.finish(throwing: error)
-                        break
-                    }
-                }
-                continuation.finish()
-            }
+            self.messageContinuation = continuation
+            internalLogger.debug("ServerTransport receive stream created")
         }
-    }
-    
-    // MARK: - Legacy Interface (for backward compatibility)
-    
-    /// Start listening for incoming messages on stdin
-    /// - Parameter handler: Closure called when a message is received
-    public func startListening(handler: @escaping (String) async -> Void) async throws {
-        guard !isListening else {
-            throw ServerTransportError.alreadyListening
-        }
-        
-        internalLogger.info("Starting to listen for messages on stdin")
-        
-        messageHandler = handler
-        isListening = true
-        
-        // Start reading from stdin in a background task
-        Task {
-            await readFromStdin()
-        }
-    }
-    
-    /// Stop listening for messages
-    public func stop() {
-        guard isListening else { return }
-        
-        internalLogger.info("Stopping message listening")
-        isListening = false
-        messageHandler = nil
-    }
-    
-    /// Send a message to stdout
-    /// - Parameter message: The message to send
-    public func sendMessage(_ message: String) async throws {
-        guard isListening else {
-            throw ServerTransportError.notListening
-        }
-        
-        // Ensure message ends with newline for proper stdio handling
-        let messageWithNewline = message.hasSuffix("\n") ? message : message + "\n"
-        
-        guard let data = messageWithNewline.data(using: .utf8) else {
-            throw ServerTransportError.encodingError
-        }
-        
-        try stdout.write(contentsOf: data)
-        try stdout.synchronize()
-        
-        internalLogger.debug("Sent message: \(message)")
     }
     
     // MARK: - Private Methods
     
-    private func readFromStdin() async {
-        internalLogger.info("Started reading from stdin")
+    /// Continuous loop that reads and processes incoming messages
+    private func readLoop() async {
+        internalLogger.debug("Starting readLoop in background")
         
-        while isListening {
+        // For piped input, we need to read all available data first
+        // then keep the stream open for potential future input
+        var hasReadInitialData = false
+        
+        while isConnected {
             do {
-                // Read a line from stdin
-                let line = try await readLineFromStdin()
+                // Read available data from stdin
+                let data = FileHandle.standardInput.availableData
                 
-                guard !line.isEmpty else { continue }
-                
-                internalLogger.debug("Received message: \(line)")
-                
-                // Call the message handler
-                if let handler = messageHandler {
-                    await handler(line)
+                if !data.isEmpty {
+                    internalLogger.info("Received data: \(data.count) bytes")
+                    
+                    // Yield the data to the continuation
+                    messageContinuation?.yield(data)
+                    internalLogger.debug("Successfully yielded data to continuation")
+                    hasReadInitialData = true
+                } else {
+                    // If we've read some data and now there's none, 
+                    // we should keep the stream open but not finish it
+                    if hasReadInitialData {
+                        internalLogger.debug("No more data available, keeping stream open")
+                        // Keep the stream open by not calling finish()
+                        // Just wait a bit longer for potential future input
+                        try await Task.sleep(nanoseconds: 500_000_000) // 0.5 second
+                    } else {
+                        // Small delay to prevent busy waiting
+                        try await Task.sleep(nanoseconds: 100_000_000) // 0.1 second
+                    }
                 }
-                
             } catch {
                 internalLogger.error("Error reading from stdin: \(error)")
-                
-                // If we can't read from stdin, we should probably stop
-                if isListening {
-                    internalLogger.error("Stopping due to stdin read error")
-                    isListening = false
-                }
                 break
             }
         }
         
-        internalLogger.info("Stopped reading from stdin")
-    }
-    
-    private func readLineFromStdin() async throws -> String {
-        // Read data from stdin
-        let data = try stdin.readToEnd() ?? Data()
-        
-        guard let string = String(data: data, encoding: .utf8) else {
-            throw ServerTransportError.decodingError
-        }
-        
-        // Split by newlines and return the first non-empty line
-        let lines = string.components(separatedBy: .newlines)
-        return lines.first { !$0.isEmpty } ?? ""
-    }
-    
-    private func readDataFromStdin() async throws -> Data {
-        // Read data from stdin
-        let data = try stdin.readToEnd() ?? Data()
-        return data
+        internalLogger.debug("ReadLoop finished")
     }
 }
 
 // MARK: - Error Types
 
 public enum ServerTransportError: LocalizedError {
-    case alreadyListening
-    case notListening
+    case alreadyConnected
+    case notConnected
     case encodingError
     case decodingError
     
     public var errorDescription: String? {
         switch self {
-        case .alreadyListening:
-            return "Transport is already listening"
-        case .notListening:
-            return "Transport is not listening"
+        case .alreadyConnected:
+            return "ServerTransport is already connected"
+        case .notConnected:
+            return "ServerTransport is not connected"
         case .encodingError:
             return "Failed to encode message"
         case .decodingError:
