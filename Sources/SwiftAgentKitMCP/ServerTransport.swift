@@ -92,13 +92,36 @@ public actor ServerTransport: MCP.Transport {
             throw ServerTransportError.notConnected
         }
         
-        internalLogger.debug("ServerTransport sending \(data.count) bytes")
+        internalLogger.info("ServerTransport sending response: \(data.count) bytes")
+        
+        // Log the response content for debugging
+        if let responseString = String(data: data, encoding: .utf8) {
+            internalLogger.debug("Response content: \(responseString)")
+            
+            // Check if this looks like a JSON-RPC response
+            if responseString.contains("\"jsonrpc\"") {
+                internalLogger.info("Detected JSON-RPC response")
+                
+                // Try to extract response ID for tracking
+                if let idRange = responseString.range(of: "\"id\"\\s*:\\s*(\\d+)", options: .regularExpression) {
+                    let idString = String(responseString[idRange])
+                    internalLogger.info("Response ID: \(idString)")
+                }
+                
+                // Check if it's an error response
+                if responseString.contains("\"error\"") {
+                    internalLogger.warning("JSON-RPC error response detected")
+                } else if responseString.contains("\"result\"") {
+                    internalLogger.info("JSON-RPC success response detected")
+                }
+            }
+        }
         
         // Write directly to stdout
         try FileHandle.standardOutput.write(contentsOf: data)
         try FileHandle.standardOutput.synchronize()
         
-        internalLogger.debug("ServerTransport sent data successfully")
+        internalLogger.info("Response sent successfully to stdout")
     }
     
     public func receive() -> AsyncThrowingStream<Data, Swift.Error> {
@@ -117,17 +140,24 @@ public actor ServerTransport: MCP.Transport {
         internalLogger.debug("Starting readLoop in background")
         
         // Use readabilityHandler approach like ClientTransport for better reliability
+        internalLogger.info("Setting up readabilityHandler for stdin...")
         FileHandle.standardInput.readabilityHandler = { [weak self] handle in
             guard let self = self else { return }
             
+            internalLogger.debug("readabilityHandler triggered - data available")
             let data = handle.availableData
             if !data.isEmpty {
+                internalLogger.info("readabilityHandler: Received \(data.count) bytes")
                 // Check ready state and process message asynchronously
                 Task.detached {
                     await self.processIncomingData(data)
                 }
+            } else {
+                internalLogger.debug("readabilityHandler: No data available")
             }
         }
+        
+        internalLogger.info("readabilityHandler set up successfully")
         
         // Keep the loop alive while connected
         while isConnected {
@@ -163,8 +193,10 @@ public actor ServerTransport: MCP.Transport {
             }
         }
         
-        // Yield the data to the continuation
+        // Yield the data to the continuation - this should trigger MCP library processing
+        internalLogger.info("Yielding data to MCP library for processing...")
         yieldData(data)
+        internalLogger.info("Data yielded successfully - MCP library should now process the message")
     }
     
     /// Helper method to yield data to the continuation (actor-isolated)

@@ -67,7 +67,7 @@ public actor MCPServer {
     
     /// Start the MCP server
     public func start() async throws {
-        try await start(transport: ServerTransport())
+        try await start(transport: MCP.StdioTransport())
     }
     
     /// Start the MCP server with a custom transport
@@ -126,11 +126,7 @@ public actor MCPServer {
         // Start the MCP server
         try await mcpServer?.start(transport: transport)
         
-        // Signal that the transport is ready to process messages
-        // This prevents the race condition where messages arrive before the server is ready
-        if let serverTransport = transport as? ServerTransport {
-            await serverTransport.setReady()
-        }
+
         
         isRunning = true
         logger.info("MCP server started successfully")
