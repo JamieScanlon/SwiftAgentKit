@@ -17,6 +17,7 @@ public actor ServerTransport: MCP.Transport {
     
     // MARK: - State
     private var isConnected = false
+    private var isReady = false
     private var messageContinuation: AsyncThrowingStream<Data, Swift.Error>.Continuation?
     
     // MARK: - Pipes (like ClientTransport)
@@ -44,12 +45,30 @@ public actor ServerTransport: MCP.Transport {
         internalLogger.info("ServerTransport connecting...")
         isConnected = true
         
-        // Start reading loop in background
+        // Don't start reading loop yet - wait for ready signal
+        internalLogger.info("ServerTransport connected, waiting for ready signal before reading messages")
+    }
+    
+    /// Signal that the server is ready to process messages
+    /// This should be called after the MCP server is fully initialized
+    public func setReady() {
+        guard isConnected else {
+            internalLogger.warning("Cannot set ready state - transport not connected")
+            return
+        }
+        
+        guard !isReady else {
+            internalLogger.debug("Transport already ready")
+            return
+        }
+        
+        internalLogger.info("ServerTransport setting ready state - starting message processing")
+        isReady = true
+        
+        // Start reading loop now that server is ready
         Task.detached {
             await self.readLoop()
         }
-        
-        internalLogger.info("ServerTransport connected and reading loop started")
     }
     
     public func disconnect() async {
@@ -57,9 +76,10 @@ public actor ServerTransport: MCP.Transport {
         
         internalLogger.info("ServerTransport disconnecting...")
         isConnected = false
+        isReady = false
         
         // Stop the readability handler
-        outPipe.fileHandleForReading.readabilityHandler = nil
+        FileHandle.standardInput.readabilityHandler = nil
         
         // Finish the message continuation
         messageContinuation?.finish()
@@ -102,27 +122,9 @@ public actor ServerTransport: MCP.Transport {
             
             let data = handle.availableData
             if !data.isEmpty {
-                self.internalLogger.info("Received data: \(data.count) bytes")
-                
-                // Try to parse as JSON to detect message type
-                if let jsonString = String(data: data, encoding: .utf8) {
-                    self.internalLogger.debug("Raw message: \(jsonString)")
-                    
-                    // Check if this looks like a JSON-RPC message
-                    if jsonString.contains("\"jsonrpc\"") {
-                        self.internalLogger.info("Detected JSON-RPC message")
-                        
-                        // Try to extract method name for better logging
-                        if let methodRange = jsonString.range(of: "\"method\"\\s*:\\s*\"([^\"]+)\"", options: .regularExpression) {
-                            let methodString = String(jsonString[methodRange])
-                            self.internalLogger.info("Message method: \(methodString)")
-                        }
-                    }
-                }
-                
-                // Yield the data to the continuation - use async task to handle actor isolation
+                // Check ready state and process message asynchronously
                 Task.detached {
-                    await self.yieldData(data)
+                    await self.processIncomingData(data)
                 }
             }
         }
@@ -133,6 +135,36 @@ public actor ServerTransport: MCP.Transport {
         }
         
         internalLogger.debug("ReadLoop finished")
+    }
+    
+    /// Process incoming data - checks ready state and handles message processing
+    private func processIncomingData(_ data: Data) {
+        // Only process messages if we're ready
+        guard isReady else {
+            internalLogger.debug("Received data but not ready to process - buffering")
+            return
+        }
+        
+        internalLogger.info("Received data: \(data.count) bytes")
+        
+        // Try to parse as JSON to detect message type
+        if let jsonString = String(data: data, encoding: .utf8) {
+            internalLogger.debug("Raw message: \(jsonString)")
+            
+            // Check if this looks like a JSON-RPC message
+            if jsonString.contains("\"jsonrpc\"") {
+                internalLogger.info("Detected JSON-RPC message")
+                
+                // Try to extract method name for better logging
+                if let methodRange = jsonString.range(of: "\"method\"\\s*:\\s*\"([^\"]+)\"", options: .regularExpression) {
+                    let methodString = String(jsonString[methodRange])
+                    internalLogger.info("Message method: \(methodString)")
+                }
+            }
+        }
+        
+        // Yield the data to the continuation
+        yieldData(data)
     }
     
     /// Helper method to yield data to the continuation (actor-isolated)
