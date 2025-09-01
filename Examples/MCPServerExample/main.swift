@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import SwiftAgentKitMCP
+import EasyJSON
 
 // Example: Creating an MCP Server with tools
 @main
@@ -23,11 +24,16 @@ struct MCPServerExample {
         await server.registerTool(
             name: "hello_world",
             description: "A simple greeting tool",
-            inputSchema: [
-                "type": "object",
-                "properties": "{\"name\": {\"type\": \"string\", \"description\": \"Name to greet\"}}",
-                "required": "[\"name\"]"
-            ]
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "name": .object([
+                        "type": .string("string"),
+                        "description": .string("Name to greet")
+                    ])
+                ]),
+                "required": .array([.string("name")])
+            ])
         ) { args in
             let name: String
             if case .string(let value) = args["name"] {
@@ -41,11 +47,20 @@ struct MCPServerExample {
         await server.registerTool(
             name: "add_numbers",
             description: "Add two numbers together",
-            inputSchema: [
-                "type": "object",
-                "properties": "{\"a\": {\"type\": \"number\", \"description\": \"First number\"}, \"b\": {\"type\": \"number\", \"description\": \"Second number\"}}",
-                "required": "[\"a\", \"b\"]"
-            ]
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "a": .object([
+                        "type": .string("number"),
+                        "description": .string("First number")
+                    ]),
+                    "b": .object([
+                        "type": .string("number"),
+                        "description": .string("Second number")
+                    ])
+                ]),
+                "required": .array([.string("a"), .string("b")])
+            ])
         ) { args in
             let a: Double
             let b: Double
@@ -73,11 +88,16 @@ struct MCPServerExample {
         await server.registerTool(
             name: "get_environment",
             description: "Get environment variable value",
-            inputSchema: [
-                "type": "object",
-                "properties": "{\"variable\": {\"type\": \"string\", \"description\": \"Environment variable name\"}}",
-                "required": "[\"variable\"]"
-            ]
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "variable": .object([
+                        "type": .string("string"),
+                        "description": .string("Environment variable name")
+                    ])
+                ]),
+                "required": .array([.string("variable")])
+            ])
         ) { args in
             let variableName: String
             if case .string(let value) = args["variable"] {

@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import SwiftAgentKitMCP
+import EasyJSON
 
 @Suite struct MCPServerTests {
     
@@ -19,11 +20,16 @@ import SwiftAgentKitMCP
         await server.registerTool(
             name: "test_tool",
             description: "A test tool",
-            inputSchema: [
-                "type": "object",
-                "properties": "{\"input\": {\"type\": \"string\", \"description\": \"Input parameter\"}}",
-                "required": "[\"input\"]"
-            ]
+            inputSchema: .object([
+                "type": .string("object"),
+                "properties": .object([
+                    "input": .object([
+                        "type": .string("string"),
+                        "description": .string("Input parameter")
+                    ])
+                ]),
+                "required": .array([.string("input")])
+            ])
         ) { args in
             let input: String
             if case .string(let value) = args["input"] {

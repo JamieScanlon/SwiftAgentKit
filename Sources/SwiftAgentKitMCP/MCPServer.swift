@@ -48,7 +48,7 @@ public actor MCPServer {
     public func registerTool(
         name: String,
         description: String,
-        inputSchema: [String: String],
+        inputSchema: JSON,
         handler: @escaping @Sendable ([String: JSON]) async throws -> MCPToolResult
     ) async {
         await toolRegistry.registerTool(

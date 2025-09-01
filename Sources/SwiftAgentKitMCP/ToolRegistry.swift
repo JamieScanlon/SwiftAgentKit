@@ -28,12 +28,12 @@ public actor ToolRegistry {
     /// - Parameters:
     ///   - name: The name of the tool
     ///   - description: Description of what the tool does
-    ///   - inputSchema: JSON schema for the tool's input parameters
+    ///   - inputSchema: JSON schema for the tool's input parameters as EasyJSON
     ///   - handler: The closure that executes the tool
     public func registerTool(
         name: String,
         description: String,
-        inputSchema: [String: String],
+        inputSchema: JSON,
         handler: @escaping @Sendable ([String: JSON]) async throws -> MCPToolResult
     ) {
         let tool = RegisteredTool(
@@ -148,7 +148,7 @@ public actor ToolRegistry {
 private struct RegisteredTool {
     let name: String
     let description: String
-    let inputSchema: [String: String]
+    let inputSchema: JSON
     let handler: @Sendable ([String: JSON]) async throws -> MCPToolResult
     
     /// Convert to MCP Tool format
@@ -161,34 +161,25 @@ private struct RegisteredTool {
     }
     
     /// Convert the input schema to MCP format
-    private func convertToMCPInputSchema(_ schema: [String: String]) -> MCP.Value {
-        // This is a simplified conversion - in practice, you might want more sophisticated schema conversion
-        var mcpSchema: [String: MCP.Value] = [:]
-        
-        for (key, value) in schema {
-            mcpSchema[key] = .string(value)
-        }
-        
-        return .object(mcpSchema)
+    private func convertToMCPInputSchema(_ schema: JSON) -> MCP.Value {
+        return convertJSONToMCPValue(schema)
     }
     
-    /// Convert a value to MCP format
-    private func convertValueToMCP(_ value: Any) -> MCP.Value {
-        switch value {
-        case let string as String:
+    /// Convert EasyJSON to MCP.Value
+    private func convertJSONToMCPValue(_ json: JSON) -> MCP.Value {
+        switch json {
+        case .string(let string):
             return .string(string)
-        case let int as Int:
+        case .integer(let int):
             return .int(int)
-        case let double as Double:
+        case .double(let double):
             return .double(double)
-        case let bool as Bool:
+        case .boolean(let bool):
             return .bool(bool)
-        case let array as [Any]:
-            return .array(array.map { convertValueToMCP($0) })
-        case let dictionary as [String: Any]:
-            return .object(dictionary.mapValues { convertValueToMCP($0) })
-        default:
-            return .string(String(describing: value))
+        case .array(let array):
+            return .array(array.map { convertJSONToMCPValue($0) })
+        case .object(let object):
+            return .object(object.mapValues { convertJSONToMCPValue($0) })
         }
     }
 }
