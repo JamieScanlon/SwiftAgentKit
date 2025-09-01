@@ -126,10 +126,10 @@ public actor MCPServer {
         // Start the MCP server
         try await mcpServer?.start(transport: transport)
         
-
-        
         isRunning = true
         logger.info("MCP server started successfully")
+
+        await mcpServer?.waitUntilCompleted()
     }
     
     /// Stop the MCP server
