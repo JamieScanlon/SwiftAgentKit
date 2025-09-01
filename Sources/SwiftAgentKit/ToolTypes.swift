@@ -120,3 +120,5 @@ public struct ToolManager: Sendable {
         ToolManager(providers: providers + [provider])
     }
 } 
+
+

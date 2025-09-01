@@ -2,38 +2,61 @@ import Foundation
 import Logging
 import SwiftAgentKitMCP
 import EasyJSON
+import SwiftAgentKit
 
-// Example: Creating an MCP Server with tools
 @main
 struct MCPServerExample {
-    static func main() async {
-        // Set up logging to stderr to avoid interfering with MCP protocol on stdout
+    static func main() async throws {
+        // Configure logging
         LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardError(label: label)
-            handler.logLevel = .debug  // Set to debug level for more detailed logging
+            var handler = StreamLogHandler.standardOutput(label: label)
+            handler.logLevel = .info
             return handler
         }
         
-        let logger = Logger(label: "MCPServerExample")
-        logger.info("=== SwiftAgentKit MCP Server Example ===")
+        print("=== SwiftAgentKit MCP Server Example ===")
         
-        // Create an MCP server
-        let server = MCPServer(name: "example-tool-server", version: "1.0.0")
+        // Example 1: Default stdio transport (most common for MCP servers)
+        let stdioServer = MCPServer(name: "example-tool-server", version: "1.0.0")
+        
+        // Example 2: HTTP client transport (for connecting to remote MCP servers)
+        let httpServer = MCPServer(
+            name: "http-example-server", 
+            version: "1.0.0",
+            transportType: .httpClient(
+                endpoint: URL(string: "http://localhost:8080")!,
+                streaming: true,
+                sseInitializationTimeout: 10
+            )
+        )
+        
+        // Example 3: Network transport (for TCP/UDP connections)
+        // Note: This requires creating an NWConnection first
+        // let connection = NWConnection(host: "localhost", port: 8080, using: .tcp)
+        // let networkServer = MCPServer(
+        //     name: "network-example-server",
+        //     version: "1.0.0", 
+        //     transportType: .network(connection: connection)
+        // )
+        
+        // Use the stdio server for this example
+        let server = stdioServer
         
         // Register some example tools
         await server.registerTool(
-            name: "hello_world",
-            description: "A simple greeting tool",
-            inputSchema: .object([
-                "type": .string("object"),
-                "properties": .object([
-                    "name": .object([
-                        "type": .string("string"),
-                        "description": .string("Name to greet")
-                    ])
-                ]),
-                "required": .array([.string("name")])
-            ])
+            toolDefinition: ToolDefinition(
+                name: "hello_world",
+                description: "A simple greeting tool",
+                parameters: [
+                    ToolDefinition.Parameter(
+                        name: "name",
+                        description: "Name to greet",
+                        type: "string",
+                        required: true
+                    )
+                ],
+                type: .mcpTool
+            )
         ) { args in
             let name: String
             if case .string(let value) = args["name"] {
@@ -45,22 +68,25 @@ struct MCPServerExample {
         }
         
         await server.registerTool(
-            name: "add_numbers",
-            description: "Add two numbers together",
-            inputSchema: .object([
-                "type": .string("object"),
-                "properties": .object([
-                    "a": .object([
-                        "type": .string("number"),
-                        "description": .string("First number")
-                    ]),
-                    "b": .object([
-                        "type": .string("number"),
-                        "description": .string("Second number")
-                    ])
-                ]),
-                "required": .array([.string("a"), .string("b")])
-            ])
+            toolDefinition: ToolDefinition(
+                name: "add_numbers",
+                description: "Add two numbers together",
+                parameters: [
+                    ToolDefinition.Parameter(
+                        name: "a",
+                        description: "First number",
+                        type: "number",
+                        required: true
+                    ),
+                    ToolDefinition.Parameter(
+                        name: "b",
+                        description: "Second number",
+                        type: "number",
+                        required: true
+                    )
+                ],
+                type: .mcpTool
+            )
         ) { args in
             let a: Double
             let b: Double
@@ -70,7 +96,7 @@ struct MCPServerExample {
             } else if case .integer(let value) = args["a"] {
                 a = Double(value)
             } else {
-                a = 0
+                return .error("INVALID_PARAMETER", "Parameter 'a' must be a number")
             }
             
             if case .double(let value) = args["b"] {
@@ -78,7 +104,7 @@ struct MCPServerExample {
             } else if case .integer(let value) = args["b"] {
                 b = Double(value)
             } else {
-                b = 0
+                return .error("INVALID_PARAMETER", "Parameter 'b' must be a number")
             }
             
             let result = a + b
@@ -86,53 +112,43 @@ struct MCPServerExample {
         }
         
         await server.registerTool(
-            name: "get_environment",
-            description: "Get environment variable value",
-            inputSchema: .object([
-                "type": .string("object"),
-                "properties": .object([
-                    "variable": .object([
-                        "type": .string("string"),
-                        "description": .string("Environment variable name")
-                    ])
-                ]),
-                "required": .array([.string("variable")])
-            ])
+            toolDefinition: ToolDefinition(
+                name: "get_environment",
+                description: "Get environment variable value",
+                parameters: [
+                    ToolDefinition.Parameter(
+                        name: "variable",
+                        description: "Environment variable name",
+                        type: "string",
+                        required: true
+                    )
+                ],
+                type: .mcpTool
+            )
         ) { args in
-            let variableName: String
+            let variable: String
             if case .string(let value) = args["variable"] {
-                variableName = value
+                variable = value
             } else {
-                variableName = ""
+                return .error("INVALID_PARAMETER", "Parameter 'variable' must be a string")
             }
-            let value = ProcessInfo.processInfo.environment[variableName] ?? "Not found"
-            return .success("\(variableName) = \(value)")
+            
+            let value = ProcessInfo.processInfo.environment[variable] ?? "Not found"
+            return .success("\(variable) = \(value)")
         }
         
-        logger.info("Registered 3 tools: hello_world, add_numbers, get_environment")
+        // Print registered tools
+        let toolNames = ["hello_world", "add_numbers", "get_environment"]
+        print("Registered \(toolNames.count) tools: \(toolNames.joined(separator: ", "))")
         
-        // Print diagnostic information
-        let diagnosticInfo = await server.diagnosticInfo()
-        logger.info("Server diagnostic info: \(diagnosticInfo)")
+        // Print diagnostic info
+        let info = await server.diagnosticInfo()
+        print("Server diagnostic info: \(info)")
         
-        logger.info("Starting MCP server...")
+        print("Starting MCP server...")
         
-        do {
-            // Start the server
-            try await server.start()
-            
-            logger.info("✓ MCP server started successfully")
-            logger.info("Server is now listening on stdio")
-            logger.info("You can connect to this server using an MCP client")
-            logger.info("Press Ctrl+C to stop the server")
-            
-            // Keep the server running
-            try await Task.sleep(nanoseconds: UInt64.max)
-            
-        } catch {
-            logger.error("Failed to start MCP server: \(error)")
-            exit(1)
-        }
+        // Start the server
+        try await server.start()
     }
 }
 

@@ -10,6 +10,29 @@ import Logging
 import MCP
 import SwiftAgentKit
 import EasyJSON
+import Network
+/// Available transport types for MCP server
+public enum TransportType {
+    case stdio
+    case httpClient(endpoint: URL, streaming: Bool = true, sseInitializationTimeout: TimeInterval = 10)
+    case network(connection: NWConnection)
+    
+    /// Create the appropriate transport instance
+    func createTransport() -> any MCP.Transport {
+        switch self {
+        case .stdio:
+            return MCP.StdioTransport()
+        case .httpClient(let endpoint, let streaming, let timeout):
+            return MCP.HTTPClientTransport(
+                endpoint: endpoint,
+                streaming: streaming,
+                sseInitializationTimeout: timeout
+            )
+        case .network(let connection):
+            return MCP.NetworkTransport(connection: connection)
+        }
+    }
+}
 
 /// MCP Server implementation that leverages the MCP library for protocol handling
 public actor MCPServer {
@@ -18,6 +41,7 @@ public actor MCPServer {
     // MARK: - Configuration
     public let name: String
     public let version: String
+    private let transportType: TransportType
     
     // MARK: - State
     private var isRunning = false
@@ -30,34 +54,41 @@ public actor MCPServer {
     
     // MARK: - Initialization
     
-    public init(name: String, version: String = "1.0.0") {
+    /// Initialize an MCP server with the specified name, version, and transport type
+    /// - Parameters:
+    ///   - name: The name of the server
+    ///   - version: The version of the server (defaults to "1.0.0")
+    ///   - transportType: The type of transport to use (defaults to stdio)
+    public init(name: String, version: String = "1.0.0", transportType: TransportType = .stdio) {
         self.name = name
         self.version = version
+        self.transportType = transportType
         self.toolRegistry = ToolRegistry()
         self.environment = ProcessInfo.processInfo.environment
     }
     
     // MARK: - Public Interface
     
-    /// Register a tool with the server
+
+    
+    /// Register a tool with the server using a ToolDefinition
     /// - Parameters:
-    ///   - name: The name of the tool
-    ///   - description: Description of what the tool does
-    ///   - inputSchema: JSON schema for the tool's input parameters
+    ///   - toolDefinition: The tool definition containing name, description, and parameters
     ///   - handler: The closure that executes the tool
     public func registerTool(
-        name: String,
-        description: String,
-        inputSchema: JSON,
+        toolDefinition: ToolDefinition,
         handler: @escaping @Sendable ([String: JSON]) async throws -> MCPToolResult
     ) async {
+        // Convert ToolDefinition to JSON schema format
+        let inputSchema = toolDefinition.toInputSchemaJSON()
+        
         await toolRegistry.registerTool(
-            name: name,
-            description: description,
+            name: toolDefinition.name,
+            description: toolDefinition.description,
             inputSchema: inputSchema,
             handler: handler
         )
-        logger.info("Registered tool: \(name)")
+        logger.info("Registered tool: \(toolDefinition.name)")
     }
     
     /// Get the current environment variables (useful for custom authentication)
@@ -67,7 +98,7 @@ public actor MCPServer {
     
     /// Start the MCP server
     public func start() async throws {
-        try await start(transport: MCP.StdioTransport())
+        try await start(transport: transportType.createTransport())
     }
     
     /// Start the MCP server with a custom transport
@@ -177,6 +208,35 @@ public actor MCPServer {
             // For errors, we return text content but mark it as an error
             return .text("Error [\(code)]: \(message)")
         }
+    }
+    
+
+}
+
+// MARK: - ToolDefinition Extensions
+
+extension ToolDefinition {
+    /// Convert the tool definition to a JSON schema format suitable for MCP input schema
+    func toInputSchemaJSON() -> JSON {
+        var properties: [String: JSON] = [:]
+        var required: [JSON] = []
+        
+        for parameter in parameters {
+            properties[parameter.name] = .object([
+                "type": .string(parameter.type),
+                "description": .string(parameter.description)
+            ])
+            
+            if parameter.required {
+                required.append(.string(parameter.name))
+            }
+        }
+        
+        return .object([
+            "type": .string("object"),
+            "properties": .object(properties),
+            "required": .array(required)
+        ])
     }
 }
 

@@ -6,7 +6,7 @@ This module provides tools for building MCP (Model Context Protocol) servers in 
 
 - **MCPServer**: Main server class that handles JSON-RPC parsing and routing
 - **ToolRegistry**: Server-side tool management and execution
-- **ServerTransport**: Stdio-based transport for server communication
+
 - **Automatic MCP Protocol Handling**: Built-in support for MCP methods (initialize, tools/list, tools/call)
 - **Environment Variable Access**: Built-in access to environment variables for custom authentication
 - **Comprehensive Error Handling**: Standard JSON-RPC error codes with extensible custom errors
@@ -18,7 +18,7 @@ This module provides tools for building MCP (Model Context Protocol) servers in 
 ```swift
 import SwiftAgentKitMCP
 
-// Create an MCP server
+// Create an MCP server with default stdio transport
 let server = MCPServer(name: "my-tool-server", version: "1.0.0")
 
 // Register tools
@@ -45,6 +45,49 @@ try await server.start()
 
 // Keep the server running
 try await Task.sleep(nanoseconds: UInt64.max)
+```
+
+### Transport Configuration
+
+The MCPServer supports different transport types for various deployment scenarios:
+
+#### Stdio Transport (Default)
+```swift
+// Default stdio transport - most common for MCP servers
+let server = MCPServer(name: "my-tool-server", version: "1.0.0")
+// or explicitly:
+let server = MCPServer(name: "my-tool-server", version: "1.0.0", transportType: .stdio)
+```
+
+#### HTTP Client Transport
+```swift
+// HTTP client transport for connecting to remote MCP servers
+let server = MCPServer(
+    name: "http-client-server",
+    version: "1.0.0",
+    transportType: .httpClient(
+        endpoint: URL(string: "http://localhost:8080")!,
+        streaming: true,
+        sseInitializationTimeout: 10
+    )
+)
+```
+
+#### Network Transport
+```swift
+import Network
+
+// Network transport for TCP/UDP connections
+let connection = NWConnection(
+    host: NWEndpoint.Host("localhost"),
+    port: NWEndpoint.Port(8080)!,
+    using: .tcp
+)
+let server = MCPServer(
+    name: "network-server",
+    version: "1.0.0",
+    transportType: .network(connection: connection)
+)
 ```
 
 ### Tool Registration
