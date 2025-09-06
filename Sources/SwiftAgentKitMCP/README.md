@@ -5,9 +5,12 @@ This module provides tools for building MCP (Model Context Protocol) servers in 
 ## Features
 
 - **MCPServer**: Main server class that handles JSON-RPC parsing and routing
+- **MCPClient**: Client for connecting to MCP servers with built-in message filtering
 - **ToolRegistry**: Server-side tool management and execution
+- **MessageFilter**: Utility for filtering log messages from MCP protocol communication
 
 - **Automatic MCP Protocol Handling**: Built-in support for MCP methods (initialize, tools/list, tools/call)
+- **Message Filtering**: Prevents log interference by filtering non-JSON-RPC messages
 - **Environment Variable Access**: Built-in access to environment variables for custom authentication
 - **Comprehensive Error Handling**: Standard JSON-RPC error codes with extensible custom errors
 
@@ -274,11 +277,66 @@ return .error("AUTH_FAILED", "Invalid credentials")
 return .error("RATE_LIMITED", "Too many requests")
 ```
 
+## Message Filtering
+
+The MCPClient includes built-in message filtering to prevent log interference issues. Many MCP servers output log messages to stdout, which can interfere with JSON-RPC protocol communication.
+
+### Problem
+
+MCP servers use stdio for protocol communication, but many also output log messages (info, warnings, debug) to stdout. The MCPClient receives these log messages and tries to parse them as JSON-RPC protocol messages, causing "[MCP] Unexpected message received by client" warnings.
+
+### Solution
+
+The MCPClient automatically filters incoming messages to only process valid JSON-RPC protocol messages:
+
+```swift
+// Create client with default message filtering (enabled)
+let client = MCPClient(
+    name: "my-client",
+    version: "1.0.0",
+    messageFilterConfig: .default
+)
+
+// Create client with verbose logging of filtered messages
+let verboseClient = MCPClient(
+    name: "my-client",
+    version: "1.0.0",
+    messageFilterConfig: .verbose
+)
+
+// Create client with filtering disabled
+let unfilteredClient = MCPClient(
+    name: "my-client",
+    version: "1.0.0",
+    messageFilterConfig: .disabled
+)
+```
+
+### Message Filter Configuration
+
+```swift
+let config = MessageFilter.Configuration(
+    enabled: true,                    // Enable/disable filtering
+    logFilteredMessages: false,      // Log filtered messages for debugging
+    filteredMessageLogLevel: .debug  // Log level for filtered messages
+)
+```
+
+### Benefits
+
+- ✅ Solves log interference at the protocol level
+- ✅ Works with any MCP server regardless of logging behavior
+- ✅ No need to modify server configurations
+- ✅ More robust and maintainable solution
+- ✅ Filters out common log patterns automatically
+
 ## Transport
 
 Currently supports stdio transport for easy integration with MCP clients. The server reads from stdin and writes to stdout, making it compatible with standard MCP client implementations.
 
-## Example
+## Examples
+
+### MCP Server Example
 
 See `Examples/MCPServerExample/main.swift` for a complete working example that demonstrates:
 
@@ -286,6 +344,15 @@ See `Examples/MCPServerExample/main.swift` for a complete working example that d
 - Tool registration with different parameter types
 - Environment variable access
 - Server startup and lifecycle management
+
+### Message Filtering Example
+
+See `Examples/MCPExample/message_filtering_example.swift` for an example that demonstrates:
+
+- MCP client creation with message filtering
+- How message filtering prevents log interference
+- Different filtering configurations
+- Benefits of the filtering solution
 
 ## Integration with Existing MCP Clients
 

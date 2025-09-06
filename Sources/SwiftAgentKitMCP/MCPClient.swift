@@ -41,11 +41,18 @@ public actor MCPClient {
     public private(set) var resources: [Resource] = []
     public private(set) var prompts: [Prompt] = []
     private let logger = Logger(label: "MCPClient")
+    private let messageFilterConfig: MessageFilter.Configuration
     
-    public init(name: String, version: String = "1.0", isStrict: Bool = false) {
+    public init(
+        name: String, 
+        version: String = "1.0", 
+        isStrict: Bool = false,
+        messageFilterConfig: MessageFilter.Configuration = .default
+    ) {
         self.name = name
         self.version = version
         self.isStrict = isStrict
+        self.messageFilterConfig = messageFilterConfig
         // Client will be created when connecting to transport
     }
     
@@ -72,7 +79,7 @@ public actor MCPClient {
     ///   - inPipe: Input pipe for receiving data from the server
     ///   - outPipe: Output pipe for sending data to the server
     public func connect(inPipe: Pipe, outPipe: Pipe) async throws {
-        let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe)
+        let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe, logger: logger)
         try await connect(transport: transport)
         try await getTools()
     }
