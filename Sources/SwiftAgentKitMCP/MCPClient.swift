@@ -24,6 +24,9 @@ public actor MCPClient {
     public enum MCPClientError: LocalizedError {
         case notConnected
         case connectionTimeout(TimeInterval)
+        case pipeError(String)
+        case processTerminated(String)
+        case connectionFailed(String)
         
         public var errorDescription: String? {
             switch self {
@@ -31,6 +34,12 @@ public actor MCPClient {
                 return "MCP client is not connected"
             case .connectionTimeout(let timeout):
                 return "MCP client connection timed out after \(timeout) seconds"
+            case .pipeError(let message):
+                return "Pipe error: \(message)"
+            case .processTerminated(let message):
+                return "Process terminated: \(message)"
+            case .connectionFailed(let message):
+                return "Connection failed: \(message)"
             }
         }
     }
@@ -65,36 +74,63 @@ public actor MCPClient {
     /// Connect to an MCP server using the provided transport
     /// - Parameter transport: The transport to use for communication
     public func connect(transport: Transport) async throws {
+        // Set up signal handling for SIGPIPE to prevent process termination
+        let originalSIGPIPEHandler = signal(SIGPIPE, SIG_IGN)
+        defer {
+            signal(SIGPIPE, originalSIGPIPEHandler)
+        }
+        
         let configuration = Client.Configuration(strict: isStrict)
         let newClient = Client(name: name, version: version, configuration: configuration)
         
-        // Connect the client to the transport with timeout
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            // Add the connection task
-            group.addTask {
-                try await newClient.connect(transport: transport)
+        do {
+            // Connect the client to the transport with timeout
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                // Add the connection task
+                group.addTask {
+                    try await newClient.connect(transport: transport)
+                }
+                
+                // Add the timeout task
+                group.addTask {
+                    try await Task.sleep(for: .seconds(self.connectionTimeout))
+                    throw MCPClientError.connectionTimeout(self.connectionTimeout)
+                }
+                
+                // Wait for either connection or timeout
+                try await group.next()
+                
+                // Cancel remaining tasks
+                group.cancelAll()
             }
             
-            // Add the timeout task
-            group.addTask {
-                try await Task.sleep(for: .seconds(self.connectionTimeout))
-                throw MCPClientError.connectionTimeout(self.connectionTimeout)
+            // Store the connected client
+            self.client = newClient
+            
+            // Get capabilities after connection
+            self.capabilities = await newClient.capabilities
+            state = .connected
+            logger.info("MCP client '\(name)' connected successfully")
+        } catch {
+            // Convert pipe errors to proper MCP errors
+            let nsError = error as NSError
+            switch nsError.code {
+            case Int(EPIPE):
+                throw MCPClientError.pipeError("Broken pipe during transport connection: \(nsError.localizedDescription)")
+            case Int(ECONNREFUSED):
+                throw MCPClientError.connectionFailed("Connection refused: \(nsError.localizedDescription)")
+            case Int(ECONNRESET):
+                throw MCPClientError.connectionFailed("Connection reset by peer: \(nsError.localizedDescription)")
+            case Int(EAGAIN), Int(EWOULDBLOCK):
+                throw MCPClientError.connectionFailed("I/O operation would block: \(nsError.localizedDescription)")
+            default:
+                // Check if it's a timeout error we already handled
+                if case MCPClientError.connectionTimeout = error {
+                    throw error
+                }
+                throw MCPClientError.connectionFailed("Transport connection error: \(nsError.localizedDescription)")
             }
-            
-            // Wait for either connection or timeout
-            try await group.next()
-            
-            // Cancel remaining tasks
-            group.cancelAll()
         }
-        
-        // Store the connected client
-        self.client = newClient
-        
-        // Get capabilities after connection
-        self.capabilities = await newClient.capabilities
-        state = .connected
-        logger.info("MCP client '\(name)' connected successfully")
     }
     
     /// Connect to an MCP server using stdio pipes
@@ -102,9 +138,36 @@ public actor MCPClient {
     ///   - inPipe: Input pipe for receiving data from the server
     ///   - outPipe: Output pipe for sending data to the server
     public func connect(inPipe: Pipe, outPipe: Pipe) async throws {
-        let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe, logger: logger)
-        try await connect(transport: transport)
-        try await getTools()
+        // Set up signal handling for SIGPIPE to prevent process termination
+        let originalSIGPIPEHandler = signal(SIGPIPE, SIG_IGN)
+        defer {
+            signal(SIGPIPE, originalSIGPIPEHandler)
+        }
+        
+        do {
+            let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe, logger: logger)
+            try await connect(transport: transport)
+            try await getTools()
+        } catch {
+            // Convert pipe errors to proper MCP errors
+            let nsError = error as NSError
+            switch nsError.code {
+            case Int(EPIPE):
+                throw MCPClientError.pipeError("Broken pipe during connection: \(nsError.localizedDescription)")
+            case Int(ECONNREFUSED):
+                throw MCPClientError.connectionFailed("Connection refused: \(nsError.localizedDescription)")
+            case Int(ECONNRESET):
+                throw MCPClientError.connectionFailed("Connection reset by peer: \(nsError.localizedDescription)")
+            case Int(EAGAIN), Int(EWOULDBLOCK):
+                throw MCPClientError.connectionFailed("I/O operation would block: \(nsError.localizedDescription)")
+            default:
+                // Check if it's a timeout error we already handled
+                if case MCPClientError.connectionTimeout = error {
+                    throw error
+                }
+                throw MCPClientError.connectionFailed("Connection error: \(nsError.localizedDescription)")
+            }
+        }
     }
     
 
@@ -209,6 +272,7 @@ public actor MCPClient {
     
     private var client: Client?
     private var capabilities: Client.Capabilities?
+    private var process: Process?
 }
 
 

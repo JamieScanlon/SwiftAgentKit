@@ -96,4 +96,22 @@ import SwiftAgentKitMCP
         
         #expect(await client.connectionTimeout == 30.0)
     }
+    
+    @Test("MCPClientError cases have proper error descriptions")
+    func testMCPClientErrorDescriptions() async throws {
+        let timeoutError = MCPClient.MCPClientError.connectionTimeout(15.0)
+        #expect(timeoutError.errorDescription == "MCP client connection timed out after 15.0 seconds")
+        
+        let pipeError = MCPClient.MCPClientError.pipeError("Broken pipe")
+        #expect(pipeError.errorDescription == "Pipe error: Broken pipe")
+        
+        let processError = MCPClient.MCPClientError.processTerminated("Process exited with code 141")
+        #expect(processError.errorDescription == "Process terminated: Process exited with code 141")
+        
+        let connectionError = MCPClient.MCPClientError.connectionFailed("Connection refused")
+        #expect(connectionError.errorDescription == "Connection failed: Connection refused")
+        
+        let notConnectedError = MCPClient.MCPClientError.notConnected
+        #expect(notConnectedError.errorDescription == "MCP client is not connected")
+    }
 } 

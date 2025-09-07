@@ -97,13 +97,40 @@ public actor MCPManager {
         let serverManager = MCPServerManager()
         let serverPipes = try await serverManager.bootServers(config: config)
         
-        // Create clients for each server
+        // Create clients for each server with error handling
+        var failedServers: [String] = []
+        
         for (serverName, pipes) in serverPipes {
-            let client = MCPClient(name: serverName, version: "0.1.3", connectionTimeout: connectionTimeout)
-            try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
-            try await client.getTools()
-            clients.append(client)
+            do {
+                let client = MCPClient(name: serverName, version: "0.1.3", connectionTimeout: connectionTimeout)
+                try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+                try await client.getTools()
+                clients.append(client)
+                logger.info("Successfully connected to MCP server: \(serverName)")
+            } catch let mcpError as MCPClient.MCPClientError {
+                switch mcpError {
+                case .connectionTimeout(let timeout):
+                    logger.warning("MCP server '\(serverName)' connection timed out after \(timeout) seconds")
+                case .pipeError(let message):
+                    logger.warning("MCP server '\(serverName)' pipe error: \(message)")
+                case .processTerminated(let message):
+                    logger.warning("MCP server '\(serverName)' process terminated: \(message)")
+                case .connectionFailed(let message):
+                    logger.warning("MCP server '\(serverName)' connection failed: \(message)")
+                case .notConnected:
+                    logger.warning("MCP server '\(serverName)' not connected")
+                }
+                failedServers.append(serverName)
+            } catch {
+                logger.error("Failed to connect to MCP server '\(serverName)': \(error)")
+                failedServers.append(serverName)
+            }
         }
+        
+        if !failedServers.isEmpty {
+            logger.warning("Failed to connect to \(failedServers.count) MCP servers: \(failedServers.joined(separator: ", "))")
+        }
+        
         await buildToolsJson()
     }
     

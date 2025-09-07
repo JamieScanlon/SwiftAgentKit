@@ -54,9 +54,29 @@ func newMCPArchitectureExample() async {
             // Use a shorter timeout for problematic servers (e.g., Docker-based GitHub MCP server)
             let client = MCPClient(name: serverName, version: "1.0.0", connectionTimeout: 15.0)
             
-            // Connect using the new transport-based approach
-            try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
-            logger.info("✓ Connected to server: \(serverName)")
+            do {
+                // Connect using the new transport-based approach with improved error handling
+                // This includes SIGPIPE signal handling to prevent process termination (exit code 141)
+                try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+                logger.info("✓ Connected to server: \(serverName)")
+            } catch let mcpError as MCPClient.MCPClientError {
+                switch mcpError {
+                case .connectionTimeout(let timeout):
+                    logger.warning("⏰ Server '\(serverName)' connection timed out after \(timeout) seconds")
+                case .pipeError(let message):
+                    logger.warning("🔌 Server '\(serverName)' pipe error: \(message)")
+                case .processTerminated(let message):
+                    logger.warning("💀 Server '\(serverName)' process terminated: \(message)")
+                case .connectionFailed(let message):
+                    logger.warning("❌ Server '\(serverName)' connection failed: \(message)")
+                case .notConnected:
+                    logger.warning("🔌 Server '\(serverName)' not connected")
+                }
+                continue
+            } catch {
+                logger.error("❌ Failed to connect to server '\(serverName)': \(error)")
+                continue
+            }
             
             // Check available tools (tools will be populated when first tool call is made)
             let _ = await client.tools.count
