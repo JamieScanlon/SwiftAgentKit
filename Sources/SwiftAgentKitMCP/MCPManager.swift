@@ -16,8 +16,11 @@ import SwiftAgentKit
 /// Dispatches tool calls to clients
 public actor MCPManager {
     private let logger = Logger(label: "MCPManager")
+    private let connectionTimeout: TimeInterval
     
-    public init() {}
+    public init(connectionTimeout: TimeInterval = 30.0) {
+        self.connectionTimeout = connectionTimeout
+    }
     
     public enum State {
         case notReady
@@ -96,7 +99,7 @@ public actor MCPManager {
         
         // Create clients for each server
         for (serverName, pipes) in serverPipes {
-            let client = MCPClient(name: serverName, version: "0.1.3")
+            let client = MCPClient(name: serverName, version: "0.1.3", connectionTimeout: connectionTimeout)
             try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
             try await client.getTools()
             clients.append(client)

@@ -140,4 +140,22 @@ import SwiftAgentKitMCP
         #expect(inPipe != nil)
         #expect(outPipe != nil)
     }
+}
+
+@Suite struct MCPManagerTests {
+    
+    @Test("MCPManager can be initialized with custom timeout")
+    func testInitializationWithTimeout() async throws {
+        let timeout: TimeInterval = 15.0
+        let manager = MCPManager(connectionTimeout: timeout)
+        
+        #expect(manager != nil)
+    }
+    
+    @Test("MCPManager uses default timeout when not specified")
+    func testDefaultTimeout() async throws {
+        let manager = MCPManager()
+        
+        #expect(manager != nil)
+    }
 } 

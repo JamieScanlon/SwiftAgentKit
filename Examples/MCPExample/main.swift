@@ -31,6 +31,14 @@ func newMCPArchitectureExample() async {
     // Step 2: Use MCPServerManager to boot servers
     let serverManager = MCPServerManager()
     
+    // Alternative: Use MCPManager with custom timeout for all clients
+    // let mcpManager = MCPManager(connectionTimeout: 15.0)
+    // try await mcpManager.initialize(configFileURL: configURL)
+    
+    // Alternative: Use SwiftAgentKitOrchestrator with custom MCP timeout
+    // let config = OrchestratorConfig(mcpEnabled: true, mcpConnectionTimeout: 15.0)
+    // let orchestrator = SwiftAgentKitOrchestrator(llm: yourLLM, config: config)
+    
     do {
         logger.info("Booting MCP servers using MCPServerManager...")
         let serverPipes = try await serverManager.bootServers(config: config)
@@ -42,8 +50,9 @@ func newMCPArchitectureExample() async {
         for (serverName, pipes) in serverPipes {
             logger.info("Creating MCPClient for server: \(serverName)")
             
-            // Create client with name and version
-            let client = MCPClient(name: serverName, version: "1.0.0")
+            // Create client with name, version, and custom timeout
+            // Use a shorter timeout for problematic servers (e.g., Docker-based GitHub MCP server)
+            let client = MCPClient(name: serverName, version: "1.0.0", connectionTimeout: 15.0)
             
             // Connect using the new transport-based approach
             try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)

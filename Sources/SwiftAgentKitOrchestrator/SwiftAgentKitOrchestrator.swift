@@ -13,15 +13,19 @@ public struct OrchestratorConfig: Sendable {
     public let mcpEnabled: Bool
     /// Whether A2A (Agent-to-Agent) communication is enabled
     public let a2aEnabled: Bool
+    /// Connection timeout for MCP servers in seconds
+    public let mcpConnectionTimeout: TimeInterval
     
     public init(
         streamingEnabled: Bool = false,
         mcpEnabled: Bool = false,
-        a2aEnabled: Bool = false
+        a2aEnabled: Bool = false,
+        mcpConnectionTimeout: TimeInterval = 30.0
     ) {
         self.streamingEnabled = streamingEnabled
         self.mcpEnabled = mcpEnabled
         self.a2aEnabled = a2aEnabled
+        self.mcpConnectionTimeout = mcpConnectionTimeout
     }
 }
 
@@ -76,7 +80,7 @@ public actor SwiftAgentKitOrchestrator {
     ) {
         self.llm = llm
         self.config = config
-        self.mcpManager = mcpManager
+        self.mcpManager = mcpManager ?? (config.mcpEnabled ? MCPManager(connectionTimeout: config.mcpConnectionTimeout) : nil)
         self.a2aManager = a2aManager
         self.logger = logger ?? Logger(label: "SwiftAgentKitOrchestrator")
     }

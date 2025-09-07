@@ -23,11 +23,14 @@ public actor MCPClient {
     
     public enum MCPClientError: LocalizedError {
         case notConnected
+        case connectionTimeout(TimeInterval)
         
         public var errorDescription: String? {
             switch self {
             case .notConnected:
                 return "MCP client is not connected"
+            case .connectionTimeout(let timeout):
+                return "MCP client connection timed out after \(timeout) seconds"
             }
         }
     }
@@ -35,6 +38,7 @@ public actor MCPClient {
     public let name: String
     public let version: String
     public let isStrict: Bool
+    public let connectionTimeout: TimeInterval
     public var state: State = .notConnected
     
     public private(set) var tools: [ToolDefinition] = []
@@ -47,11 +51,13 @@ public actor MCPClient {
         name: String, 
         version: String = "1.0", 
         isStrict: Bool = false,
+        connectionTimeout: TimeInterval = 30.0,
         messageFilterConfig: MessageFilter.Configuration = .default
     ) {
         self.name = name
         self.version = version
         self.isStrict = isStrict
+        self.connectionTimeout = connectionTimeout
         self.messageFilterConfig = messageFilterConfig
         // Client will be created when connecting to transport
     }
@@ -62,8 +68,25 @@ public actor MCPClient {
         let configuration = Client.Configuration(strict: isStrict)
         let newClient = Client(name: name, version: version, configuration: configuration)
         
-        // Connect the client to the transport
-        try await newClient.connect(transport: transport)
+        // Connect the client to the transport with timeout
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            // Add the connection task
+            group.addTask {
+                try await newClient.connect(transport: transport)
+            }
+            
+            // Add the timeout task
+            group.addTask {
+                try await Task.sleep(for: .seconds(self.connectionTimeout))
+                throw MCPClientError.connectionTimeout(self.connectionTimeout)
+            }
+            
+            // Wait for either connection or timeout
+            try await group.next()
+            
+            // Cancel remaining tasks
+            group.cancelAll()
+        }
         
         // Store the connected client
         self.client = newClient

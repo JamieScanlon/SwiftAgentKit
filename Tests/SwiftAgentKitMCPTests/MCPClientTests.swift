@@ -78,4 +78,22 @@ import SwiftAgentKitMCP
         // Note: Testing getTools requires a real MCP server connection
         // This test verifies the initial tools state is correct
     }
+    
+    @Test("MCPClient can be initialized with custom connection timeout")
+    func testConnectionTimeoutInitialization() async throws {
+        let timeout: TimeInterval = 15.0
+        let client = MCPClient(name: "test-client", version: "1.0.0", connectionTimeout: timeout)
+        
+        #expect(await client.name == "test-client")
+        #expect(await client.version == "1.0.0")
+        #expect(await client.connectionTimeout == timeout)
+        #expect(await client.state == .notConnected)
+    }
+    
+    @Test("MCPClient uses default timeout when not specified")
+    func testDefaultConnectionTimeout() async throws {
+        let client = MCPClient(name: "test-client", version: "1.0.0")
+        
+        #expect(await client.connectionTimeout == 30.0)
+    }
 } 
