@@ -133,6 +133,32 @@ public actor MCPClient {
         }
     }
     
+    /// Connect to a remote MCP server using HTTP/HTTPS
+    /// - Parameters:
+    ///   - serverURL: URL of the remote MCP server
+    ///   - authProvider: Authentication provider (optional)
+    ///   - connectionTimeout: Connection timeout override (optional)
+    ///   - requestTimeout: Request timeout override (optional)
+    ///   - maxRetries: Maximum retry attempts override (optional)
+    public func connectToRemoteServer(
+        serverURL: URL,
+        authProvider: (any AuthenticationProvider)? = nil,
+        connectionTimeout: TimeInterval? = nil,
+        requestTimeout: TimeInterval? = nil,
+        maxRetries: Int? = nil
+    ) async throws {
+        let transport = RemoteTransport(
+            serverURL: serverURL,
+            authProvider: authProvider,
+            connectionTimeout: connectionTimeout ?? self.connectionTimeout,
+            requestTimeout: requestTimeout ?? 60.0,
+            maxRetries: maxRetries ?? 3
+        )
+        
+        try await connect(transport: transport)
+        try await getTools()
+    }
+    
     /// Connect to an MCP server using stdio pipes
     /// - Parameters:
     ///   - inPipe: Input pipe for receiving data from the server

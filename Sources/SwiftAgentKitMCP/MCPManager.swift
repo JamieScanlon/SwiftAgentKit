@@ -22,7 +22,7 @@ public actor MCPManager {
         self.connectionTimeout = connectionTimeout
     }
     
-    public enum State {
+    public enum State: Sendable {
         case notReady
         case initialized
     }
@@ -93,37 +93,65 @@ public actor MCPManager {
     }
     
     private func createClients(_ config: MCPConfig) async throws {
-        // Use MCPServerManager to boot servers
-        let serverManager = MCPServerManager()
-        let serverPipes = try await serverManager.bootServers(config: config)
-        
-        // Create clients for each server with error handling
         var failedServers: [String] = []
         
-        for (serverName, pipes) in serverPipes {
-            do {
-                let client = MCPClient(name: serverName, version: "0.1.3", connectionTimeout: connectionTimeout)
-                try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
-                try await client.getTools()
-                clients.append(client)
-                logger.info("Successfully connected to MCP server: \(serverName)")
-            } catch let mcpError as MCPClient.MCPClientError {
-                switch mcpError {
-                case .connectionTimeout(let timeout):
-                    logger.warning("MCP server '\(serverName)' connection timed out after \(timeout) seconds")
-                case .pipeError(let message):
-                    logger.warning("MCP server '\(serverName)' pipe error: \(message)")
-                case .processTerminated(let message):
-                    logger.warning("MCP server '\(serverName)' process terminated: \(message)")
-                case .connectionFailed(let message):
-                    logger.warning("MCP server '\(serverName)' connection failed: \(message)")
-                case .notConnected:
-                    logger.warning("MCP server '\(serverName)' not connected")
+        // Create clients for local servers (stdio)
+        if !config.serverBootCalls.isEmpty {
+            let serverManager = MCPServerManager()
+            let serverPipes = try await serverManager.bootServers(config: config)
+            
+            for (serverName, pipes) in serverPipes {
+                do {
+                    let client = MCPClient(name: serverName, version: "0.1.3", connectionTimeout: connectionTimeout)
+                    try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+                    try await client.getTools()
+                    clients.append(client)
+                    logger.info("Successfully connected to local MCP server: \(serverName)")
+                } catch let mcpError as MCPClient.MCPClientError {
+                    logMCPClientError(mcpError, serverName: serverName)
+                    failedServers.append(serverName)
+                } catch {
+                    logger.error("Failed to connect to local MCP server '\(serverName)': \(error)")
+                    failedServers.append(serverName)
                 }
-                failedServers.append(serverName)
+            }
+        }
+        
+        // Create clients for remote servers (HTTP/HTTPS)
+        for remoteConfig in config.remoteServers {
+            do {
+                let client = MCPClient(
+                    name: remoteConfig.name,
+                    version: "0.1.3",
+                    connectionTimeout: remoteConfig.connectionTimeout ?? connectionTimeout
+                )
+                
+                guard let serverURL = URL(string: remoteConfig.url) else {
+                    logger.error("Invalid URL for remote server '\(remoteConfig.name)': \(remoteConfig.url)")
+                    failedServers.append(remoteConfig.name)
+                    continue
+                }
+                
+                // Create authentication provider if configured
+                let authProvider = try createAuthProvider(for: remoteConfig)
+                
+                try await client.connectToRemoteServer(
+                    serverURL: serverURL,
+                    authProvider: authProvider,
+                    connectionTimeout: remoteConfig.connectionTimeout,
+                    requestTimeout: remoteConfig.requestTimeout,
+                    maxRetries: remoteConfig.maxRetries
+                )
+                
+                clients.append(client)
+                logger.info("Successfully connected to remote MCP server: \(remoteConfig.name)")
+                
+            } catch let mcpError as MCPClient.MCPClientError {
+                logMCPClientError(mcpError, serverName: remoteConfig.name)
+                failedServers.append(remoteConfig.name)
             } catch {
-                logger.error("Failed to connect to MCP server '\(serverName)': \(error)")
-                failedServers.append(serverName)
+                logger.error("Failed to connect to remote MCP server '\(remoteConfig.name)': \(error)")
+                failedServers.append(remoteConfig.name)
             }
         }
         
@@ -132,6 +160,39 @@ public actor MCPManager {
         }
         
         await buildToolsJson()
+    }
+    
+    private func logMCPClientError(_ mcpError: MCPClient.MCPClientError, serverName: String) {
+        switch mcpError {
+        case .connectionTimeout(let timeout):
+            logger.warning("MCP server '\(serverName)' connection timed out after \(timeout) seconds")
+        case .pipeError(let message):
+            logger.warning("MCP server '\(serverName)' pipe error: \(message)")
+        case .processTerminated(let message):
+            logger.warning("MCP server '\(serverName)' process terminated: \(message)")
+        case .connectionFailed(let message):
+            logger.warning("MCP server '\(serverName)' connection failed: \(message)")
+        case .notConnected:
+            logger.warning("MCP server '\(serverName)' not connected")
+        }
+    }
+    
+    private func createAuthProvider(for remoteConfig: MCPConfig.RemoteServerConfig) throws -> (any AuthenticationProvider)? {
+        // Try environment-based auth first
+        if let envAuthProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: remoteConfig.name) {
+            logger.info("Using environment-based authentication for server: \(remoteConfig.name)")
+            return envAuthProvider
+        }
+        
+        // Try config-based auth
+        guard let authType = remoteConfig.authType,
+              let authConfig = remoteConfig.authConfig else {
+            logger.info("No authentication configured for remote server: \(remoteConfig.name)")
+            return nil
+        }
+        
+        logger.info("Creating authentication provider from config for server: \(remoteConfig.name)")
+        return try AuthenticationFactory.createAuthProvider(authType: authType, config: authConfig)
     }
     
     private func buildToolsJson() async {

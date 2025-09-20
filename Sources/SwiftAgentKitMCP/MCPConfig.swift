@@ -8,9 +8,9 @@
 import EasyJSON
 import Foundation
 
-public struct MCPConfig: Decodable, Sendable {
+public struct MCPConfig: Codable, Sendable {
     
-    public struct ServerBootCall: Decodable, Sendable {
+    public struct ServerBootCall: Codable, Sendable {
         public let name: String
         public let command: String
         public let arguments: [String]
@@ -24,7 +24,37 @@ public struct MCPConfig: Decodable, Sendable {
         }
     }
     
+    /// Configuration for remote MCP servers
+    public struct RemoteServerConfig: Codable, Sendable {
+        public let name: String
+        public let url: String
+        public let authType: String?
+        public let authConfig: JSON?
+        public let connectionTimeout: TimeInterval?
+        public let requestTimeout: TimeInterval?
+        public let maxRetries: Int?
+        
+        public init(
+            name: String,
+            url: String,
+            authType: String? = nil,
+            authConfig: JSON? = nil,
+            connectionTimeout: TimeInterval? = nil,
+            requestTimeout: TimeInterval? = nil,
+            maxRetries: Int? = nil
+        ) {
+            self.name = name
+            self.url = url
+            self.authType = authType
+            self.authConfig = authConfig
+            self.connectionTimeout = connectionTimeout
+            self.requestTimeout = requestTimeout
+            self.maxRetries = maxRetries
+        }
+    }
+    
     public var serverBootCalls: [ServerBootCall] = []
+    public var remoteServers: [RemoteServerConfig] = []
     public var globalEnvironment: JSON = .object([:])
     
     public init() {}
@@ -65,6 +95,39 @@ public struct MCPConfigHelper {
         if let globalEnvironment = json["globalEnv"] as? [String: Any] {
             mcpConfig.globalEnvironment = (try? JSON(globalEnvironment)) ?? .object([:])
         }
+        
+        // Parse remote servers configuration
+        if let remoteServers = json["remoteServers"] as? [String: Any] {
+            var remoteServerConfigs = [MCPConfig.RemoteServerConfig]()
+            for (name, value) in remoteServers {
+                guard let remoteServerConfig = value as? [String: Any] else {
+                    continue
+                }
+                guard let url = remoteServerConfig["url"] as? String else {
+                    continue
+                }
+                
+                let authType = remoteServerConfig["authType"] as? String
+                let authConfig = remoteServerConfig["authConfig"] as? [String: Any]
+                let connectionTimeout = remoteServerConfig["connectionTimeout"] as? TimeInterval
+                let requestTimeout = remoteServerConfig["requestTimeout"] as? TimeInterval
+                let maxRetries = remoteServerConfig["maxRetries"] as? Int
+                
+                let authConfigJson = authConfig != nil ? (try? JSON(authConfig!)) : nil
+                
+                remoteServerConfigs.append(MCPConfig.RemoteServerConfig(
+                    name: name,
+                    url: url,
+                    authType: authType,
+                    authConfig: authConfigJson,
+                    connectionTimeout: connectionTimeout,
+                    requestTimeout: requestTimeout,
+                    maxRetries: maxRetries
+                ))
+            }
+            mcpConfig.remoteServers = remoteServerConfigs
+        }
+        
         return mcpConfig
     }
 }
