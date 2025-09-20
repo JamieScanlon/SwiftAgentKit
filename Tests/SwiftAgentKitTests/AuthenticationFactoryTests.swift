@@ -367,4 +367,232 @@ struct AuthenticationFactoryTests {
         
         #expect(headers["Authorization"] == "Bearer test-token") // Should use default token type
     }
+    
+    // MARK: - PKCE OAuth Tests
+    
+    @Test("Factory should detect PKCE OAuth configuration")
+    func testPKCEOAuthDetection() async throws {
+        let pkceConfig = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "usePKCE": .boolean(true)
+        ])
+        
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: pkceConfig)
+        
+        #expect(provider.scheme == .oauth)
+        // Verify it's actually a PKCEOAuthAuthProvider by checking the type
+        #expect(provider is PKCEOAuthAuthProvider)
+    }
+    
+    @Test("Factory should create PKCE OAuth provider with minimal config")
+    func testCreatePKCEOAuthProviderMinimal() async throws {
+        let config = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "usePKCE": .boolean(true)
+        ])
+        
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        
+        #expect(provider.scheme == .oauth)
+        #expect(provider is PKCEOAuthAuthProvider)
+    }
+    
+    @Test("Factory should create PKCE OAuth provider with full config")
+    func testCreatePKCEOAuthProviderFull() async throws {
+        let config = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("test-client-id"),
+            "clientSecret": .string("test-client-secret"),
+            "scope": .string("openid profile"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "authorizationEndpoint": .string("https://custom.example.com/oauth/authorize"),
+            "tokenEndpoint": .string("https://custom.example.com/oauth/token"),
+            "useOpenIDConnectDiscovery": .boolean(false),
+            "usePKCE": .boolean(true)
+        ])
+        
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        
+        #expect(provider.scheme == .oauth)
+        #expect(provider is PKCEOAuthAuthProvider)
+    }
+    
+    @Test("Factory should throw for PKCE OAuth missing issuerURL")
+    func testPKCEOAuthMissingIssuerURL() async throws {
+        let config = JSON.object([
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "usePKCE": .boolean(true)
+        ])
+        
+        #expect(throws: AuthenticationError.self) {
+            try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        }
+    }
+    
+    @Test("Factory should throw for PKCE OAuth missing clientId")
+    func testPKCEOAuthMissingClientId() async throws {
+        let config = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "usePKCE": .boolean(true)
+        ])
+        
+        #expect(throws: AuthenticationError.self) {
+            try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        }
+    }
+    
+    @Test("Factory should throw for PKCE OAuth missing redirectURI")
+    func testPKCEOAuthMissingRedirectURI() async throws {
+        let config = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("test-client-id"),
+            "usePKCE": .boolean(true)
+        ])
+        
+        #expect(throws: AuthenticationError.self) {
+            try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        }
+    }
+    
+    @Test("Factory should throw for PKCE OAuth invalid issuerURL")
+    func testPKCEOAuthInvalidIssuerURL() async throws {
+        let config = JSON.object([
+            "issuerURL": .string("invalid-url"),
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "usePKCE": .boolean(true)
+        ])
+        
+        #expect(throws: AuthenticationError.self) {
+            try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        }
+    }
+    
+    @Test("Factory should throw for PKCE OAuth invalid redirectURI")
+    func testPKCEOAuthInvalidRedirectURI() async throws {
+        let config = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("invalid-uri"),
+            "usePKCE": .boolean(true)
+        ])
+        
+        #expect(throws: AuthenticationError.self) {
+            try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        }
+    }
+    
+    @Test("Factory should create PKCE OAuth from environment")
+    func testCreatePKCEOAuthFromEnvironment() async throws {
+        // Clear any existing OAuth env vars first
+        unsetenv("PKCESERVER_OAUTH_ACCESS_TOKEN")
+        unsetenv("PKCESERVER_OAUTH_TOKEN_ENDPOINT")
+        
+        // Set PKCE OAuth environment variables
+        setenv("PKCESERVER_PKCE_OAUTH_ISSUER_URL", "https://auth.example.com", 1)
+        setenv("PKCESERVER_PKCE_OAUTH_CLIENT_ID", "env-client-id", 1)
+        setenv("PKCESERVER_PKCE_OAUTH_REDIRECT_URI", "https://app.example.com/callback", 1)
+        setenv("PKCESERVER_PKCE_OAUTH_CLIENT_SECRET", "env-client-secret", 1)
+        setenv("PKCESERVER_PKCE_OAUTH_SCOPE", "openid profile", 1)
+        setenv("PKCESERVER_PKCE_OAUTH_AUTHORIZATION_ENDPOINT", "https://custom.example.com/oauth/authorize", 1)
+        setenv("PKCESERVER_PKCE_OAUTH_TOKEN_ENDPOINT", "https://custom.example.com/oauth/token", 1)
+        setenv("PKCESERVER_PKCE_OAUTH_USE_OIDC_DISCOVERY", "false", 1)
+        defer {
+            unsetenv("PKCESERVER_PKCE_OAUTH_ISSUER_URL")
+            unsetenv("PKCESERVER_PKCE_OAUTH_CLIENT_ID")
+            unsetenv("PKCESERVER_PKCE_OAUTH_REDIRECT_URI")
+            unsetenv("PKCESERVER_PKCE_OAUTH_CLIENT_SECRET")
+            unsetenv("PKCESERVER_PKCE_OAUTH_SCOPE")
+            unsetenv("PKCESERVER_PKCE_OAUTH_AUTHORIZATION_ENDPOINT")
+            unsetenv("PKCESERVER_PKCE_OAUTH_TOKEN_ENDPOINT")
+            unsetenv("PKCESERVER_PKCE_OAUTH_USE_OIDC_DISCOVERY")
+        }
+        
+        let provider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "pkceserver")
+        
+        #expect(provider != nil)
+        #expect(provider?.scheme == .oauth)
+        #expect(provider! is PKCEOAuthAuthProvider)
+    }
+    
+    @Test("Factory should create PKCE OAuth from environment with minimal config")
+    func testCreatePKCEOAuthFromEnvironmentMinimal() async throws {
+        // Clear any existing OAuth env vars first
+        unsetenv("MINPKCESERVER_OAUTH_ACCESS_TOKEN")
+        unsetenv("MINPKCESERVER_OAUTH_TOKEN_ENDPOINT")
+        
+        // Set minimal PKCE OAuth environment variables
+        setenv("MINPKCESERVER_PKCE_OAUTH_ISSUER_URL", "https://auth.example.com", 1)
+        setenv("MINPKCESERVER_PKCE_OAUTH_CLIENT_ID", "min-client-id", 1)
+        setenv("MINPKCESERVER_PKCE_OAUTH_REDIRECT_URI", "https://app.example.com/callback", 1)
+        defer {
+            unsetenv("MINPKCESERVER_PKCE_OAUTH_ISSUER_URL")
+            unsetenv("MINPKCESERVER_PKCE_OAUTH_CLIENT_ID")
+            unsetenv("MINPKCESERVER_PKCE_OAUTH_REDIRECT_URI")
+        }
+        
+        let provider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "minpkceserver")
+        
+        #expect(provider != nil)
+        #expect(provider?.scheme == .oauth)
+        #expect(provider! is PKCEOAuthAuthProvider)
+    }
+    
+    @Test("Factory should prioritize PKCE OAuth over legacy OAuth in environment")
+    func testPKCEOAuthEnvironmentPriority() async throws {
+        // Clear any existing env vars first
+        unsetenv("PRIOPKCESERVER_TOKEN")
+        unsetenv("PRIOPKCESERVER_BEARER_TOKEN")
+        unsetenv("PRIOPKCESERVER_API_KEY")
+        unsetenv("PRIOPKCESERVER_USERNAME")
+        unsetenv("PRIOPKCESERVER_PASSWORD")
+        
+        // Set both legacy OAuth and PKCE OAuth environment variables
+        setenv("PRIOPKCESERVER_OAUTH_ACCESS_TOKEN", "legacy-access-token", 1)
+        setenv("PRIOPKCESERVER_OAUTH_TOKEN_ENDPOINT", "https://legacy.example.com/token", 1)
+        setenv("PRIOPKCESERVER_OAUTH_CLIENT_ID", "legacy-client-id", 1)
+        
+        setenv("PRIOPKCESERVER_PKCE_OAUTH_ISSUER_URL", "https://auth.example.com", 1)
+        setenv("PRIOPKCESERVER_PKCE_OAUTH_CLIENT_ID", "pkce-client-id", 1)
+        setenv("PRIOPKCESERVER_PKCE_OAUTH_REDIRECT_URI", "https://app.example.com/callback", 1)
+        defer {
+            unsetenv("PRIOPKCESERVER_OAUTH_ACCESS_TOKEN")
+            unsetenv("PRIOPKCESERVER_OAUTH_TOKEN_ENDPOINT")
+            unsetenv("PRIOPKCESERVER_OAUTH_CLIENT_ID")
+            unsetenv("PRIOPKCESERVER_PKCE_OAUTH_ISSUER_URL")
+            unsetenv("PRIOPKCESERVER_PKCE_OAUTH_CLIENT_ID")
+            unsetenv("PRIOPKCESERVER_PKCE_OAUTH_REDIRECT_URI")
+        }
+        
+        let provider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "priopkceserver")
+        
+        #expect(provider != nil)
+        #expect(provider?.scheme == .oauth)
+        // Should prioritize PKCE OAuth over legacy OAuth
+        #expect(provider! is PKCEOAuthAuthProvider)
+    }
+    
+    @Test("Factory should handle PKCE OAuth environment with invalid URLs")
+    func testPKCEOAuthEnvironmentInvalidURLs() async throws {
+        // Set PKCE OAuth environment variables with URLs that have no scheme/host
+        setenv("INVALIDPKCESERVER_PKCE_OAUTH_ISSUER_URL", "not-a-url", 1)
+        setenv("INVALIDPKCESERVER_PKCE_OAUTH_CLIENT_ID", "test-client-id", 1)
+        setenv("INVALIDPKCESERVER_PKCE_OAUTH_REDIRECT_URI", "also-not-a-url", 1)
+        defer {
+            unsetenv("INVALIDPKCESERVER_PKCE_OAUTH_ISSUER_URL")
+            unsetenv("INVALIDPKCESERVER_PKCE_OAUTH_CLIENT_ID")
+            unsetenv("INVALIDPKCESERVER_PKCE_OAUTH_REDIRECT_URI")
+        }
+        
+        let provider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "invalidpkceserver")
+        
+        // Should return nil when URLs are invalid (no scheme/host)
+        #expect(provider == nil)
+    }
 }

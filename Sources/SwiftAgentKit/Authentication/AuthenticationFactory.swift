@@ -59,7 +59,12 @@ public struct AuthenticationFactory {
             return try createBasicAuthProvider(config: config)
             
         case .oauth:
-            return try createOAuthProvider(config: config)
+            // Check if this is a PKCE OAuth configuration
+            if isPKCEOAuthConfig(config: config) {
+                return try createPKCEOAuthProvider(config: config)
+            } else {
+                return try createOAuthProvider(config: config)
+            }
             
         case .custom(let customScheme):
             logger.error("Custom authentication scheme not supported by factory: \(customScheme)")
@@ -98,7 +103,46 @@ public struct AuthenticationFactory {
             return BasicAuthProvider(username: username, password: password)
         }
         
-        // Check for OAuth
+        // Check for PKCE OAuth
+        if let issuerURL = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_ISSUER_URL"],
+           let clientId = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_CLIENT_ID"],
+           let redirectURI = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_REDIRECT_URI"],
+           let issuerURLParsed = URL(string: issuerURL),
+           issuerURLParsed.scheme != nil,
+           issuerURLParsed.host != nil,
+           let redirectURIParsed = URL(string: redirectURI),
+           redirectURIParsed.scheme != nil {
+            
+            let clientSecret = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_CLIENT_SECRET"]
+            let scope = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_SCOPE"]
+            let authorizationEndpoint = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_AUTHORIZATION_ENDPOINT"]
+            let tokenEndpoint = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_TOKEN_ENDPOINT"]
+            let useOIDCDiscovery = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_USE_OIDC_DISCOVERY"] != "false"
+            
+            let authorizationEndpointURL = authorizationEndpoint.flatMap(URL.init)
+            let tokenEndpointURL = tokenEndpoint.flatMap(URL.init)
+            
+            do {
+                let pkceConfig = try PKCEOAuthConfig(
+                    issuerURL: issuerURLParsed,
+                    clientId: clientId,
+                    clientSecret: clientSecret,
+                    scope: scope,
+                    redirectURI: redirectURIParsed,
+                    authorizationEndpoint: authorizationEndpointURL,
+                    tokenEndpoint: tokenEndpointURL,
+                    useOpenIDConnectDiscovery: useOIDCDiscovery
+                )
+                
+                logger.info("Creating PKCE OAuth provider from environment for server: \(serverName)")
+                return PKCEOAuthAuthProvider(config: pkceConfig)
+            } catch {
+                logger.error("Failed to create PKCE OAuth provider from environment: \(error)")
+                return nil
+            }
+        }
+        
+        // Check for OAuth (legacy)
         if let accessToken = ProcessInfo.processInfo.environment["\(envPrefix)OAUTH_ACCESS_TOKEN"],
            let tokenEndpoint = ProcessInfo.processInfo.environment["\(envPrefix)OAUTH_TOKEN_ENDPOINT"],
            let clientId = ProcessInfo.processInfo.environment["\(envPrefix)OAUTH_CLIENT_ID"],
@@ -276,5 +320,98 @@ public struct AuthenticationFactory {
         )
         
         return OAuthAuthProvider(tokens: tokens, config: oauthConfig)
+    }
+    
+    private static func isPKCEOAuthConfig(config: JSON) -> Bool {
+        guard case .object(let configDict) = config else {
+            return false
+        }
+        
+        // Check if this is a PKCE OAuth configuration by looking for required PKCE fields
+        return configDict["issuerURL"] != nil && 
+               configDict["redirectURI"] != nil &&
+               configDict["usePKCE"] != nil
+    }
+    
+    private static func createPKCEOAuthProvider(config: JSON) throws -> PKCEOAuthAuthProvider {
+        guard case .object(let configDict) = config else {
+            throw AuthenticationError.authenticationFailed("PKCE OAuth config must be an object")
+        }
+        
+        // Required fields
+        guard case .string(let issuerURLString) = configDict["issuerURL"] else {
+            throw AuthenticationError.authenticationFailed("PKCE OAuth config missing 'issuerURL' field")
+        }
+        
+        guard let issuerURL = URL(string: issuerURLString),
+              issuerURL.scheme != nil,
+              issuerURL.host != nil else {
+            throw AuthenticationError.authenticationFailed("Invalid issuer URL: \(issuerURLString)")
+        }
+        
+        guard case .string(let clientId) = configDict["clientId"] else {
+            throw AuthenticationError.authenticationFailed("PKCE OAuth config missing 'clientId' field")
+        }
+        
+        guard case .string(let redirectURIString) = configDict["redirectURI"] else {
+            throw AuthenticationError.authenticationFailed("PKCE OAuth config missing 'redirectURI' field")
+        }
+        
+        guard let redirectURI = URL(string: redirectURIString),
+              redirectURI.scheme != nil else {
+            throw AuthenticationError.authenticationFailed("Invalid redirect URI: \(redirectURIString)")
+        }
+        
+        // Optional fields
+        let clientSecret: String?
+        if case .string(let secret) = configDict["clientSecret"] {
+            clientSecret = secret
+        } else {
+            clientSecret = nil
+        }
+        
+        let scope: String?
+        if case .string(let scopeValue) = configDict["scope"] {
+            scope = scopeValue
+        } else {
+            scope = nil
+        }
+        
+        let authorizationEndpoint: URL?
+        if case .string(let authEndpointString) = configDict["authorizationEndpoint"],
+           let authEndpoint = URL(string: authEndpointString) {
+            authorizationEndpoint = authEndpoint
+        } else {
+            authorizationEndpoint = nil
+        }
+        
+        let tokenEndpoint: URL?
+        if case .string(let tokenEndpointString) = configDict["tokenEndpoint"],
+           let tokenEndpointURL = URL(string: tokenEndpointString) {
+            tokenEndpoint = tokenEndpointURL
+        } else {
+            tokenEndpoint = nil
+        }
+        
+        let useOpenIDConnectDiscovery: Bool
+        if case .boolean(let useOIDC) = configDict["useOpenIDConnectDiscovery"] {
+            useOpenIDConnectDiscovery = useOIDC
+        } else {
+            useOpenIDConnectDiscovery = true
+        }
+        
+        // Create PKCE OAuth configuration
+        let pkceConfig = try PKCEOAuthConfig(
+            issuerURL: issuerURL,
+            clientId: clientId,
+            clientSecret: clientSecret,
+            scope: scope,
+            redirectURI: redirectURI,
+            authorizationEndpoint: authorizationEndpoint,
+            tokenEndpoint: tokenEndpoint,
+            useOpenIDConnectDiscovery: useOpenIDConnectDiscovery
+        )
+        
+        return PKCEOAuthAuthProvider(config: pkceConfig)
     }
 }

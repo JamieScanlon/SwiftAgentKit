@@ -53,6 +53,38 @@ public struct MCPConfig: Codable, Sendable {
         }
     }
     
+    /// Configuration for PKCE OAuth authentication
+    public struct PKCEOAuthConfig: Codable, Sendable {
+        public let issuerURL: String
+        public let clientId: String
+        public let clientSecret: String?
+        public let scope: String?
+        public let redirectURI: String
+        public let authorizationEndpoint: String?
+        public let tokenEndpoint: String?
+        public let useOpenIDConnectDiscovery: Bool
+        
+        public init(
+            issuerURL: String,
+            clientId: String,
+            clientSecret: String? = nil,
+            scope: String? = nil,
+            redirectURI: String,
+            authorizationEndpoint: String? = nil,
+            tokenEndpoint: String? = nil,
+            useOpenIDConnectDiscovery: Bool = true
+        ) {
+            self.issuerURL = issuerURL
+            self.clientId = clientId
+            self.clientSecret = clientSecret
+            self.scope = scope
+            self.redirectURI = redirectURI
+            self.authorizationEndpoint = authorizationEndpoint
+            self.tokenEndpoint = tokenEndpoint
+            self.useOpenIDConnectDiscovery = useOpenIDConnectDiscovery
+        }
+    }
+    
     public var serverBootCalls: [ServerBootCall] = []
     public var remoteServers: [RemoteServerConfig] = []
     public var globalEnvironment: JSON = .object([:])

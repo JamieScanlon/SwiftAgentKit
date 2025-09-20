@@ -157,6 +157,14 @@ let package = Package(
             path: "Examples/MCPExample"),
         
         .executableTarget(
+            name: "PKCEOAuthExample",
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/PKCEOAuthExample"),
+        
+        .executableTarget(
             name: "A2AExample",
             dependencies: [
                 "SwiftAgentKit",
