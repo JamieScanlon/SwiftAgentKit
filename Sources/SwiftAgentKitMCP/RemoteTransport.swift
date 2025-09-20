@@ -271,9 +271,26 @@ public actor RemoteTransport: Transport {
                             continue // Retry with new credentials
                         } catch {
                             logger.error("Failed to handle authentication challenge: \(error)")
+                            
+                            // For OAuth Discovery providers, check if this is a discovery-related error
+                            if error.localizedDescription.contains("OAuth authorization flow requires manual intervention") {
+                                logger.error("OAuth discovery requires manual intervention - this is expected for first-time authentication")
+                                throw RemoteTransportError.authenticationFailed("OAuth discovery requires manual user intervention to complete authorization flow")
+                            }
+                            
                             throw RemoteTransportError.authenticationFailed("Authentication refresh failed: \(error.localizedDescription)")
                         }
                     } else {
+                        // No authentication provider available - this might be a discovery opportunity
+                        logger.warning("No authentication provider available for 401 challenge - this might indicate the need for OAuth discovery")
+                        
+                        // Check if the response contains WWW-Authenticate header with OAuth challenge
+                        if let wwwAuthenticate = httpResponse.allHeaderFields["WWW-Authenticate"] as? String,
+                           wwwAuthenticate.lowercased().contains("bearer") || wwwAuthenticate.lowercased().contains("oauth") {
+                            logger.info("Detected OAuth challenge in WWW-Authenticate header: \(wwwAuthenticate)")
+                            throw RemoteTransportError.authenticationFailed("OAuth authentication required but no OAuth provider configured. Consider using OAuthDiscoveryAuthProvider.")
+                        }
+                        
                         throw RemoteTransportError.authenticationFailed("No authentication provider available for 401 challenge")
                     }
                 }

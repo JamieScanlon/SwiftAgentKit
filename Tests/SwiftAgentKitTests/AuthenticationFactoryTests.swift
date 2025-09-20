@@ -235,10 +235,10 @@ struct AuthenticationFactoryTests {
     @Test("Factory should prioritize Bearer token over API key in environment")
     func testEnvironmentPriority() async throws {
         // Set both Bearer token and API key
-        setenv("TESTSERVER_TOKEN", "priority-bearer-token", 1)
+        setenv("TESTSERVER_BEARER_TOKEN", "priority-bearer-token", 1)
         setenv("TESTSERVER_API_KEY", "priority-api-key", 1)
         defer {
-            unsetenv("TESTSERVER_TOKEN")
+            unsetenv("TESTSERVER_BEARER_TOKEN")
             unsetenv("TESTSERVER_API_KEY")
         }
         
@@ -594,5 +594,131 @@ struct AuthenticationFactoryTests {
         
         // Should return nil when URLs are invalid (no scheme/host)
         #expect(provider == nil)
+    }
+    
+    @Test("Factory should create OAuth Discovery provider")
+    func testCreateOAuthDiscoveryProvider() async throws {
+        let config = JSON.object([
+            "resourceServerURL": .string("https://mcp.example.com"),
+            "clientId": .string("test-client-id"),
+            "clientSecret": .string("test-client-secret"),
+            "scope": .string("openid profile"),
+            "redirectURI": .string("https://client.example.com/callback"),
+            "resourceType": .string("mcp"),
+            "useOAuthDiscovery": .boolean(true),
+            "preConfiguredAuthServerURL": .string("https://auth.example.com")
+        ])
+        
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        
+        #expect(provider.scheme == .oauth)
+        // Note: We can't easily test the async methods without mocking the URLSession
+        // The provider should be created successfully
+    }
+    
+    @Test("Factory should create OAuth Discovery provider with minimal config")
+    func testCreateOAuthDiscoveryProviderWithMinimalConfig() async throws {
+        let config = JSON.object([
+            "resourceServerURL": .string("https://mcp.example.com"),
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("https://client.example.com/callback"),
+            "useOAuthDiscovery": .boolean(true)
+        ])
+        
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        
+        #expect(provider.scheme == .oauth)
+    }
+    
+    @Test("Factory should throw error for OAuth Discovery with missing resourceServerURL")
+    func testCreateOAuthDiscoveryProviderMissingResourceServerURL() async throws {
+        let config = JSON.object([
+            "resourceServerURL": .string(""), // Empty string to trigger validation error
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("https://client.example.com/callback"),
+            "useOAuthDiscovery": .boolean(true)
+        ])
+        
+        do {
+            _ = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+            #expect(Bool(false), "Expected creation to fail")
+        } catch let error as AuthenticationError {
+            if case .authenticationFailed(let message) = error {
+                #expect(message.contains("Invalid resource server URL:"))
+            } else {
+                #expect(Bool(false), "Unexpected error case: \(error)")
+            }
+        } catch {
+            #expect(Bool(false), "Unexpected error type: \(error)")
+        }
+    }
+    
+    @Test("Factory should throw error for OAuth Discovery with invalid resourceServerURL")
+    func testCreateOAuthDiscoveryProviderInvalidResourceServerURL() async throws {
+        let config = JSON.object([
+            "resourceServerURL": .string("invalid-url"),
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("https://client.example.com/callback"),
+            "useOAuthDiscovery": .boolean(true)
+        ])
+        
+        do {
+            _ = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+            #expect(Bool(false), "Expected creation to fail")
+        } catch let error as AuthenticationError {
+            if case .authenticationFailed(let message) = error {
+                #expect(message.contains("invalid-url"))
+            } else {
+                #expect(Bool(false), "Unexpected error case: \(error)")
+            }
+        } catch {
+            #expect(Bool(false), "Unexpected error type: \(error)")
+        }
+    }
+    
+    @Test("Factory should throw error for OAuth Discovery with invalid clientId")
+    func testCreateOAuthDiscoveryProviderInvalidClientId() async throws {
+        let config = JSON.object([
+            "resourceServerURL": .string("https://mcp.example.com"),
+            "clientId": .string(""), // Empty string to trigger validation error
+            "redirectURI": .string("https://client.example.com/callback"),
+            "useOAuthDiscovery": .boolean(true)
+        ])
+        
+        do {
+            _ = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+            #expect(Bool(false), "Expected creation to fail")
+        } catch let error as AuthenticationError {
+            if case .authenticationFailed(let message) = error {
+                #expect(message.contains("OAuth Discovery config missing 'clientId' field"))
+            } else {
+                #expect(Bool(false), "Unexpected error case: \(error)")
+            }
+        } catch {
+            #expect(Bool(false), "Unexpected error type: \(error)")
+        }
+    }
+    
+    @Test("Factory should throw error for OAuth Discovery with invalid redirectURI")
+    func testCreateOAuthDiscoveryProviderInvalidRedirectURI() async throws {
+        let config = JSON.object([
+            "resourceServerURL": .string("https://mcp.example.com"),
+            "clientId": .string("test-client-id"),
+            "redirectURI": .string("invalid-uri"),
+            "useOAuthDiscovery": .boolean(true)
+        ])
+        
+        do {
+            _ = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+            #expect(Bool(false), "Expected creation to fail")
+        } catch let error as AuthenticationError {
+            if case .authenticationFailed(let message) = error {
+                #expect(message.contains("invalid-uri"))
+            } else {
+                #expect(Bool(false), "Unexpected error case: \(error)")
+            }
+        } catch {
+            #expect(Bool(false), "Unexpected error type: \(error)")
+        }
     }
 }

@@ -76,7 +76,7 @@ public struct AuthenticationChallenge: Sendable {
 }
 
 /// Common authentication errors
-public enum AuthenticationError: LocalizedError, Sendable {
+public enum AuthenticationError: LocalizedError, Sendable, Equatable {
     case invalidCredentials
     case authenticationExpired
     case authenticationFailed(String)

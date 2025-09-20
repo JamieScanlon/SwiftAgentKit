@@ -230,7 +230,7 @@ public actor OAuthServerMetadataClient {
         self.urlSession = urlSession
     }
     
-    /// Discover OAuth server metadata from the well-known endpoint
+    /// Discover OAuth server metadata from the well-known endpoint (RFC 8414)
     /// - Parameter issuerURL: The issuer URL (e.g., "https://auth.example.com")
     /// - Returns: OAuth server metadata
     /// - Throws: OAuthMetadataError if discovery fails
@@ -294,6 +294,54 @@ public actor OAuthServerMetadataClient {
             logger.error("Failed to discover OpenID Connect provider metadata: \(error)")
             throw OAuthMetadataError.discoveryFailed(error.localizedDescription)
         }
+    }
+    
+    /// Discover authorization server metadata with fallback strategy
+    /// Tries OpenID Connect Discovery first, then falls back to OAuth 2.0 Authorization Server Metadata
+    /// - Parameter issuerURL: The issuer URL (e.g., "https://auth.example.com")
+    /// - Returns: OAuth server metadata (from either OIDC or OAuth 2.0 discovery)
+    /// - Throws: OAuthMetadataError if both discovery methods fail
+    public func discoverAuthorizationServerMetadata(issuerURL: URL) async throws -> OAuthServerMetadata {
+        logger.info("Discovering authorization server metadata with fallback strategy from: \(issuerURL)")
+        
+        // Try OpenID Connect Discovery first (priority order as per spec)
+        do {
+            let oidcMetadata = try await discoverOpenIDConnectProviderMetadata(issuerURL: issuerURL)
+            logger.info("Successfully discovered authorization server metadata via OpenID Connect Discovery")
+            return oidcMetadata.oauthMetadata
+        } catch let error as OAuthMetadataError {
+            if case .httpError(let statusCode, _) = error, statusCode == 404 {
+                logger.debug("OpenID Connect Discovery endpoint not found (404), trying OAuth 2.0 discovery")
+            } else {
+                logger.warning("OpenID Connect Discovery failed: \(error), trying OAuth 2.0 discovery")
+            }
+        } catch {
+            logger.warning("OpenID Connect Discovery failed with unexpected error: \(error), trying OAuth 2.0 discovery")
+        }
+        
+        // Fall back to OAuth 2.0 Authorization Server Metadata (RFC 8414)
+        do {
+            let oauthMetadata = try await discoverOAuthServerMetadata(issuerURL: issuerURL)
+            logger.info("Successfully discovered authorization server metadata via OAuth 2.0 discovery")
+            return oauthMetadata
+        } catch {
+            logger.error("Both OpenID Connect and OAuth 2.0 discovery failed")
+            throw OAuthMetadataError.discoveryFailed("Failed to discover authorization server metadata using both OpenID Connect Discovery and OAuth 2.0 Authorization Server Metadata discovery methods")
+        }
+    }
+    
+    /// Discover authorization server metadata from protected resource metadata
+    /// - Parameter protectedResourceMetadata: The protected resource metadata containing authorization server info
+    /// - Returns: OAuth server metadata from the authorization server
+    /// - Throws: OAuthMetadataError if discovery fails
+    public func discoverFromProtectedResourceMetadata(_ protectedResourceMetadata: ProtectedResourceMetadata) async throws -> OAuthServerMetadata {
+        guard let authorizationServerURL = protectedResourceMetadata.authorizationServerURL() else {
+            throw OAuthMetadataError.invalidIssuerURL("No authorization server URL found in protected resource metadata")
+        }
+        
+        logger.info("Discovering authorization server metadata from protected resource metadata URL: \(authorizationServerURL)")
+        
+        return try await discoverAuthorizationServerMetadata(issuerURL: authorizationServerURL)
     }
 }
 

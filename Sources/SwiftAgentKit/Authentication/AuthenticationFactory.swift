@@ -62,6 +62,8 @@ public struct AuthenticationFactory {
             // Check if this is a PKCE OAuth configuration
             if isPKCEOAuthConfig(config: config) {
                 return try createPKCEOAuthProvider(config: config)
+            } else if isOAuthDiscoveryConfig(config: config) {
+                return try createOAuthDiscoveryProvider(config: config)
             } else {
                 return try createOAuthProvider(config: config)
             }
@@ -333,6 +335,18 @@ public struct AuthenticationFactory {
                configDict["usePKCE"] != nil
     }
     
+    private static func isOAuthDiscoveryConfig(config: JSON) -> Bool {
+        guard case .object(let configDict) = config else {
+            return false
+        }
+        
+        // Check if this is an OAuth Discovery configuration by looking for required fields
+        return configDict["resourceServerURL"] != nil && 
+               configDict["clientId"] != nil &&
+               configDict["redirectURI"] != nil &&
+               configDict["useOAuthDiscovery"] != nil
+    }
+    
     private static func createPKCEOAuthProvider(config: JSON) throws -> PKCEOAuthAuthProvider {
         guard case .object(let configDict) = config else {
             throw AuthenticationError.authenticationFailed("PKCE OAuth config must be an object")
@@ -413,5 +427,75 @@ public struct AuthenticationFactory {
         )
         
         return PKCEOAuthAuthProvider(config: pkceConfig)
+    }
+    
+    private static func createOAuthDiscoveryProvider(config: JSON) throws -> OAuthDiscoveryAuthProvider {
+        guard case .object(let configDict) = config else {
+            throw AuthenticationError.authenticationFailed("OAuth Discovery config must be an object")
+        }
+        
+        // Required fields
+        guard case .string(let resourceServerURLString) = configDict["resourceServerURL"] else {
+            throw AuthenticationError.authenticationFailed("OAuth Discovery config missing 'resourceServerURL' field")
+        }
+        
+        guard let resourceServerURL = URL(string: resourceServerURLString),
+              resourceServerURL.scheme != nil,
+              resourceServerURL.host != nil else {
+            throw AuthenticationError.authenticationFailed("Invalid resource server URL: \(resourceServerURLString)")
+        }
+        
+        guard case .string(let clientId) = configDict["clientId"], !clientId.isEmpty else {
+            throw AuthenticationError.authenticationFailed("OAuth Discovery config missing 'clientId' field")
+        }
+        
+        guard case .string(let redirectURIString) = configDict["redirectURI"] else {
+            throw AuthenticationError.authenticationFailed("OAuth Discovery config missing 'redirectURI' field")
+        }
+        
+        guard let redirectURI = URL(string: redirectURIString),
+              redirectURI.scheme != nil else {
+            throw AuthenticationError.authenticationFailed("Invalid redirect URI: \(redirectURIString)")
+        }
+        
+        // Optional fields
+        let clientSecret: String?
+        if case .string(let secret) = configDict["clientSecret"] {
+            clientSecret = secret
+        } else {
+            clientSecret = nil
+        }
+        
+        let scope: String?
+        if case .string(let scopeValue) = configDict["scope"] {
+            scope = scopeValue
+        } else {
+            scope = nil
+        }
+        
+        let resourceType: String?
+        if case .string(let type) = configDict["resourceType"] {
+            resourceType = type
+        } else {
+            resourceType = "mcp"
+        }
+        
+        let preConfiguredAuthServerURL: URL?
+        if case .string(let authServerURLString) = configDict["preConfiguredAuthServerURL"],
+           let authServerURL = URL(string: authServerURLString) {
+            preConfiguredAuthServerURL = authServerURL
+        } else {
+            preConfiguredAuthServerURL = nil
+        }
+        
+        return OAuthDiscoveryAuthProvider(
+            resourceServerURL: resourceServerURL,
+            clientId: clientId,
+            clientSecret: clientSecret,
+            scope: scope,
+            redirectURI: redirectURI,
+            resourceType: resourceType,
+            preConfiguredAuthServerURL: preConfiguredAuthServerURL
+        )
     }
 }
