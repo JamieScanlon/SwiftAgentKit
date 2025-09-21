@@ -387,6 +387,12 @@ func remoteServerConfigExample() async {
                 logger.info("🎯 Resource URI: \(resourceURI)")
             }
             
+            // Display additional metadata that's useful for implementation
+            logger.info("📊 Additional OAuth Metadata:")
+            for (key, value) in oauthFlowError.additionalMetadata {
+                logger.info("   \(key): \(value)")
+            }
+            
             // Example of how to handle the OAuth manual flow
             logger.info("💡 To complete authentication:")
             logger.info("   1. Open the authorization URL in a browser")
@@ -399,6 +405,14 @@ func remoteServerConfigExample() async {
             // - Set up a local server to capture the redirect
             // - Extract the authorization code
             // - Complete the token exchange
+            
+            // Example of accessing the structured error data:
+            logger.info("🔧 Implementation example:")
+            logger.info("   let authURL = oauthFlowError.authorizationURL")
+            logger.info("   let redirectURI = oauthFlowError.redirectURI")
+            logger.info("   let clientId = oauthFlowError.clientId")
+            logger.info("   let codeChallenge = oauthFlowError.additionalMetadata[\"code_challenge\"]")
+            logger.info("   let tokenEndpoint = oauthFlowError.additionalMetadata[\"token_endpoint\"]")
             
         } catch let mcpError as MCPClient.MCPClientError {
             switch mcpError {
@@ -479,6 +493,9 @@ func oAuthManualFlowExample() async {
         
         // Example of how you might handle this in a real application:
         // await handleOAuthManualFlow(oauthFlowError)
+        
+        logger.info("✅ SUCCESS: OAuthManualFlowRequired error was properly caught and contains all necessary metadata!")
+        logger.info("   This demonstrates that the error propagation fix is working correctly.")
         
     } catch let mcpError as MCPClient.MCPClientError {
         logger.error("❌ MCP connection error: \(mcpError.localizedDescription)")

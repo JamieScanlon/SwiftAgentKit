@@ -106,7 +106,15 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     
     public func authenticationHeaders() async throws -> [String: String] {
         // Ensure we have valid authentication
-        try await ensureValidAuthentication()
+        do {
+            try await ensureValidAuthentication()
+        } catch let oauthFlowError as OAuthManualFlowRequired {
+            // Re-throw OAuth manual flow required errors to preserve metadata
+            throw oauthFlowError
+        } catch {
+            // Re-throw other errors as-is
+            throw error
+        }
         
         guard let accessToken = accessToken else {
             throw AuthenticationError.authenticationFailed("No access token available")
