@@ -112,6 +112,11 @@ public actor MCPClient {
             state = .connected
             logger.info("MCP client '\(name)' connected successfully")
         } catch {
+            // Preserve RemoteTransportError types for OAuth discovery handling
+            if let remoteTransportError = error as? RemoteTransport.RemoteTransportError {
+                throw remoteTransportError
+            }
+            
             // Convert pipe errors to proper MCP errors
             let nsError = error as NSError
             switch nsError.code {

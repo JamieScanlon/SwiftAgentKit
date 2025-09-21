@@ -190,7 +190,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         )
         
         // Validate that the authorization server supports PKCE as required by MCP spec
-        try oauthServerMetadata?.validatePKCESupport()
+        _ = try oauthServerMetadata?.validatePKCESupport()
         
         logger.info("OAuth server discovery completed successfully")
     }

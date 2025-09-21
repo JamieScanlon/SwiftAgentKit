@@ -2,6 +2,46 @@ import Foundation
 import Logging
 import SwiftAgentKit
 import SwiftAgentKitMCP
+import EasyJSON
+
+// Test connection to Zapier MCP server to verify OAuth discovery works
+func testZapierConnection() async {
+    let logger = Logger(label: "ZapierTest")
+    logger.info("=== Testing Zapier MCP OAuth Discovery ===")
+    
+    let client = MCPClient(name: "test-client", version: "1.0.0")
+    
+    // Create config for Zapier MCP server (no auth provider - should trigger OAuth discovery)
+    let zapierConfig = MCPConfig.RemoteServerConfig(
+        name: "zapier-mcp",
+        url: "https://mcp.zapier.com/api/mcp/a/24603096/mcp",
+        authType: nil, // No auth provider - should trigger OAuth discovery
+        authConfig: nil
+    )
+    
+    print("Testing connection to Zapier MCP server...")
+    print("Expected: OAuth discovery should be triggered due to 401 response with WWW-Authenticate header")
+    
+    do {
+        try await client.connectToRemoteServer(config: zapierConfig)
+        print("✅ Connection successful (unexpected)")
+    } catch let error as MCPClient.MCPClientError {
+        switch error {
+        case .connectionFailed(let message):
+            if message.contains("OAuth discovery") || message.contains("manual intervention") {
+                print("✅ OAuth discovery was triggered as expected: \(message)")
+            } else {
+                print("❌ Connection failed but OAuth discovery was not triggered: \(message)")
+            }
+        default:
+            print("❌ Unexpected error type: \(error)")
+        }
+    } catch {
+        print("❌ Unexpected error: \(error)")
+    }
+    
+    print("Test completed.")
+}
 
 // Example: New MCP Architecture with MCPServerManager and MCPClient
 func newMCPArchitectureExample() async {
@@ -402,20 +442,11 @@ print("Starting MCP Examples...")
 
 // Run examples in a Task to handle async functions
 Task {
-    print("Running newMCPArchitectureExample...")
-    await newMCPArchitectureExample()
-    print("Running directMCPClientExample...")
-    await directMCPClientExample()
-    print("Running newMCPErrorHandlingExample...")
-    await newMCPErrorHandlingExample()
-    print("Running multipleServersExample...")
-    await multipleServersExample()
-    print("Running mcpManagerWithNewArchitectureExample...")
-    await mcpManagerWithNewArchitectureExample()
-    print("Running remoteServerConfigExample...")
-    await remoteServerConfigExample()
+    print("Running testZapierConnection...")
+    await testZapierConnection()
     print("MCP Examples completed!")
+    exit(0)
 }
 
-// Keep the main thread alive for a moment to allow async tasks to complete
-Thread.sleep(forTimeInterval: 3.0) 
+// Keep the main thread alive
+RunLoop.main.run() 

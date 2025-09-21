@@ -313,17 +313,30 @@ public actor RemoteTransport: Transport {
                         logger.warning("No authentication provider available for 401 challenge - this might indicate the need for OAuth discovery")
                         
                         // Check if the response contains WWW-Authenticate header with OAuth challenge
-                        if let wwwAuthenticate = httpResponse.allHeaderFields["WWW-Authenticate"] as? String,
-                           wwwAuthenticate.lowercased().contains("bearer") || wwwAuthenticate.lowercased().contains("oauth") {
-                            logger.info("Detected OAuth challenge in WWW-Authenticate header: \(wwwAuthenticate)")
+                        // Note: HTTP headers are case-insensitive, but dictionary lookup is case-sensitive
+                        let wwwAuthenticate = httpResponse.allHeaderFields["WWW-Authenticate"] as? String ??
+                                            httpResponse.allHeaderFields["Www-Authenticate"] as? String ??
+                                            httpResponse.allHeaderFields["www-authenticate"] as? String
+                        
+                        if let wwwAuthenticate = wwwAuthenticate {
+                            logger.debug("Found WWW-Authenticate header: \(wwwAuthenticate)")
                             
-                            // Check for resource_metadata which indicates MCP OAuth discovery opportunity
-                            if let resourceMetadataURL = extractResourceMetadataURL(from: wwwAuthenticate) {
-                                logger.info("Detected MCP OAuth discovery opportunity with resource_metadata: \(resourceMetadataURL)")
-                                throw RemoteTransportError.oauthDiscoveryRequired(resourceMetadataURL: resourceMetadataURL)
+                            if wwwAuthenticate.lowercased().contains("bearer") || wwwAuthenticate.lowercased().contains("oauth") {
+                                logger.info("Detected OAuth challenge in WWW-Authenticate header")
+                                
+                                // Check for resource_metadata which indicates MCP OAuth discovery opportunity
+                                if let resourceMetadataURL = extractResourceMetadataURL(from: wwwAuthenticate) {
+                                    logger.info("Detected MCP OAuth discovery opportunity with resource_metadata: \(resourceMetadataURL)")
+                                    throw RemoteTransportError.oauthDiscoveryRequired(resourceMetadataURL: resourceMetadataURL)
+                                } else {
+                                    logger.debug("No resource_metadata found in WWW-Authenticate header")
+                                    throw RemoteTransportError.authenticationFailed("OAuth authentication required but no OAuth provider configured. Consider using OAuthDiscoveryAuthProvider.")
+                                }
                             } else {
-                                throw RemoteTransportError.authenticationFailed("OAuth authentication required but no OAuth provider configured. Consider using OAuthDiscoveryAuthProvider.")
+                                logger.debug("WWW-Authenticate header does not contain bearer/oauth scheme")
                             }
+                        } else {
+                            logger.debug("No WWW-Authenticate header found in 401 response")
                         }
                         
                         throw RemoteTransportError.authenticationFailed("No authentication provider available for 401 challenge")

@@ -133,7 +133,7 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
     /// Ensures that we have a registered client and corresponding OAuth provider
     private func ensureRegisteredClient() async throws {
         // If we already have a registered client, check if it's still valid
-        if let registeredClient = registeredClient,
+        if let _ = registeredClient,
            let oauthProvider = oauthProvider {
             
             // Check if the OAuth provider is still valid
