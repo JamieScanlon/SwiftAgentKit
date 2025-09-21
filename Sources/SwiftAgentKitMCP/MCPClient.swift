@@ -112,6 +112,11 @@ public actor MCPClient {
             state = .connected
             logger.info("MCP client '\(name)' connected successfully")
         } catch {
+            // Preserve OAuthManualFlowRequired errors for manual OAuth flow handling
+            if let oauthFlowError = error as? OAuthManualFlowRequired {
+                throw oauthFlowError
+            }
+            
             // Preserve RemoteTransportError types for OAuth discovery handling
             if let remoteTransportError = error as? RemoteTransport.RemoteTransportError {
                 throw remoteTransportError
