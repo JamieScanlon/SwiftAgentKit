@@ -375,6 +375,31 @@ func remoteServerConfigExample() async {
             let toolCount = await client.tools.count
             logger.info("  Available tools: \(toolCount)")
             
+        } catch let oauthFlowError as OAuthManualFlowRequired {
+            logger.info("🔐 OAuth manual flow required for \(config.name)")
+            logger.info("📱 Authorization URL: \(oauthFlowError.authorizationURL)")
+            logger.info("🔄 Redirect URI: \(oauthFlowError.redirectURI)")
+            logger.info("🆔 Client ID: \(oauthFlowError.clientId)")
+            if let scope = oauthFlowError.scope {
+                logger.info("📋 Scope: \(scope)")
+            }
+            if let resourceURI = oauthFlowError.resourceURI {
+                logger.info("🎯 Resource URI: \(resourceURI)")
+            }
+            
+            // Example of how to handle the OAuth manual flow
+            logger.info("💡 To complete authentication:")
+            logger.info("   1. Open the authorization URL in a browser")
+            logger.info("   2. Complete the OAuth authorization flow")
+            logger.info("   3. Capture the authorization code from the redirect")
+            logger.info("   4. Use the authorization code to complete authentication")
+            
+            // In a real application, you would:
+            // - Open the URL in the system browser
+            // - Set up a local server to capture the redirect
+            // - Extract the authorization code
+            // - Complete the token exchange
+            
         } catch let mcpError as MCPClient.MCPClientError {
             switch mcpError {
             case .connectionFailed(let message):
@@ -397,6 +422,106 @@ func remoteServerConfigExample() async {
     logger.info("Replace with actual MCP server URLs and valid authentication credentials.")
 }
 
+// Example: OAuth Manual Flow Handling
+func oAuthManualFlowExample() async {
+    let logger = Logger(label: "OAuthManualFlowExample")
+    logger.info("=== SwiftAgentKit OAuth Manual Flow Example ===")
+    
+    // Example OAuth server configuration that will trigger manual flow
+    let oauthConfig = MCPConfig.RemoteServerConfig(
+        name: "oauth-server-example",
+        url: "https://mcp.example.com",
+        authType: "OAuth",
+        authConfig: .object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("example-client-id"),
+            "redirectURI": .string("com.example.mcpclient://oauth"),
+            "scope": .string("mcp:read mcp:write"),
+            "useOpenIDConnectDiscovery": .boolean(true),
+            "resourceURI": .string("https://mcp.example.com")
+        ]),
+        connectionTimeout: 30.0,
+        requestTimeout: 60.0,
+        maxRetries: 3
+    )
+    
+    let client = MCPClient(name: "oauth-test-client", version: "1.0.0")
+    
+    do {
+        logger.info("Attempting to connect to OAuth-protected MCP server...")
+        try await client.connectToRemoteServer(config: oauthConfig)
+        logger.info("✓ Successfully connected to OAuth-protected server")
+        
+    } catch let oauthFlowError as OAuthManualFlowRequired {
+        logger.info("🔐 OAuth manual flow required!")
+        logger.info("📱 Authorization URL: \(oauthFlowError.authorizationURL)")
+        logger.info("🔄 Redirect URI: \(oauthFlowError.redirectURI)")
+        logger.info("🆔 Client ID: \(oauthFlowError.clientId)")
+        
+        if let scope = oauthFlowError.scope {
+            logger.info("📋 Scope: \(scope)")
+        }
+        if let resourceURI = oauthFlowError.resourceURI {
+            logger.info("🎯 Resource URI: \(resourceURI)")
+        }
+        
+        logger.info("📊 Additional Metadata:")
+        for (key, value) in oauthFlowError.additionalMetadata {
+            logger.info("   \(key): \(value)")
+        }
+        
+        logger.info("💡 Implementation Steps:")
+        logger.info("   1. Open authorization URL in browser: \(oauthFlowError.authorizationURL)")
+        logger.info("   2. User completes OAuth authorization")
+        logger.info("   3. Capture authorization code from redirect to: \(oauthFlowError.redirectURI)")
+        logger.info("   4. Exchange authorization code for access token")
+        logger.info("   5. Retry connection with valid access token")
+        
+        // Example of how you might handle this in a real application:
+        // await handleOAuthManualFlow(oauthFlowError)
+        
+    } catch let mcpError as MCPClient.MCPClientError {
+        logger.error("❌ MCP connection error: \(mcpError.localizedDescription)")
+        
+    } catch {
+        logger.error("❌ Unexpected error: \(error)")
+    }
+}
+
+// Example helper function for handling OAuth manual flow (commented out as it requires system integration)
+/*
+func handleOAuthManualFlow(_ oauthFlowError: OAuthManualFlowRequired) async {
+    let logger = Logger(label: "OAuthFlowHandler")
+    
+    // Step 1: Open the authorization URL in the system browser
+    logger.info("Opening authorization URL in browser...")
+    if let url = URL(string: oauthFlowError.authorizationURL.absoluteString) {
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #elseif os(Linux)
+        // On Linux, you might use xdg-open or similar
+        // system("xdg-open \(url.absoluteString)")
+        #endif
+    }
+    
+    // Step 2: Set up a local server to capture the redirect
+    logger.info("Setting up local server to capture OAuth redirect...")
+    // Implementation would depend on your platform and requirements
+    
+    // Step 3: Wait for the authorization code
+    logger.info("Waiting for user to complete OAuth flow...")
+    // You would implement a mechanism to wait for the redirect and extract the code
+    
+    // Step 4: Exchange the authorization code for tokens
+    logger.info("Exchanging authorization code for access token...")
+    // You would call the token endpoint with the authorization code
+    
+    // Step 5: Retry the connection
+    logger.info("Retrying MCP connection with new access token...")
+    // You would retry the original connection attempt
+}
+*/
+
 // Run examples
 print("Starting MCP Examples...")
 
@@ -414,6 +539,8 @@ Task {
     await mcpManagerWithNewArchitectureExample()
     print("Running remoteServerConfigExample...")
     await remoteServerConfigExample()
+    print("Running oAuthManualFlowExample...")
+    await oAuthManualFlowExample()
     print("MCP Examples completed!")
 }
 

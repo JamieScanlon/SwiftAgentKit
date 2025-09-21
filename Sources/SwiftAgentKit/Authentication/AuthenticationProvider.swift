@@ -98,3 +98,47 @@ public enum AuthenticationError: LocalizedError, Sendable, Equatable {
         }
     }
 }
+
+/// OAuth manual flow required error containing all necessary metadata for launching the OAuth flow
+public struct OAuthManualFlowRequired: LocalizedError, Sendable {
+    /// The authorization URL that should be opened in a browser
+    public let authorizationURL: URL
+    /// The redirect URI that will receive the authorization code
+    public let redirectURI: URL
+    /// The client ID for the OAuth flow
+    public let clientId: String
+    /// The OAuth scope (optional)
+    public let scope: String?
+    /// The resource URI for RFC 8707 Resource Indicators (optional)
+    public let resourceURI: String?
+    /// Additional metadata that might be useful for the implementer
+    public let additionalMetadata: [String: String]
+    
+    public var errorDescription: String? {
+        return "OAuth authorization flow requires manual user intervention. Please open the authorization URL in a browser to complete authentication."
+    }
+    
+    /// Initialize the OAuth manual flow required error
+    /// - Parameters:
+    ///   - authorizationURL: The URL to open in browser for OAuth authorization
+    ///   - redirectURI: The redirect URI for the OAuth flow
+    ///   - clientId: The OAuth client ID
+    ///   - scope: The OAuth scope (optional)
+    ///   - resourceURI: The resource URI (optional)
+    ///   - additionalMetadata: Additional metadata for the implementer (optional)
+    public init(
+        authorizationURL: URL,
+        redirectURI: URL,
+        clientId: String,
+        scope: String? = nil,
+        resourceURI: String? = nil,
+        additionalMetadata: [String: String] = [:]
+    ) {
+        self.authorizationURL = authorizationURL
+        self.redirectURI = redirectURI
+        self.clientId = clientId
+        self.scope = scope
+        self.resourceURI = resourceURI
+        self.additionalMetadata = additionalMetadata
+    }
+}

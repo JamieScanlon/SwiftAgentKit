@@ -297,15 +297,12 @@ public actor RemoteTransport: Transport {
                             retryCount += 1
                             logger.debug("Updated authentication headers, retrying request")
                             continue // Retry with new credentials
+                        } catch let oauthFlowError as OAuthManualFlowRequired {
+                            logger.info("OAuth manual flow required - propagating error with metadata")
+                            // Re-throw the OAuth manual flow required error to preserve all metadata
+                            throw oauthFlowError
                         } catch {
                             logger.error("Failed to handle authentication challenge: \(error)")
-                            
-                            // For OAuth Discovery providers, check if this is a discovery-related error
-                            if error.localizedDescription.contains("OAuth authorization flow requires manual intervention") {
-                                logger.error("OAuth discovery requires manual intervention - this is expected for first-time authentication")
-                                throw RemoteTransportError.authenticationFailed("OAuth discovery requires manual user intervention to complete authorization flow")
-                            }
-                            
                             throw RemoteTransportError.authenticationFailed("Authentication refresh failed: \(error.localizedDescription)")
                         }
                     } else {

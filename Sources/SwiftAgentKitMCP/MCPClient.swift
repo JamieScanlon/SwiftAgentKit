@@ -208,6 +208,10 @@ public actor MCPClient {
             try await connect(transport: transport)
             try await getTools()
             logger.info("Successfully connected to remote server '\(config.name)'")
+        } catch let oauthFlowError as OAuthManualFlowRequired {
+            logger.info("OAuth manual flow required for MCP server - propagating error with metadata")
+            // Re-throw the OAuth manual flow required error to preserve all metadata
+            throw oauthFlowError
         } catch let transportError as RemoteTransport.RemoteTransportError {
             // Check if this is an OAuth discovery requirement
             if case .oauthDiscoveryRequired(let resourceMetadataURL) = transportError {
@@ -258,15 +262,13 @@ public actor MCPClient {
             try await connect(transport: discoveryTransport)
             try await getTools()
             logger.info("Successfully connected to remote server '\(config.name)' using OAuth discovery")
+        } catch let oauthFlowError as OAuthManualFlowRequired {
+            logger.info("OAuth manual flow required for MCP server - propagating error with metadata")
+            // Re-throw the OAuth manual flow required error to preserve all metadata
+            throw oauthFlowError
         } catch {
             logger.error("OAuth discovery failed for MCP server: \(error)")
-            
-            // If OAuth discovery fails, provide helpful error message
-            if error.localizedDescription.contains("manual intervention") {
-                throw MCPClientError.connectionFailed("OAuth discovery requires manual authorization. Please complete the OAuth flow in your browser and try again.")
-            } else {
-                throw MCPClientError.connectionFailed("OAuth discovery failed: \(error.localizedDescription)")
-            }
+            throw MCPClientError.connectionFailed("OAuth discovery failed: \(error.localizedDescription)")
         }
     }
     

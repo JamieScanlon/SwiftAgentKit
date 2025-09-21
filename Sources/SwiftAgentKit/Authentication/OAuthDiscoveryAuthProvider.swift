@@ -252,11 +252,22 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // 3. Capture the authorization code from the redirect
         // 4. Exchange the code for tokens
         
-        // For now, we'll throw an error indicating manual intervention is needed
-        throw AuthenticationError.authenticationFailed(
-            "OAuth authorization flow requires manual intervention. " +
-            "Please visit: \(finalAuthURL) " +
-            "and provide the authorization code to complete authentication."
+        // Throw the new OAuth manual flow required error with all necessary metadata
+        let additionalMetadata = [
+            "authorization_endpoint": authorizationEndpoint,
+            "token_endpoint": tokenEndpoint,
+            "code_challenge": codeChallenge,
+            "code_challenge_method": "S256",
+            "response_type": "code"
+        ]
+        
+        throw OAuthManualFlowRequired(
+            authorizationURL: finalAuthURL,
+            redirectURI: redirectURI,
+            clientId: clientId,
+            scope: scope,
+            resourceURI: resourceURI,
+            additionalMetadata: additionalMetadata
         )
     }
     
