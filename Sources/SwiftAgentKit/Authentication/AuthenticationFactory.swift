@@ -59,8 +59,12 @@ public struct AuthenticationFactory {
             return try createBasicAuthProvider(config: config)
             
         case .oauth:
+            // Check if this is a Dynamic Client Registration configuration
+            if isDynamicClientRegistrationConfig(config: config) {
+                return try createDynamicClientRegistrationProvider(config: config)
+            }
             // Check if this is a PKCE OAuth configuration
-            if isPKCEOAuthConfig(config: config) {
+            else if isPKCEOAuthConfig(config: config) {
                 return try createPKCEOAuthProvider(config: config)
             } else if isOAuthDiscoveryConfig(config: config) {
                 return try createOAuthDiscoveryProvider(config: config)
@@ -496,6 +500,130 @@ public struct AuthenticationFactory {
             redirectURI: redirectURI,
             resourceType: resourceType,
             preConfiguredAuthServerURL: preConfiguredAuthServerURL
+        )
+    }
+    
+    private static func isDynamicClientRegistrationConfig(config: JSON) -> Bool {
+        guard case .object(let configDict) = config else {
+            return false
+        }
+        
+        // Check if this is a Dynamic Client Registration configuration by looking for required fields
+        return configDict["registrationEndpoint"] != nil && 
+               configDict["redirectUris"] != nil &&
+               configDict["useDynamicClientRegistration"] != nil
+    }
+    
+    private static func createDynamicClientRegistrationProvider(config: JSON) throws -> DynamicClientRegistrationAuthProvider {
+        guard case .object(let configDict) = config else {
+            throw AuthenticationError.authenticationFailed("Dynamic Client Registration config must be an object")
+        }
+        
+        // Required fields
+        guard case .string(let registrationEndpointString) = configDict["registrationEndpoint"] else {
+            throw AuthenticationError.authenticationFailed("Dynamic Client Registration config missing 'registrationEndpoint' field")
+        }
+        
+        guard let registrationEndpoint = URL(string: registrationEndpointString),
+              registrationEndpoint.scheme != nil,
+              registrationEndpoint.host != nil else {
+            throw AuthenticationError.authenticationFailed("Invalid registration endpoint URL: \(registrationEndpointString)")
+        }
+        
+        guard case .array(let redirectUrisArray) = configDict["redirectUris"] else {
+            throw AuthenticationError.authenticationFailed("Dynamic Client Registration config missing 'redirectUris' field")
+        }
+        
+        let redirectUris = redirectUrisArray.compactMap { uri in
+            if case .string(let uriString) = uri {
+                return uriString
+            }
+            return nil
+        }
+        
+        guard !redirectUris.isEmpty else {
+            throw AuthenticationError.authenticationFailed("Dynamic Client Registration config must have at least one redirect URI")
+        }
+        
+        // Optional fields
+        let initialAccessToken: String?
+        if case .string(let token) = configDict["initialAccessToken"] {
+            initialAccessToken = token
+        } else {
+            initialAccessToken = nil
+        }
+        
+        let clientName: String?
+        if case .string(let name) = configDict["clientName"] {
+            clientName = name
+        } else {
+            clientName = nil
+        }
+        
+        let scope: String?
+        if case .string(let scopeValue) = configDict["scope"] {
+            scope = scopeValue
+        } else {
+            scope = nil
+        }
+        
+        let softwareStatement: String?
+        if case .string(let statement) = configDict["softwareStatement"] {
+            softwareStatement = statement
+        } else {
+            softwareStatement = nil
+        }
+        
+        let additionalMetadata: [String: String]?
+        if case .object(let metadataDict) = configDict["additionalMetadata"] {
+            var metadata: [String: String] = [:]
+            for (key, value) in metadataDict {
+                if case .string(let stringValue) = value {
+                    metadata[key] = stringValue
+                }
+            }
+            additionalMetadata = metadata.isEmpty ? nil : metadata
+        } else {
+            additionalMetadata = nil
+        }
+        
+        let requestTimeout: TimeInterval?
+        if case .double(let timeout) = configDict["requestTimeout"] {
+            requestTimeout = TimeInterval(timeout)
+        } else if case .integer(let timeout) = configDict["requestTimeout"] {
+            requestTimeout = TimeInterval(timeout)
+        } else {
+            requestTimeout = nil
+        }
+        
+        // Create registration configuration
+        let registrationConfig = DynamicClientRegistrationConfig(
+            registrationEndpoint: registrationEndpoint,
+            initialAccessToken: initialAccessToken,
+            requestTimeout: requestTimeout
+        )
+        
+        // Create registration request
+        let registrationRequest = DynamicClientRegistration.ClientRegistrationRequest.mcpClientRequest(
+            redirectUris: redirectUris,
+            clientName: clientName,
+            scope: scope,
+            additionalMetadata: additionalMetadata
+        )
+        
+        // Create credential storage (optional)
+        let credentialStorage: DynamicClientCredentialStorage?
+        if case .boolean(let useStorage) = configDict["useCredentialStorage"], useStorage {
+            credentialStorage = DefaultDynamicClientCredentialStorage()
+        } else {
+            credentialStorage = nil
+        }
+        
+        return DynamicClientRegistrationAuthProvider(
+            registrationConfig: registrationConfig,
+            registrationRequest: registrationRequest,
+            softwareStatement: softwareStatement,
+            credentialStorage: credentialStorage
         )
     }
 }

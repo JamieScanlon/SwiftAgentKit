@@ -50,6 +50,18 @@ public struct OAuthServerMetadata: Sendable, Codable {
     /// JSON array containing a list of the JWS signing algorithms (alg values) supported by the authorization server for the content of the JWT used to authenticate the client at the token endpoint
     public let tokenEndpointAuthSigningAlgValuesSupported: [String]?
     
+    /// URL of the authorization server's registration endpoint
+    public let registrationEndpoint: String?
+    
+    /// JSON array containing a list of client authentication methods supported by this registration endpoint
+    public let registrationEndpointAuthMethodsSupported: [String]?
+    
+    /// JSON array containing a list of the client metadata fields that the authorization server supports
+    public let registrationEndpointFieldsSupported: [String]?
+    
+    /// JSON array containing a list of the software statement fields that the authorization server supports
+    public let softwareStatementFieldsSupported: [String]?
+    
     /// URL of the authorization server's revocation endpoint
     public let revocationEndpoint: String?
     
@@ -71,8 +83,54 @@ public struct OAuthServerMetadata: Sendable, Codable {
         case userinfoEndpoint = "userinfo_endpoint"
         case subjectTypesSupported = "subject_types_supported"
         case tokenEndpointAuthSigningAlgValuesSupported = "token_endpoint_auth_signing_alg_values_supported"
+        case registrationEndpoint = "registration_endpoint"
+        case registrationEndpointAuthMethodsSupported = "registration_endpoint_auth_methods_supported"
+        case registrationEndpointFieldsSupported = "registration_endpoint_fields_supported"
+        case softwareStatementFieldsSupported = "software_statement_fields_supported"
         case revocationEndpoint = "revocation_endpoint"
         case introspectionEndpoint = "introspection_endpoint"
+    }
+    
+    public init(
+        issuer: String? = nil,
+        authorizationEndpoint: String? = nil,
+        tokenEndpoint: String? = nil,
+        tokenEndpointAuthMethodsSupported: [String]? = nil,
+        grantTypesSupported: [String]? = nil,
+        codeChallengeMethodsSupported: [String]? = nil,
+        responseTypesSupported: [String]? = nil,
+        responseModesSupported: [String]? = nil,
+        scopesSupported: [String]? = nil,
+        jwksUri: String? = nil,
+        userinfoEndpoint: String? = nil,
+        subjectTypesSupported: [String]? = nil,
+        tokenEndpointAuthSigningAlgValuesSupported: [String]? = nil,
+        registrationEndpoint: String? = nil,
+        registrationEndpointAuthMethodsSupported: [String]? = nil,
+        registrationEndpointFieldsSupported: [String]? = nil,
+        softwareStatementFieldsSupported: [String]? = nil,
+        revocationEndpoint: String? = nil,
+        introspectionEndpoint: String? = nil
+    ) {
+        self.issuer = issuer
+        self.authorizationEndpoint = authorizationEndpoint
+        self.tokenEndpoint = tokenEndpoint
+        self.tokenEndpointAuthMethodsSupported = tokenEndpointAuthMethodsSupported
+        self.grantTypesSupported = grantTypesSupported
+        self.codeChallengeMethodsSupported = codeChallengeMethodsSupported
+        self.responseTypesSupported = responseTypesSupported
+        self.responseModesSupported = responseModesSupported
+        self.scopesSupported = scopesSupported
+        self.jwksUri = jwksUri
+        self.userinfoEndpoint = userinfoEndpoint
+        self.subjectTypesSupported = subjectTypesSupported
+        self.tokenEndpointAuthSigningAlgValuesSupported = tokenEndpointAuthSigningAlgValuesSupported
+        self.registrationEndpoint = registrationEndpoint
+        self.registrationEndpointAuthMethodsSupported = registrationEndpointAuthMethodsSupported
+        self.registrationEndpointFieldsSupported = registrationEndpointFieldsSupported
+        self.softwareStatementFieldsSupported = softwareStatementFieldsSupported
+        self.revocationEndpoint = revocationEndpoint
+        self.introspectionEndpoint = introspectionEndpoint
     }
     
     public init(from decoder: Decoder) throws {
@@ -91,6 +149,10 @@ public struct OAuthServerMetadata: Sendable, Codable {
         self.userinfoEndpoint = try container.decodeIfPresent(String.self, forKey: .userinfoEndpoint)
         self.subjectTypesSupported = try container.decodeIfPresent([String].self, forKey: .subjectTypesSupported)
         self.tokenEndpointAuthSigningAlgValuesSupported = try container.decodeIfPresent([String].self, forKey: .tokenEndpointAuthSigningAlgValuesSupported)
+        self.registrationEndpoint = try container.decodeIfPresent(String.self, forKey: .registrationEndpoint)
+        self.registrationEndpointAuthMethodsSupported = try container.decodeIfPresent([String].self, forKey: .registrationEndpointAuthMethodsSupported)
+        self.registrationEndpointFieldsSupported = try container.decodeIfPresent([String].self, forKey: .registrationEndpointFieldsSupported)
+        self.softwareStatementFieldsSupported = try container.decodeIfPresent([String].self, forKey: .softwareStatementFieldsSupported)
         self.revocationEndpoint = try container.decodeIfPresent(String.self, forKey: .revocationEndpoint)
         self.introspectionEndpoint = try container.decodeIfPresent(String.self, forKey: .introspectionEndpoint)
     }
@@ -111,6 +173,10 @@ public struct OAuthServerMetadata: Sendable, Codable {
         try container.encodeIfPresent(userinfoEndpoint, forKey: .userinfoEndpoint)
         try container.encodeIfPresent(subjectTypesSupported, forKey: .subjectTypesSupported)
         try container.encodeIfPresent(tokenEndpointAuthSigningAlgValuesSupported, forKey: .tokenEndpointAuthSigningAlgValuesSupported)
+        try container.encodeIfPresent(registrationEndpoint, forKey: .registrationEndpoint)
+        try container.encodeIfPresent(registrationEndpointAuthMethodsSupported, forKey: .registrationEndpointAuthMethodsSupported)
+        try container.encodeIfPresent(registrationEndpointFieldsSupported, forKey: .registrationEndpointFieldsSupported)
+        try container.encodeIfPresent(softwareStatementFieldsSupported, forKey: .softwareStatementFieldsSupported)
         try container.encodeIfPresent(revocationEndpoint, forKey: .revocationEndpoint)
         try container.encodeIfPresent(introspectionEndpoint, forKey: .introspectionEndpoint)
     }

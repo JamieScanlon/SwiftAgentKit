@@ -7,6 +7,7 @@
 
 import EasyJSON
 import Foundation
+import SwiftAgentKit
 
 public struct MCPConfig: Codable, Sendable {
     
@@ -82,6 +83,86 @@ public struct MCPConfig: Codable, Sendable {
             self.authorizationEndpoint = authorizationEndpoint
             self.tokenEndpoint = tokenEndpoint
             self.useOpenIDConnectDiscovery = useOpenIDConnectDiscovery
+        }
+    }
+    
+    /// Configuration for OAuth 2.0 Dynamic Client Registration
+    public struct DynamicClientRegistrationConfig: Codable, Sendable {
+        /// URL of the authorization server's registration endpoint
+        public let registrationEndpoint: String
+        
+        /// Array of redirection URI strings for use in redirect-based flows
+        public let redirectUris: [String]
+        
+        /// Name of the client to be presented to the end-user
+        public let clientName: String?
+        
+        /// String containing a space-separated list of scope values
+        public let scope: String?
+        
+        /// Initial access token for registration (if required by the server)
+        public let initialAccessToken: String?
+        
+        /// Software statement for registration (if applicable)
+        public let softwareStatement: String?
+        
+        /// Whether to use credential storage for persistence
+        public let useCredentialStorage: Bool
+        
+        /// Timeout for registration requests
+        public let requestTimeout: TimeInterval?
+        
+        /// Additional metadata fields
+        public let additionalMetadata: [String: String]?
+        
+        public init(
+            registrationEndpoint: String,
+            redirectUris: [String],
+            clientName: String? = nil,
+            scope: String? = nil,
+            initialAccessToken: String? = nil,
+            softwareStatement: String? = nil,
+            useCredentialStorage: Bool = true,
+            requestTimeout: TimeInterval? = nil,
+            additionalMetadata: [String: String]? = nil
+        ) {
+            self.registrationEndpoint = registrationEndpoint
+            self.redirectUris = redirectUris
+            self.clientName = clientName
+            self.scope = scope
+            self.initialAccessToken = initialAccessToken
+            self.softwareStatement = softwareStatement
+            self.useCredentialStorage = useCredentialStorage
+            self.requestTimeout = requestTimeout
+            self.additionalMetadata = additionalMetadata
+        }
+        
+        /// Creates a Dynamic Client Registration configuration optimized for MCP clients
+        /// - Parameters:
+        ///   - registrationEndpoint: URL of the authorization server's registration endpoint
+        ///   - redirectUris: Array of redirection URI strings
+        ///   - clientName: Optional client name (defaults to "MCP Client")
+        ///   - scope: Optional scope (defaults to "mcp")
+        ///   - additionalMetadata: Optional additional metadata
+        /// - Returns: Configuration optimized for MCP clients
+        public static func mcpClientConfig(
+            registrationEndpoint: String,
+            redirectUris: [String],
+            clientName: String? = nil,
+            scope: String? = nil,
+            additionalMetadata: [String: String]? = nil
+        ) -> DynamicClientRegistrationConfig {
+            var metadata = additionalMetadata ?? [:]
+            metadata["mcp_client"] = "true"
+            metadata["client_type"] = "native"
+            
+            return DynamicClientRegistrationConfig(
+                registrationEndpoint: registrationEndpoint,
+                redirectUris: redirectUris,
+                clientName: clientName ?? "MCP Client",
+                scope: scope ?? "mcp",
+                additionalMetadata: metadata
+            )
         }
     }
     
@@ -161,5 +242,115 @@ public struct MCPConfigHelper {
         }
         
         return mcpConfig
+    }
+    
+    /// Creates a remote server configuration with Dynamic Client Registration authentication
+    /// - Parameters:
+    ///   - name: Name of the remote server
+    ///   - url: URL of the remote MCP server
+    ///   - registrationEndpoint: URL of the authorization server's registration endpoint
+    ///   - redirectUris: Array of redirection URI strings
+    ///   - clientName: Optional client name (defaults to "MCP Client")
+    ///   - scope: Optional scope (defaults to "mcp")
+    ///   - initialAccessToken: Optional initial access token for registration
+    ///   - softwareStatement: Optional software statement for registration
+    ///   - useCredentialStorage: Whether to use credential storage for persistence (defaults to true)
+    ///   - connectionTimeout: Optional connection timeout
+    ///   - requestTimeout: Optional request timeout
+    ///   - maxRetries: Optional maximum number of retries
+    /// - Returns: Remote server configuration with Dynamic Client Registration
+    public static func createRemoteServerWithDynamicClientRegistration(
+        name: String,
+        url: String,
+        registrationEndpoint: String,
+        redirectUris: [String],
+        clientName: String? = nil,
+        scope: String? = nil,
+        initialAccessToken: String? = nil,
+        softwareStatement: String? = nil,
+        useCredentialStorage: Bool = true,
+        connectionTimeout: TimeInterval? = nil,
+        requestTimeout: TimeInterval? = nil,
+        maxRetries: Int? = nil
+    ) -> MCPConfig.RemoteServerConfig {
+        
+        let dynamicClientRegConfig = MCPConfig.DynamicClientRegistrationConfig.mcpClientConfig(
+            registrationEndpoint: registrationEndpoint,
+            redirectUris: redirectUris,
+            clientName: clientName,
+            scope: scope
+        )
+        
+        // Convert to JSON for auth config
+        let authConfigDict: [String: Any] = [
+            "useDynamicClientRegistration": true,
+            "registrationEndpoint": dynamicClientRegConfig.registrationEndpoint,
+            "redirectUris": dynamicClientRegConfig.redirectUris,
+            "clientName": dynamicClientRegConfig.clientName ?? "MCP Client",
+            "scope": dynamicClientRegConfig.scope ?? "mcp",
+            "initialAccessToken": initialAccessToken ?? "",
+            "softwareStatement": softwareStatement ?? "",
+            "useCredentialStorage": useCredentialStorage,
+            "requestTimeout": requestTimeout ?? 30.0
+        ]
+        
+        let authConfig = try? JSON(authConfigDict)
+        
+        return MCPConfig.RemoteServerConfig(
+            name: name,
+            url: url,
+            authType: "OAuth",
+            authConfig: authConfig,
+            connectionTimeout: connectionTimeout,
+            requestTimeout: requestTimeout,
+            maxRetries: maxRetries
+        )
+    }
+    
+    /// Creates a remote server configuration with Dynamic Client Registration from OAuth server metadata
+    /// - Parameters:
+    ///   - name: Name of the remote server
+    ///   - url: URL of the remote MCP server
+    ///   - serverMetadata: OAuth server metadata containing registration endpoint
+    ///   - redirectUris: Array of redirection URI strings
+    ///   - clientName: Optional client name (defaults to "MCP Client")
+    ///   - scope: Optional scope (defaults to "mcp")
+    ///   - initialAccessToken: Optional initial access token for registration
+    ///   - useCredentialStorage: Whether to use credential storage for persistence (defaults to true)
+    ///   - connectionTimeout: Optional connection timeout
+    ///   - requestTimeout: Optional request timeout
+    ///   - maxRetries: Optional maximum number of retries
+    /// - Returns: Remote server configuration with Dynamic Client Registration, or nil if registration endpoint not available
+    public static func createRemoteServerWithDynamicClientRegistrationFromMetadata(
+        name: String,
+        url: String,
+        serverMetadata: OAuthServerMetadata,
+        redirectUris: [String],
+        clientName: String? = nil,
+        scope: String? = nil,
+        initialAccessToken: String? = nil,
+        useCredentialStorage: Bool = true,
+        connectionTimeout: TimeInterval? = nil,
+        requestTimeout: TimeInterval? = nil,
+        maxRetries: Int? = nil
+    ) -> MCPConfig.RemoteServerConfig? {
+        
+        guard let registrationEndpoint = serverMetadata.registrationEndpoint else {
+            return nil
+        }
+        
+        return createRemoteServerWithDynamicClientRegistration(
+            name: name,
+            url: url,
+            registrationEndpoint: registrationEndpoint,
+            redirectUris: redirectUris,
+            clientName: clientName,
+            scope: scope,
+            initialAccessToken: initialAccessToken,
+            useCredentialStorage: useCredentialStorage,
+            connectionTimeout: connectionTimeout,
+            requestTimeout: requestTimeout,
+            maxRetries: maxRetries
+        )
     }
 }
