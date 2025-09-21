@@ -167,6 +167,9 @@ public actor RemoteTransport: Transport {
                     request.setValue(value, forHTTPHeaderField: key)
                 }
                 logger.debug("Added authentication headers")
+            } catch let oauthFlowError as OAuthManualFlowRequired {
+                logger.info("OAuth manual flow required - propagating error with metadata")
+                throw oauthFlowError
             } catch {
                 logger.error("Failed to get authentication headers: \(error)")
                 throw RemoteTransportError.authenticationFailed(error.localizedDescription)
