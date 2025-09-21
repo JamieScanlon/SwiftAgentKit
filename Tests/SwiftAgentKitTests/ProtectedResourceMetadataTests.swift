@@ -310,4 +310,74 @@ struct WWWAuthenticateParserTests {
         
         #expect(parameters.isEmpty == true)
     }
+    
+    // MARK: - Authorization Servers Array Tests
+    
+    @Test("Extract authorization server URL from authorization_servers array")
+    func testExtractAuthorizationServerURLFromArray() throws {
+        // Test Zapier-style metadata with authorization_servers array
+        let metadata = ProtectedResourceMetadata(
+            issuer: nil, // No issuer field
+            authorizationServers: ["https://mcp.zapier.com", "https://backup.zapier.com"]
+        )
+        
+        let authServerURL = metadata.authorizationServerURL()
+        #expect(authServerURL?.absoluteString == "https://mcp.zapier.com")
+    }
+    
+    @Test("Extract authorization server URL prioritizes issuer over authorization_servers")
+    func testExtractAuthorizationServerURLPriority() throws {
+        // Test that issuer field takes priority over authorization_servers array
+        let metadata = ProtectedResourceMetadata(
+            issuer: "https://primary.auth.com",
+            authorizationServers: ["https://secondary.auth.com"]
+        )
+        
+        let authServerURL = metadata.authorizationServerURL()
+        #expect(authServerURL?.absoluteString == "https://primary.auth.com")
+    }
+    
+    @Test("Extract authorization server URL handles empty authorization_servers array")
+    func testExtractAuthorizationServerURLEmptyArray() throws {
+        let metadata = ProtectedResourceMetadata(
+            issuer: nil,
+            authorizationServers: [] // Empty array
+        )
+        
+        let authServerURL = metadata.authorizationServerURL()
+        #expect(authServerURL == nil)
+    }
+    
+    @Test("Decode Zapier-style protected resource metadata")
+    func testDecodeZapierStyleMetadata() throws {
+        let zapierJSON = """
+        {
+          "resource": "https://mcp.zapier.com",
+          "authorization_servers": [
+            "https://mcp.zapier.com"
+          ],
+          "scopes_supported": [
+            "openid",
+            "claudeai"
+          ],
+          "token_endpoint_auth_methods_supported": [
+            "none",
+            "client_secret_post"
+          ]
+        }
+        """
+        
+        let jsonData = zapierJSON.data(using: .utf8)!
+        let metadata = try JSONDecoder().decode(ProtectedResourceMetadata.self, from: jsonData)
+        
+        #expect(metadata.resource == "https://mcp.zapier.com")
+        #expect(metadata.authorizationServers?.count == 1)
+        #expect(metadata.authorizationServers?.first == "https://mcp.zapier.com")
+        #expect(metadata.scopesSupported?.contains("claudeai") == true)
+        #expect(metadata.tokenEndpointAuthMethodsSupported?.contains("none") == true)
+        
+        // Test authorization server URL extraction
+        let authServerURL = metadata.authorizationServerURL()
+        #expect(authServerURL?.absoluteString == "https://mcp.zapier.com")
+    }
 }

@@ -46,6 +46,9 @@ public struct ProtectedResourceMetadata: Sendable, Codable {
     /// JSON array containing a list of the OAuth 2.0 "client_id" values that this authorization server supports
     public let subjectTypesSupported: [String]?
     
+    /// JSON array containing a list of authorization server URLs (RFC 9728)
+    public let authorizationServers: [String]?
+    
     /// JSON array containing a list of the JWS signing algorithms (alg values) supported by the authorization server for the content of the JWT used to authenticate the client at the token endpoint
     public let tokenEndpointAuthSigningAlgValuesSupported: [String]?
     
@@ -77,6 +80,7 @@ public struct ProtectedResourceMetadata: Sendable, Codable {
         case scopesSupported = "scopes_supported"
         case userinfoEndpoint = "userinfo_endpoint"
         case subjectTypesSupported = "subject_types_supported"
+        case authorizationServers = "authorization_servers"
         case tokenEndpointAuthSigningAlgValuesSupported = "token_endpoint_auth_signing_alg_values_supported"
         case revocationEndpoint = "revocation_endpoint"
         case introspectionEndpoint = "introspection_endpoint"
@@ -98,6 +102,7 @@ public struct ProtectedResourceMetadata: Sendable, Codable {
         scopesSupported: [String]? = nil,
         userinfoEndpoint: String? = nil,
         subjectTypesSupported: [String]? = nil,
+        authorizationServers: [String]? = nil,
         tokenEndpointAuthSigningAlgValuesSupported: [String]? = nil,
         revocationEndpoint: String? = nil,
         introspectionEndpoint: String? = nil,
@@ -117,6 +122,7 @@ public struct ProtectedResourceMetadata: Sendable, Codable {
         self.scopesSupported = scopesSupported
         self.userinfoEndpoint = userinfoEndpoint
         self.subjectTypesSupported = subjectTypesSupported
+        self.authorizationServers = authorizationServers
         self.tokenEndpointAuthSigningAlgValuesSupported = tokenEndpointAuthSigningAlgValuesSupported
         self.revocationEndpoint = revocationEndpoint
         self.introspectionEndpoint = introspectionEndpoint
@@ -140,6 +146,7 @@ public struct ProtectedResourceMetadata: Sendable, Codable {
         self.scopesSupported = try container.decodeIfPresent([String].self, forKey: .scopesSupported)
         self.userinfoEndpoint = try container.decodeIfPresent(String.self, forKey: .userinfoEndpoint)
         self.subjectTypesSupported = try container.decodeIfPresent([String].self, forKey: .subjectTypesSupported)
+        self.authorizationServers = try container.decodeIfPresent([String].self, forKey: .authorizationServers)
         self.tokenEndpointAuthSigningAlgValuesSupported = try container.decodeIfPresent([String].self, forKey: .tokenEndpointAuthSigningAlgValuesSupported)
         self.revocationEndpoint = try container.decodeIfPresent(String.self, forKey: .revocationEndpoint)
         self.introspectionEndpoint = try container.decodeIfPresent(String.self, forKey: .introspectionEndpoint)
@@ -163,6 +170,7 @@ public struct ProtectedResourceMetadata: Sendable, Codable {
         try container.encodeIfPresent(scopesSupported, forKey: .scopesSupported)
         try container.encodeIfPresent(userinfoEndpoint, forKey: .userinfoEndpoint)
         try container.encodeIfPresent(subjectTypesSupported, forKey: .subjectTypesSupported)
+        try container.encodeIfPresent(authorizationServers, forKey: .authorizationServers)
         try container.encodeIfPresent(tokenEndpointAuthSigningAlgValuesSupported, forKey: .tokenEndpointAuthSigningAlgValuesSupported)
         try container.encodeIfPresent(revocationEndpoint, forKey: .revocationEndpoint)
         try container.encodeIfPresent(introspectionEndpoint, forKey: .introspectionEndpoint)
@@ -203,11 +211,22 @@ public struct ProtectedResourceMetadata: Sendable, Codable {
         return tokenEndpointAuthMethodsSupported?.contains("none") ?? false
     }
     
-    /// Extract the authorization server URL from the issuer field
+    /// Extract the authorization server URL from the metadata
+    /// Checks both the issuer field (RFC 8414) and authorization_servers array (RFC 9728)
     /// - Returns: URL of the authorization server or nil if not available
     public func authorizationServerURL() -> URL? {
-        guard let issuer = issuer else { return nil }
-        return URL(string: issuer)
+        // First try the issuer field (RFC 8414 - OAuth 2.0 Authorization Server Metadata)
+        if let issuer = issuer {
+            return URL(string: issuer)
+        }
+        
+        // Then try the authorization_servers array (RFC 9728 - OAuth 2.0 Protected Resource Metadata)
+        if let authorizationServers = authorizationServers,
+           let firstAuthServer = authorizationServers.first {
+            return URL(string: firstAuthServer)
+        }
+        
+        return nil
     }
 }
 
@@ -344,7 +363,12 @@ public actor ProtectedResourceMetadataClient {
     /// - Returns: Protected resource metadata or nil if not available
     /// - Throws: ProtectedResourceMetadataError if discovery fails
     public func discoverFromWWWAuthenticateHeader(_ challenge: AuthenticationChallenge) async throws -> ProtectedResourceMetadata? {
-        guard let wwwAuthenticateHeader = challenge.headers["WWW-Authenticate"] else {
+        // Handle case-insensitive header lookup (same issue as in RemoteTransport)
+        let wwwAuthenticateHeader = challenge.headers["WWW-Authenticate"] ??
+                                  challenge.headers["Www-Authenticate"] ??
+                                  challenge.headers["www-authenticate"]
+        
+        guard let wwwAuthenticateHeader = wwwAuthenticateHeader else {
             logger.debug("No WWW-Authenticate header found in challenge")
             return nil
         }
