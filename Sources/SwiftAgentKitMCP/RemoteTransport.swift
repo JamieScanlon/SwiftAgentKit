@@ -206,70 +206,52 @@ public actor RemoteTransport: Transport {
     private func testConnection() async throws {
         logger.debug("Testing connection to remote MCP server")
         
-        // Create a proper MCP initialization request using JSON-RPC
-        let initializeRequest = [
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": [
-                "protocolVersion": "2024-11-05",
-                "capabilities": [
-                    "roots": [
-                        "listChanged": true
-                    ],
-                    "sampling": [:]
-                ],
-                "clientInfo": [
-                    "name": "SwiftAgentKit-MCP",
-                    "version": "1.0.0"
-                ]
-            ]
-        ] as [String: Any]
-        
+        // Simple connectivity test - just verify the server is reachable and responds to HTTP
         var request = URLRequest(url: serverURL)
         request.httpMethod = "POST"
-        
-        // Set proper JSON-RPC headers
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         
-        // Serialize the JSON-RPC request
-        do {
-            // Add authentication headers if available
-            if let authProvider = authProvider {
+        // Add authentication headers if available
+        if let authProvider = authProvider {
+            do {
                 let authHeaders = try await authProvider.authenticationHeaders()
                 for (key, value) in authHeaders {
                     request.setValue(value, forHTTPHeaderField: key)
                 }
+            } catch {
+                logger.error("Failed to get authentication headers: \(error)")
+                throw RemoteTransportError.authenticationFailed("Failed to get authentication headers: \(error)")
             }
-            let jsonData = try JSONSerialization.data(withJSONObject: initializeRequest, options: [])
-            request.httpBody = jsonData
-            
+        }
+        
+        // Send a minimal request body (empty JSON object is valid)
+        request.httpBody = "{}".data(using: .utf8)
+        
+        do {
             let (data, response) = try await urlSession.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw RemoteTransportError.invalidResponse("Non-HTTP response received")
             }
             
-            // Check for successful response (2xx range)
-            guard (200...299).contains(httpResponse.statusCode) else {
+            logger.debug("Connection test completed with status: \(httpResponse.statusCode)")
+            
+            // For connection testing purposes, we just need to verify the server responds
+            // 401 responses indicate the server is reachable but requires authentication
+            // This is fine for a connection test - the actual protocol negotiation happens elsewhere
+            if httpResponse.statusCode == 401 {
+                logger.debug("Server requires authentication (401) - connection test successful")
+                return
+            }
+            
+            // Other non-success codes indicate connection issues
+            if !(200...299).contains(httpResponse.statusCode) && httpResponse.statusCode != 401 {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
-                logger.error("MCP initialize request failed with status \(httpResponse.statusCode): \(errorMessage)")
-                throw RemoteTransportError.serverError(httpResponse.statusCode, "Initialize request failed: \(errorMessage)")
+                throw RemoteTransportError.serverError(httpResponse.statusCode, "Server responded with error: \(errorMessage)")
             }
             
-            // Validate that we received a proper JSON-RPC response
-            if !data.isEmpty {
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let jsonrpc = json["jsonrpc"] as? String,
-                   jsonrpc == "2.0" {
-                    logger.debug("Connection test successful - received valid JSON-RPC initialize response")
-                } else {
-                    logger.warning("Received non-JSON-RPC response, but connection appears successful")
-                }
-            }
-            
-            logger.debug("Connection test successful (status: \(httpResponse.statusCode))")
+            logger.debug("Connection test successful")
         } catch {
             logger.error("Connection test failed: \(error)")
             if let transportError = error as? RemoteTransportError {

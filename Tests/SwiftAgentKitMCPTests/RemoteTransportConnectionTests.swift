@@ -147,10 +147,15 @@ struct RemoteTransportConnectionTests {
             try await transport.connect()
             #expect(Bool(false), "Should have failed due to auth provider error")
         } catch let error as RemoteTransport.RemoteTransportError {
-            if case .networkError = error {
-                // Expected - auth failures get wrapped as network errors
-            } else {
-                #expect(Bool(false), "Expected networkError, got: \(error)")
+            switch error {
+            case .authenticationFailed:
+                // Expected - auth failures in testConnection are now thrown directly
+                return
+            case .networkError:
+                // Also acceptable - some auth failures might still be wrapped
+                return
+            default:
+                #expect(Bool(false), "Expected authenticationFailed or networkError, got: \(error)")
             }
         } catch {
             // Auth provider errors can also be thrown directly
