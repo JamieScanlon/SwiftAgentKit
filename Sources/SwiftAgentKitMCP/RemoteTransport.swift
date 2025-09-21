@@ -84,8 +84,6 @@ public actor RemoteTransport: Transport {
         config.timeoutIntervalForRequest = requestTimeout
         config.timeoutIntervalForResource = connectionTimeout
         config.httpAdditionalHeaders = [
-            "Content-Type": "application/json",
-            "Accept": "application/json",
             "User-Agent": "SwiftAgentKit-MCP/1.0"
         ]
         self.urlSession = urlSession ?? URLSession(configuration: config)
@@ -151,6 +149,10 @@ public actor RemoteTransport: Transport {
         request.httpMethod = "POST"
         request.httpBody = data
         
+        // Set proper headers for MCP over HTTP
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        
         // Add authentication headers if available
         if let authProvider = authProvider {
             do {
@@ -198,29 +200,67 @@ public actor RemoteTransport: Transport {
     private func testConnection() async throws {
         logger.debug("Testing connection to remote MCP server")
         
-        // Create a lightweight test request - could be OPTIONS or a simple JSON-RPC ping
+        // Create a proper MCP initialization request using JSON-RPC
+        let initializeRequest = [
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": [
+                "protocolVersion": "2024-11-05",
+                "capabilities": [
+                    "roots": [
+                        "listChanged": true
+                    ],
+                    "sampling": [:]
+                ],
+                "clientInfo": [
+                    "name": "SwiftAgentKit-MCP",
+                    "version": "1.0.0"
+                ]
+            ]
+        ] as [String: Any]
+        
         var request = URLRequest(url: serverURL)
-        request.httpMethod = "OPTIONS"
+        request.httpMethod = "POST"
         
-        // Add authentication headers if available
-        if let authProvider = authProvider {
-            let authHeaders = try await authProvider.authenticationHeaders()
-            for (key, value) in authHeaders {
-                request.setValue(value, forHTTPHeaderField: key)
-            }
-        }
+        // Set proper JSON-RPC headers
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         
+        // Serialize the JSON-RPC request
         do {
-            let (_, response) = try await urlSession.data(for: request)
+            // Add authentication headers if available
+            if let authProvider = authProvider {
+                let authHeaders = try await authProvider.authenticationHeaders()
+                for (key, value) in authHeaders {
+                    request.setValue(value, forHTTPHeaderField: key)
+                }
+            }
+            let jsonData = try JSONSerialization.data(withJSONObject: initializeRequest, options: [])
+            request.httpBody = jsonData
+            
+            let (data, response) = try await urlSession.data(for: request)
             
             guard let httpResponse = response as? HTTPURLResponse else {
                 throw RemoteTransportError.invalidResponse("Non-HTTP response received")
             }
             
-            // Accept various success codes for OPTIONS (2xx range) or even 405 (Method Not Allowed)
-            // since some MCP servers might not support OPTIONS
-            guard (200...299).contains(httpResponse.statusCode) || httpResponse.statusCode == 405 else {
-                throw RemoteTransportError.serverError(httpResponse.statusCode, "Connection test failed")
+            // Check for successful response (2xx range)
+            guard (200...299).contains(httpResponse.statusCode) else {
+                let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+                logger.error("MCP initialize request failed with status \(httpResponse.statusCode): \(errorMessage)")
+                throw RemoteTransportError.serverError(httpResponse.statusCode, "Initialize request failed: \(errorMessage)")
+            }
+            
+            // Validate that we received a proper JSON-RPC response
+            if !data.isEmpty {
+                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let jsonrpc = json["jsonrpc"] as? String,
+                   jsonrpc == "2.0" {
+                    logger.debug("Connection test successful - received valid JSON-RPC initialize response")
+                } else {
+                    logger.warning("Received non-JSON-RPC response, but connection appears successful")
+                }
             }
             
             logger.debug("Connection test successful (status: \(httpResponse.statusCode))")
