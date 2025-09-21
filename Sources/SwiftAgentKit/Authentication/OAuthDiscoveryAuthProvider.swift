@@ -23,6 +23,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     private let scope: String?
     private let redirectURI: URL
     private let preConfiguredAuthServerURL: URL?
+    private let resourceURI: String?
     
     // Discovery state
     private var oauthServerMetadata: OAuthServerMetadata?
@@ -39,6 +40,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     ///   - redirectURI: OAuth redirect URI
     ///   - resourceType: Type of resource (e.g., "mcp" for MCP servers)
     ///   - preConfiguredAuthServerURL: Pre-configured authorization server URL (optional)
+    ///   - resourceURI: Resource URI for RFC 8707 Resource Indicators (optional, will use resourceServerURL if not provided)
     public init(
         resourceServerURL: URL,
         clientId: String,
@@ -46,8 +48,9 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         scope: String? = nil,
         redirectURI: URL,
         resourceType: String? = "mcp",
-        preConfiguredAuthServerURL: URL? = nil
-    ) {
+        preConfiguredAuthServerURL: URL? = nil,
+        resourceURI: String? = nil
+    ) throws {
         self.resourceServerURL = resourceServerURL
         self.clientId = clientId
         self.clientSecret = clientSecret
@@ -55,6 +58,11 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         self.redirectURI = redirectURI
         self.resourceType = resourceType
         self.preConfiguredAuthServerURL = preConfiguredAuthServerURL
+        
+        // Use provided resourceURI or derive from resourceServerURL
+        let targetResourceURI = resourceURI ?? resourceServerURL.absoluteString
+        self.resourceURI = try ResourceIndicatorUtilities.canonicalizeResourceURI(targetResourceURI)
+        
         self.discoveryManager = OAuthDiscoveryManager()
     }
     
@@ -68,6 +76,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     ///   - resourceType: Type of resource (e.g., "mcp" for MCP servers)
     ///   - preConfiguredAuthServerURL: Pre-configured authorization server URL (optional)
     ///   - discoveryManager: Custom discovery manager (optional)
+    ///   - resourceURI: Resource URI for RFC 8707 Resource Indicators (optional, will use resourceServerURL if not provided)
     public init(
         resourceServerURL: URL,
         clientId: String,
@@ -76,8 +85,9 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         redirectURI: URL,
         resourceType: String? = "mcp",
         preConfiguredAuthServerURL: URL? = nil,
-        discoveryManager: OAuthDiscoveryManager
-    ) {
+        discoveryManager: OAuthDiscoveryManager,
+        resourceURI: String? = nil
+    ) throws {
         self.resourceServerURL = resourceServerURL
         self.clientId = clientId
         self.clientSecret = clientSecret
@@ -86,6 +96,10 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         self.resourceType = resourceType
         self.preConfiguredAuthServerURL = preConfiguredAuthServerURL
         self.discoveryManager = discoveryManager
+        
+        // Use provided resourceURI or derive from resourceServerURL
+        let targetResourceURI = resourceURI ?? resourceServerURL.absoluteString
+        self.resourceURI = try ResourceIndicatorUtilities.canonicalizeResourceURI(targetResourceURI)
     }
     
     // MARK: - AuthenticationProvider Protocol
@@ -176,7 +190,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         )
         
         // Validate that the authorization server supports PKCE as required by MCP spec
-        _ = try oauthServerMetadata?.validatePKCESupport()
+        try oauthServerMetadata?.validatePKCESupport()
         
         logger.info("OAuth server discovery completed successfully")
     }
@@ -216,6 +230,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         if let scope = scope {
             queryItems.append(URLQueryItem(name: "scope", value: scope))
+        }
+        
+        // Add resource parameter as required by RFC 8707 for MCP clients
+        if let resourceURI = resourceURI {
+            queryItems.append(URLQueryItem(name: "resource", value: resourceURI))
+            logger.info("Added resource parameter to authorization request: \(resourceURI)")
         }
         
         authURLComponents.queryItems = queryItems
@@ -268,6 +288,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             URLQueryItem(name: "client_id", value: clientId),
             URLQueryItem(name: "code_verifier", value: codeVerifier)
         ]
+        
+        // Add resource parameter as required by RFC 8707 for MCP clients
+        if let resourceURI = resourceURI {
+            bodyComponents.queryItems?.append(URLQueryItem(name: "resource", value: resourceURI))
+            logger.info("Added resource parameter to token request: \(resourceURI)")
+        }
         
         if let clientSecret = clientSecret {
             bodyComponents.queryItems?.append(URLQueryItem(name: "client_secret", value: clientSecret))
@@ -328,6 +354,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             URLQueryItem(name: "refresh_token", value: refreshToken),
             URLQueryItem(name: "client_id", value: clientId)
         ]
+        
+        // Add resource parameter as required by RFC 8707 for MCP clients
+        if let resourceURI = resourceURI {
+            bodyComponents.queryItems?.append(URLQueryItem(name: "resource", value: resourceURI))
+            logger.info("Added resource parameter to token refresh request: \(resourceURI)")
+        }
         
         if let clientSecret = clientSecret {
             bodyComponents.queryItems?.append(URLQueryItem(name: "client_secret", value: clientSecret))

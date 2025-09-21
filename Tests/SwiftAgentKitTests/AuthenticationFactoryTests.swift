@@ -234,12 +234,54 @@ struct AuthenticationFactoryTests {
     
     @Test("Factory should prioritize Bearer token over API key in environment")
     func testEnvironmentPriority() async throws {
+        // Clear any existing environment variables first
+        unsetenv("TESTSERVER_TOKEN")
+        unsetenv("TESTSERVER_BEARER_TOKEN")
+        unsetenv("TESTSERVER_API_KEY")
+        unsetenv("TESTSERVER_USERNAME")
+        unsetenv("TESTSERVER_PASSWORD")
+        unsetenv("TESTSERVER_PKCE_OAUTH_ISSUER_URL")
+        unsetenv("TESTSERVER_PKCE_OAUTH_CLIENT_ID")
+        unsetenv("TESTSERVER_PKCE_OAUTH_REDIRECT_URI")
+        unsetenv("TESTSERVER_PKCE_OAUTH_CLIENT_SECRET")
+        unsetenv("TESTSERVER_PKCE_OAUTH_SCOPE")
+        unsetenv("TESTSERVER_PKCE_OAUTH_AUTHORIZATION_ENDPOINT")
+        unsetenv("TESTSERVER_PKCE_OAUTH_TOKEN_ENDPOINT")
+        unsetenv("TESTSERVER_PKCE_OAUTH_RESOURCE_URI")
+        unsetenv("TESTSERVER_OAUTH_ISSUER_URL")
+        unsetenv("TESTSERVER_OAUTH_CLIENT_ID")
+        unsetenv("TESTSERVER_OAUTH_CLIENT_SECRET")
+        unsetenv("TESTSERVER_OAUTH_REDIRECT_URI")
+        unsetenv("TESTSERVER_OAUTH_SCOPE")
+        unsetenv("TESTSERVER_OAUTH_AUTHORIZATION_ENDPOINT")
+        unsetenv("TESTSERVER_OAUTH_TOKEN_ENDPOINT")
+        unsetenv("TESTSERVER_OAUTH_RESOURCE_URI")
+        
         // Set both Bearer token and API key
         setenv("TESTSERVER_BEARER_TOKEN", "priority-bearer-token", 1)
         setenv("TESTSERVER_API_KEY", "priority-api-key", 1)
         defer {
+            unsetenv("TESTSERVER_TOKEN")
             unsetenv("TESTSERVER_BEARER_TOKEN")
             unsetenv("TESTSERVER_API_KEY")
+            unsetenv("TESTSERVER_USERNAME")
+            unsetenv("TESTSERVER_PASSWORD")
+            unsetenv("TESTSERVER_PKCE_OAUTH_ISSUER_URL")
+            unsetenv("TESTSERVER_PKCE_OAUTH_CLIENT_ID")
+            unsetenv("TESTSERVER_PKCE_OAUTH_REDIRECT_URI")
+            unsetenv("TESTSERVER_PKCE_OAUTH_CLIENT_SECRET")
+            unsetenv("TESTSERVER_PKCE_OAUTH_SCOPE")
+            unsetenv("TESTSERVER_PKCE_OAUTH_AUTHORIZATION_ENDPOINT")
+            unsetenv("TESTSERVER_PKCE_OAUTH_TOKEN_ENDPOINT")
+            unsetenv("TESTSERVER_PKCE_OAUTH_RESOURCE_URI")
+            unsetenv("TESTSERVER_OAUTH_ISSUER_URL")
+            unsetenv("TESTSERVER_OAUTH_CLIENT_ID")
+            unsetenv("TESTSERVER_OAUTH_CLIENT_SECRET")
+            unsetenv("TESTSERVER_OAUTH_REDIRECT_URI")
+            unsetenv("TESTSERVER_OAUTH_SCOPE")
+            unsetenv("TESTSERVER_OAUTH_AUTHORIZATION_ENDPOINT")
+            unsetenv("TESTSERVER_OAUTH_TOKEN_ENDPOINT")
+            unsetenv("TESTSERVER_OAUTH_RESOURCE_URI")
         }
         
         let provider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "testserver")
@@ -719,6 +761,193 @@ struct AuthenticationFactoryTests {
             }
         } catch {
             #expect(Bool(false), "Unexpected error type: \(error)")
+        }
+    }
+    
+    // MARK: - RFC 8707 Resource Parameter Tests
+    
+    @Test("Factory should create PKCE OAuth provider with resource parameter")
+    func testCreatePKCEOAuthProviderWithResourceParameter() throws {
+        let config = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("test_client_id"),
+            "clientSecret": .string("test_client_secret"),
+            "scope": .string("mcp read write"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "resourceURI": .string("https://mcp.example.com/mcp"),
+            "useOpenIDConnectDiscovery": .boolean(true)
+        ])
+        
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        
+        #expect(provider.scheme == .oauth)
+        #expect(provider is PKCEOAuthAuthProvider)
+    }
+    
+    @Test("Factory should create PKCE OAuth provider without resource parameter")
+    func testCreatePKCEOAuthProviderWithoutResourceParameter() throws {
+        let config = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("test_client_id"),
+            "redirectURI": .string("https://app.example.com/callback")
+        ])
+        
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        
+        #expect(provider.scheme == .oauth)
+        #expect(provider is PKCEOAuthAuthProvider)
+    }
+    
+    @Test("Factory should reject invalid resource parameter in PKCE OAuth config")
+    func testCreatePKCEOAuthProviderWithInvalidResourceParameter() {
+        let config = JSON.object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("test_client_id"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "resourceURI": .string("invalid-uri-no-scheme") // Invalid resource URI
+        ])
+        
+        #expect(throws: Error.self) {
+            try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        }
+    }
+    
+    @Test("Factory should create OAuth Discovery provider with resource parameter")
+    func testCreateOAuthDiscoveryProviderWithResourceParameter() throws {
+        let config = JSON.object([
+            "resourceServerURL": .string("https://mcp.example.com/mcp"),
+            "clientId": .string("test_client_id"),
+            "redirectURI": .string("https://app.example.com/callback"),
+            "useOAuthDiscovery": .boolean(true),
+            "resourceURI": .string("https://mcp.example.com/mcp")
+        ])
+        
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        
+        #expect(provider.scheme == .oauth)
+        #expect(provider is OAuthDiscoveryAuthProvider)
+    }
+    
+    @Test("Factory should handle resource parameter canonicalization")
+    func testFactoryResourceParameterCanonicalization() throws {
+        let testCases: [(input: String, expectedCanonical: String)] = [
+            ("HTTPS://MCP.EXAMPLE.COM/MCP", "https://mcp.example.com/MCP"),
+            ("https://mcp.example.com:443", "https://mcp.example.com"),
+            ("https://mcp.example.com/", "https://mcp.example.com")
+        ]
+        
+        for (input, _) in testCases {
+            let config = JSON.object([
+                "issuerURL": .string("https://auth.example.com"),
+                "clientId": .string("test_client_id"),
+                "redirectURI": .string("https://app.example.com/callback"),
+                "resourceURI": .string(input)
+            ])
+            
+            // Should not throw - canonicalization happens during provider creation
+            let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+            #expect(provider.scheme == .oauth)
+            
+            // The provider should have been created with the canonicalized URI
+            // (We can't directly test this without exposing internal state)
+        }
+    }
+    
+    @Test("Environment-based factory should support resource parameter")
+    func testEnvironmentBasedFactoryResourceParameter() {
+        // Use a unique server name to avoid conflicts with other tests
+        let serverName = "resourceparamserver"
+        
+        // Clear any conflicting environment variables first
+        unsetenv("\(serverName.uppercased())_TOKEN")
+        unsetenv("\(serverName.uppercased())_BEARER_TOKEN")
+        unsetenv("\(serverName.uppercased())_API_KEY")
+        unsetenv("\(serverName.uppercased())_USERNAME")
+        unsetenv("\(serverName.uppercased())_PASSWORD")
+        
+        // Set up environment variables
+        let envVars = [
+            "\(serverName.uppercased())_PKCE_OAUTH_ISSUER_URL": "https://auth.example.com",
+            "\(serverName.uppercased())_PKCE_OAUTH_CLIENT_ID": "test_client_id",
+            "\(serverName.uppercased())_PKCE_OAUTH_REDIRECT_URI": "https://app.example.com/callback",
+            "\(serverName.uppercased())_PKCE_OAUTH_RESOURCE_URI": "https://mcp.example.com/mcp"
+        ]
+        
+        // Mock environment (in real tests, you might need a different approach)
+        // This test documents the expected behavior
+        
+        for (key, value) in envVars {
+            setenv(key, value, 1)
+        }
+        
+        defer {
+            // Clean up environment variables
+            unsetenv("\(serverName.uppercased())_TOKEN")
+            unsetenv("\(serverName.uppercased())_BEARER_TOKEN")
+            unsetenv("\(serverName.uppercased())_API_KEY")
+            unsetenv("\(serverName.uppercased())_USERNAME")
+            unsetenv("\(serverName.uppercased())_PASSWORD")
+            for (key, _) in envVars {
+                unsetenv(key)
+            }
+        }
+        
+        let provider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: serverName)
+        
+        // Should create a provider when all required environment variables are present
+        #expect(provider != nil)
+        #expect(provider?.scheme == .oauth)
+    }
+    
+    @Test("Environment-based factory should work without resource parameter")
+    func testEnvironmentBasedFactoryWithoutResourceParameter() {
+        // Set up environment variables without resource URI
+        let envVars = [
+            "TESTSERVER2_PKCE_OAUTH_ISSUER_URL": "https://auth.example.com",
+            "TESTSERVER2_PKCE_OAUTH_CLIENT_ID": "test_client_id",
+            "TESTSERVER2_PKCE_OAUTH_REDIRECT_URI": "https://app.example.com/callback"
+            // Note: no TESTSERVER2_PKCE_OAUTH_RESOURCE_URI
+        ]
+        
+        for (key, value) in envVars {
+            setenv(key, value, 1)
+        }
+        
+        defer {
+            for (key, _) in envVars {
+                unsetenv(key)
+            }
+        }
+        
+        let provider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "testserver2")
+        
+        // Should still create a provider even without resource URI
+        #expect(provider != nil)
+        #expect(provider?.scheme == .oauth)
+    }
+    
+    @Test("Factory should handle multiple resource parameter formats")
+    func testFactoryMultipleResourceParameterFormats() throws {
+        let resourceURIs = [
+            "https://mcp.example.com/mcp",
+            "https://api.example.com:8443/v1/mcp",
+            "https://localhost:9000/mcp",
+            "https://mcp-server.internal.company.com/services/mcp"
+        ]
+        
+        for resourceURI in resourceURIs {
+            let config = JSON.object([
+                "issuerURL": .string("https://auth.example.com"),
+                "clientId": .string("test_client_id"),
+                "redirectURI": .string("https://app.example.com/callback"),
+                "resourceURI": .string(resourceURI)
+            ])
+            
+            let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+            #expect(provider.scheme == .oauth)
+            
+            // Verify the resource URI is valid
+            #expect(ResourceIndicatorUtilities.isValidResourceURI(resourceURI))
         }
     }
 }

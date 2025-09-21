@@ -130,7 +130,7 @@ struct OAuthDiscoveryAuthProviderTests {
         let resourceServerURL = URL(string: "https://mcp.example.com")!
         let redirectURI = URL(string: "https://client.example.com/callback")!
         
-        let provider = OAuthDiscoveryAuthProvider(
+        let provider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: "test-client-id",
             clientSecret: "test-client-secret",
@@ -151,7 +151,7 @@ struct OAuthDiscoveryAuthProviderTests {
         let redirectURI = URL(string: "https://client.example.com/callback")!
         let discoveryManager = OAuthDiscoveryManager()
         
-        let provider = OAuthDiscoveryAuthProvider(
+        let provider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: "test-client-id",
             clientSecret: "test-client-secret",
@@ -171,7 +171,7 @@ struct OAuthDiscoveryAuthProviderTests {
         let resourceServerURL = URL(string: "https://mcp.example.com")!
         let redirectURI = URL(string: "https://client.example.com/callback")!
         
-        let provider = OAuthDiscoveryAuthProvider(
+        let provider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: "test-client-id",
             redirectURI: redirectURI
@@ -189,7 +189,7 @@ struct OAuthDiscoveryAuthProviderTests {
         let resourceServerURL = URL(string: "https://mcp.example.com")!
         let redirectURI = URL(string: "https://client.example.com/callback")!
         
-        let provider = OAuthDiscoveryAuthProvider(
+        let provider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: "test-client-id",
             redirectURI: redirectURI
@@ -204,7 +204,7 @@ struct OAuthDiscoveryAuthProviderTests {
         let resourceServerURL = URL(string: "https://mcp.example.com")!
         let redirectURI = URL(string: "https://client.example.com/callback")!
         
-        let provider = OAuthDiscoveryAuthProvider(
+        let provider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: "test-client-id",
             redirectURI: redirectURI
@@ -230,7 +230,7 @@ struct OAuthDiscoveryAuthProviderTests {
         let resourceServerURL = URL(string: "https://mcp.example.com")!
         let redirectURI = URL(string: "https://client.example.com/callback")!
         
-        let provider = OAuthDiscoveryAuthProvider(
+        let provider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: "test-client-id",
             redirectURI: redirectURI
@@ -255,7 +255,7 @@ struct OAuthDiscoveryAuthProviderTests {
         let resourceServerURL = URL(string: "https://mcp.example.com")!
         let redirectURI = URL(string: "https://client.example.com/callback")!
         
-        let provider = OAuthDiscoveryAuthProvider(
+        let provider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: "test-client-id",
             redirectURI: redirectURI

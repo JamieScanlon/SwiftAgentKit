@@ -124,6 +124,7 @@ public struct AuthenticationFactory {
             let authorizationEndpoint = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_AUTHORIZATION_ENDPOINT"]
             let tokenEndpoint = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_TOKEN_ENDPOINT"]
             let useOIDCDiscovery = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_USE_OIDC_DISCOVERY"] != "false"
+            let resourceURI = ProcessInfo.processInfo.environment["\(envPrefix)PKCE_OAUTH_RESOURCE_URI"]
             
             let authorizationEndpointURL = authorizationEndpoint.flatMap(URL.init)
             let tokenEndpointURL = tokenEndpoint.flatMap(URL.init)
@@ -137,7 +138,8 @@ public struct AuthenticationFactory {
                     redirectURI: redirectURIParsed,
                     authorizationEndpoint: authorizationEndpointURL,
                     tokenEndpoint: tokenEndpointURL,
-                    useOpenIDConnectDiscovery: useOIDCDiscovery
+                    useOpenIDConnectDiscovery: useOIDCDiscovery,
+                    resourceURI: resourceURI
                 )
                 
                 logger.info("Creating PKCE OAuth provider from environment for server: \(serverName)")
@@ -166,15 +168,20 @@ public struct AuthenticationFactory {
                 scope: scope
             )
             
-            let oauthConfig = OAuthConfig(
-                tokenEndpoint: tokenEndpointURL,
-                clientId: clientId,
-                clientSecret: clientSecret,
-                scope: scope
-            )
-            
-            logger.info("Creating OAuth provider from environment for server: \(serverName)")
-            return OAuthAuthProvider(tokens: tokens, config: oauthConfig)
+            do {
+                let oauthConfig = try OAuthConfig(
+                    tokenEndpoint: tokenEndpointURL,
+                    clientId: clientId,
+                    clientSecret: clientSecret,
+                    scope: scope
+                )
+                
+                logger.info("Creating OAuth provider from environment for server: \(serverName)")
+                return OAuthAuthProvider(tokens: tokens, config: oauthConfig)
+            } catch {
+                logger.error("Failed to create OAuth config from environment: \(error)")
+                return nil
+            }
         }
         
         logger.debug("No authentication configuration found in environment for server: \(serverName)")
@@ -318,7 +325,7 @@ public struct AuthenticationFactory {
             scope: scope
         )
         
-        let oauthConfig = OAuthConfig(
+        let oauthConfig = try OAuthConfig(
             tokenEndpoint: tokenEndpoint,
             clientId: clientId,
             clientSecret: clientSecret,
@@ -336,7 +343,7 @@ public struct AuthenticationFactory {
         // Check if this is a PKCE OAuth configuration by looking for required PKCE fields
         return configDict["issuerURL"] != nil && 
                configDict["redirectURI"] != nil &&
-               configDict["usePKCE"] != nil
+               configDict["clientId"] != nil
     }
     
     private static func isOAuthDiscoveryConfig(config: JSON) -> Bool {
@@ -418,6 +425,13 @@ public struct AuthenticationFactory {
             useOpenIDConnectDiscovery = true
         }
         
+        let resourceURI: String?
+        if case .string(let resource) = configDict["resourceURI"] {
+            resourceURI = resource
+        } else {
+            resourceURI = nil
+        }
+        
         // Create PKCE OAuth configuration
         let pkceConfig = try PKCEOAuthConfig(
             issuerURL: issuerURL,
@@ -427,7 +441,8 @@ public struct AuthenticationFactory {
             redirectURI: redirectURI,
             authorizationEndpoint: authorizationEndpoint,
             tokenEndpoint: tokenEndpoint,
-            useOpenIDConnectDiscovery: useOpenIDConnectDiscovery
+            useOpenIDConnectDiscovery: useOpenIDConnectDiscovery,
+            resourceURI: resourceURI
         )
         
         return PKCEOAuthAuthProvider(config: pkceConfig)
@@ -492,7 +507,7 @@ public struct AuthenticationFactory {
             preConfiguredAuthServerURL = nil
         }
         
-        return OAuthDiscoveryAuthProvider(
+        return try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: clientId,
             clientSecret: clientSecret,

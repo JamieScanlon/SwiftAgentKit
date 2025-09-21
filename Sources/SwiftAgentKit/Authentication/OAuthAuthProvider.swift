@@ -47,17 +47,27 @@ public struct OAuthConfig: Sendable {
     public let clientId: String
     public let clientSecret: String?
     public let scope: String?
+    /// Resource URI for RFC 8707 Resource Indicators (required for MCP clients)
+    public let resourceURI: String?
     
     public init(
         tokenEndpoint: URL,
         clientId: String,
         clientSecret: String? = nil,
-        scope: String? = nil
-    ) {
+        scope: String? = nil,
+        resourceURI: String? = nil
+    ) throws {
         self.tokenEndpoint = tokenEndpoint
         self.clientId = clientId
         self.clientSecret = clientSecret
         self.scope = scope
+        
+        // Validate and canonicalize resource URI if provided
+        if let resourceURI = resourceURI {
+            self.resourceURI = try ResourceIndicatorUtilities.canonicalizeResourceURI(resourceURI)
+        } else {
+            self.resourceURI = nil
+        }
     }
 }
 
@@ -169,6 +179,12 @@ public actor OAuthAuthProvider: AuthenticationProvider {
         
         if let scope = config.scope {
             bodyComponents.append("scope=\(scope)")
+        }
+        
+        // Add resource parameter as required by RFC 8707 for MCP clients
+        if let resourceURI = config.resourceURI {
+            bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
+            logger.info("Added resource parameter to token refresh request: \(resourceURI)")
         }
         
         // Add client authentication

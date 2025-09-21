@@ -35,8 +35,8 @@ struct OAuthAuthProviderTests {
         clientId: String = "test-client-id",
         clientSecret: String? = "test-client-secret",
         scope: String? = "read write"
-    ) -> OAuthConfig {
-        return OAuthConfig(
+    ) throws -> OAuthConfig {
+        return try OAuthConfig(
             tokenEndpoint: URL(string: tokenEndpoint)!,
             clientId: clientId,
             clientSecret: clientSecret,
@@ -49,7 +49,7 @@ struct OAuthAuthProviderTests {
     @Test("OAuth provider should have correct scheme")
     func testScheme() async throws {
         let tokens = createTestTokens()
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let scheme = await provider.scheme
@@ -60,7 +60,7 @@ struct OAuthAuthProviderTests {
     @Test("Authentication headers should contain OAuth token")
     func testAuthenticationHeaders() async throws {
         let tokens = createTestTokens(accessToken: "oauth-access-123", tokenType: "Bearer")
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let headers = try await provider.authenticationHeaders()
@@ -75,7 +75,7 @@ struct OAuthAuthProviderTests {
         
         for tokenType in tokenTypes {
             let tokens = createTestTokens(accessToken: "token-123", tokenType: tokenType)
-            let config = createTestConfig()
+            let config = try createTestConfig()
             let provider = OAuthAuthProvider(tokens: tokens, config: config)
             
             let headers = try await provider.authenticationHeaders()
@@ -102,7 +102,7 @@ struct OAuthAuthProviderTests {
             scope: tokens.scope
         )
         
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokensWithExpiration, config: config)
         
         let isValid = await provider.isAuthenticationValid()
@@ -119,7 +119,7 @@ struct OAuthAuthProviderTests {
             scope: nil
         )
         
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: expiredTokens, config: config)
         
         let isValid = await provider.isAuthenticationValid()
@@ -129,7 +129,7 @@ struct OAuthAuthProviderTests {
     @Test("Authentication should be valid when no expiration is set")
     func testIsAuthenticationValidNoExpiration() async throws {
         let tokens = createTestTokens(expiresIn: nil)
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let isValid = await provider.isAuthenticationValid()
@@ -141,7 +141,7 @@ struct OAuthAuthProviderTests {
     @Test("Get current access token should return correct token")
     func testGetCurrentAccessToken() async throws {
         let tokens = createTestTokens(accessToken: "current-access-token")
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let currentToken = await provider.getCurrentAccessToken()
@@ -156,7 +156,7 @@ struct OAuthAuthProviderTests {
             tokenType: "Bearer",
             scope: "read write delete"
         )
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: originalTokens, config: config)
         
         let currentTokens = await provider.getCurrentTokens()
@@ -170,7 +170,7 @@ struct OAuthAuthProviderTests {
     @Test("Update tokens should change provider tokens")
     func testUpdateTokens() async throws {
         let initialTokens = createTestTokens(accessToken: "initial-token")
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: initialTokens, config: config)
         
         // Verify initial state
@@ -194,7 +194,7 @@ struct OAuthAuthProviderTests {
     @Test("Handle authentication challenge should throw when no refresh token")
     func testHandleAuthenticationChallengeNoRefreshToken() async throws {
         let tokens = createTestTokens(refreshToken: nil)
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let challenge = AuthenticationChallenge(
@@ -212,7 +212,7 @@ struct OAuthAuthProviderTests {
     @Test("Handle authentication challenge should throw for non-401 status")
     func testHandleAuthenticationChallengeNon401() async throws {
         let tokens = createTestTokens()
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let challenge = AuthenticationChallenge(
@@ -239,7 +239,7 @@ struct OAuthAuthProviderTests {
     @Test("Cleanup should complete without errors")
     func testCleanup() async throws {
         let tokens = createTestTokens()
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         // Should not throw
@@ -251,7 +251,7 @@ struct OAuthAuthProviderTests {
     @Test("Multiple concurrent calls should work correctly")
     func testConcurrentCalls() async throws {
         let tokens = createTestTokens(accessToken: "concurrent-token", tokenType: "Bearer")
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         // Run multiple concurrent authentication header requests
@@ -280,7 +280,7 @@ struct OAuthAuthProviderTests {
     @Test("Concurrent token updates should work correctly")
     func testConcurrentTokenUpdates() async throws {
         let initialTokens = createTestTokens(accessToken: "initial")
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: initialTokens, config: config)
         
         // Run concurrent token updates
@@ -358,7 +358,7 @@ struct OAuthAuthProviderTests {
     @Test("OAuthConfig should preserve all fields")
     func testOAuthConfigFieldPreservation() async throws {
         let tokenEndpoint = URL(string: "https://oauth.example.com/token")!
-        let config = OAuthConfig(
+        let config = try OAuthConfig(
             tokenEndpoint: tokenEndpoint,
             clientId: "client-123",
             clientSecret: "secret-456",
@@ -374,7 +374,7 @@ struct OAuthAuthProviderTests {
     @Test("OAuthConfig should handle optional fields")
     func testOAuthConfigOptionalFields() async throws {
         let tokenEndpoint = URL(string: "https://oauth.example.com/token")!
-        let config = OAuthConfig(
+        let config = try OAuthConfig(
             tokenEndpoint: tokenEndpoint,
             clientId: "public-client",
             clientSecret: nil,
@@ -392,7 +392,7 @@ struct OAuthAuthProviderTests {
     @Test("Provider should handle empty access token")
     func testEmptyAccessToken() async throws {
         let tokens = createTestTokens(accessToken: "")
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let headers = try await provider.authenticationHeaders()
@@ -403,7 +403,7 @@ struct OAuthAuthProviderTests {
     func testSpecialCharactersInTokens() async throws {
         let specialToken = "token-with-!@#$%^&*()_+{}|:<>?[]\\;'\",./"
         let tokens = createTestTokens(accessToken: specialToken)
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let headers = try await provider.authenticationHeaders()
@@ -414,7 +414,7 @@ struct OAuthAuthProviderTests {
     func testUnicodeInTokens() async throws {
         let unicodeToken = "令牌-🔑-токен"
         let tokens = createTestTokens(accessToken: unicodeToken)
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let headers = try await provider.authenticationHeaders()
@@ -425,11 +425,90 @@ struct OAuthAuthProviderTests {
     func testVeryLongTokens() async throws {
         let longToken = String(repeating: "a", count: 10000)
         let tokens = createTestTokens(accessToken: longToken)
-        let config = createTestConfig()
+        let config = try createTestConfig()
         let provider = OAuthAuthProvider(tokens: tokens, config: config)
         
         let headers = try await provider.authenticationHeaders()
         #expect(headers["Authorization"] == "Bearer \(longToken)")
         #expect(headers["Authorization"]?.count == 10007) // "Bearer " + 10000 chars
+    }
+    
+    // MARK: - RFC 8707 Resource Parameter Tests
+    
+    @Test("OAuth configuration with resource parameter")
+    func testOAuthConfigurationWithResourceParameter() throws {
+        let tokenEndpoint = URL(string: "https://auth.example.com/token")!
+        let resourceURI = "https://mcp.example.com/mcp"
+        
+        let config = try OAuthConfig(
+            tokenEndpoint: tokenEndpoint,
+            clientId: "test_client_id",
+            clientSecret: "test_client_secret",
+            scope: "mcp read write",
+            resourceURI: resourceURI
+        )
+        
+        #expect(config.tokenEndpoint == tokenEndpoint)
+        #expect(config.clientId == "test_client_id")
+        #expect(config.clientSecret == "test_client_secret")
+        #expect(config.scope == "mcp read write")
+        #expect(config.resourceURI == resourceURI)
+    }
+    
+    @Test("OAuth configuration without resource parameter")
+    func testOAuthConfigurationWithoutResourceParameter() throws {
+        let tokenEndpoint = URL(string: "https://auth.example.com/token")!
+        
+        let config = try OAuthConfig(
+            tokenEndpoint: tokenEndpoint,
+            clientId: "test_client_id",
+            resourceURI: nil
+        )
+        
+        #expect(config.tokenEndpoint == tokenEndpoint)
+        #expect(config.clientId == "test_client_id")
+        #expect(config.resourceURI == nil)
+    }
+    
+    @Test("OAuth configuration with invalid resource parameter should throw")
+    func testOAuthConfigurationWithInvalidResourceParameter() {
+        let tokenEndpoint = URL(string: "https://auth.example.com/token")!
+        
+        let invalidURIs = [
+            "mcp.example.com", // Missing scheme
+            "https://mcp.example.com#fragment", // Contains fragment
+            "not-a-uri" // Invalid format
+        ]
+        
+        for invalidURI in invalidURIs {
+            #expect(throws: Error.self) {
+                try OAuthConfig(
+                    tokenEndpoint: tokenEndpoint,
+                    clientId: "test_client_id",
+                    resourceURI: invalidURI
+                )
+            }
+        }
+    }
+    
+    @Test("OAuth configuration resource parameter canonicalization")
+    func testOAuthConfigurationResourceParameterCanonicalization() throws {
+        let tokenEndpoint = URL(string: "https://auth.example.com/token")!
+        
+        let testCases: [(input: String, expected: String)] = [
+            ("HTTPS://MCP.EXAMPLE.COM/MCP", "https://mcp.example.com/MCP"),
+            ("https://mcp.example.com:443", "https://mcp.example.com"),
+            ("https://mcp.example.com/", "https://mcp.example.com")
+        ]
+        
+        for (input, expected) in testCases {
+            let config = try OAuthConfig(
+                tokenEndpoint: tokenEndpoint,
+                clientId: "test_client_id",
+                resourceURI: input
+            )
+            
+            #expect(config.resourceURI == expected, "Input: \(input), Expected: \(expected), Got: \(config.resourceURI ?? "nil")")
+        }
     }
 }

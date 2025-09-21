@@ -38,6 +38,9 @@ public struct PKCEOAuthConfig: Sendable {
     /// Whether to use OpenID Connect Discovery (default: true)
     public let useOpenIDConnectDiscovery: Bool
     
+    /// Resource URI for RFC 8707 Resource Indicators (required for MCP clients)
+    public let resourceURI: String?
+    
     public init(
         issuerURL: URL,
         clientId: String,
@@ -47,7 +50,8 @@ public struct PKCEOAuthConfig: Sendable {
         authorizationEndpoint: URL? = nil,
         tokenEndpoint: URL? = nil,
         pkcePair: PKCEUtilities.PKCEPair? = nil,
-        useOpenIDConnectDiscovery: Bool = true
+        useOpenIDConnectDiscovery: Bool = true,
+        resourceURI: String? = nil
     ) throws {
         self.issuerURL = issuerURL
         self.clientId = clientId
@@ -57,6 +61,13 @@ public struct PKCEOAuthConfig: Sendable {
         self.authorizationEndpoint = authorizationEndpoint
         self.tokenEndpoint = tokenEndpoint
         self.useOpenIDConnectDiscovery = useOpenIDConnectDiscovery
+        
+        // Validate and canonicalize resource URI if provided
+        if let resourceURI = resourceURI {
+            self.resourceURI = try ResourceIndicatorUtilities.canonicalizeResourceURI(resourceURI)
+        } else {
+            self.resourceURI = nil
+        }
         
         // Generate PKCE pair if not provided
         self.pkcePair = try pkcePair ?? PKCEUtilities.generatePKCEPair()
@@ -169,6 +180,12 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
             components?.queryItems?.append(URLQueryItem(name: "scope", value: scope))
         }
         
+        // Add resource parameter as required by RFC 8707 for MCP clients
+        if let resourceURI = config.resourceURI {
+            components?.queryItems?.append(URLQueryItem(name: "resource", value: resourceURI))
+            logger.info("Added resource parameter to authorization request: \(resourceURI)")
+        }
+        
         guard let authorizationURL = components?.url else {
             throw AuthenticationError.authenticationFailed("Failed to build authorization URL")
         }
@@ -200,6 +217,12 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
             "redirect_uri=\(config.redirectURI.absoluteString)",
             "code_verifier=\(config.pkcePair.codeVerifier)"
         ]
+        
+        // Add resource parameter as required by RFC 8707 for MCP clients
+        if let resourceURI = config.resourceURI {
+            bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
+            logger.info("Added resource parameter to token request: \(resourceURI)")
+        }
         
         // Add client authentication
         if let clientSecret = config.clientSecret {
@@ -349,6 +372,12 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
         
         if let scope = config.scope {
             bodyComponents.append("scope=\(scope)")
+        }
+        
+        // Add resource parameter as required by RFC 8707 for MCP clients
+        if let resourceURI = config.resourceURI {
+            bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
+            logger.info("Added resource parameter to token refresh request: \(resourceURI)")
         }
         
         // Add client authentication

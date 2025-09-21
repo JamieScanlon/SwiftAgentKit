@@ -64,6 +64,8 @@ public struct MCPConfig: Codable, Sendable {
         public let authorizationEndpoint: String?
         public let tokenEndpoint: String?
         public let useOpenIDConnectDiscovery: Bool
+        /// Resource URI for RFC 8707 Resource Indicators (required for MCP clients)
+        public let resourceURI: String?
         
         public init(
             issuerURL: String,
@@ -73,7 +75,8 @@ public struct MCPConfig: Codable, Sendable {
             redirectURI: String,
             authorizationEndpoint: String? = nil,
             tokenEndpoint: String? = nil,
-            useOpenIDConnectDiscovery: Bool = true
+            useOpenIDConnectDiscovery: Bool = true,
+            resourceURI: String? = nil
         ) {
             self.issuerURL = issuerURL
             self.clientId = clientId
@@ -83,6 +86,7 @@ public struct MCPConfig: Codable, Sendable {
             self.authorizationEndpoint = authorizationEndpoint
             self.tokenEndpoint = tokenEndpoint
             self.useOpenIDConnectDiscovery = useOpenIDConnectDiscovery
+            self.resourceURI = resourceURI
         }
     }
     

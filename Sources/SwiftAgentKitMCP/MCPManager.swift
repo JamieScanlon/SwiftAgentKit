@@ -186,9 +186,36 @@ public actor MCPManager {
         
         // Try config-based auth
         guard let authType = remoteConfig.authType,
-              let authConfig = remoteConfig.authConfig else {
+              var authConfig = remoteConfig.authConfig else {
             logger.info("No authentication configured for remote server: \(remoteConfig.name)")
             return nil
+        }
+        
+        // For OAuth providers, automatically add the resource parameter as required by RFC 8707
+        if authType.lowercased() == "oauth" {
+            // Extract canonical resource URI from server URL
+            if let serverURL = URL(string: remoteConfig.url) {
+                do {
+                    // Extract canonical resource URI from server URL
+                    var uriString = serverURL.absoluteString
+                    // Remove trailing slash if present (unless it's the root path)
+                    if uriString.hasSuffix("/") && uriString != serverURL.scheme! + "://" + serverURL.host! + "/" {
+                        uriString = String(uriString.dropLast())
+                    }
+                    let canonicalResourceURI = uriString
+                    
+                    // Add resource URI to auth config if not already present
+                    if case .object(var configDict) = authConfig {
+                        if configDict["resourceURI"] == nil {
+                            configDict["resourceURI"] = .string(canonicalResourceURI)
+                            authConfig = .object(configDict)
+                            logger.info("Added resource parameter for MCP server '\(remoteConfig.name)': \(canonicalResourceURI)")
+                        }
+                    }
+                } catch {
+                    logger.warning("Failed to extract canonical resource URI for server '\(remoteConfig.name)': \(error)")
+                }
+            }
         }
         
         logger.info("Creating authentication provider from config for server: \(remoteConfig.name)")

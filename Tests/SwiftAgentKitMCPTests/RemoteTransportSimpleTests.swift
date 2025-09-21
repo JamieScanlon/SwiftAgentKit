@@ -217,7 +217,7 @@ struct RemoteTransportSimpleTests {
             tokenType: "Bearer"
         )
         
-        let oauthConfig = OAuthConfig(
+        let oauthConfig = try OAuthConfig(
             tokenEndpoint: URL(string: "https://auth.example.com/token")!,
             clientId: "test-client-id"
         )
