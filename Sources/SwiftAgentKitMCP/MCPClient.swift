@@ -159,6 +159,50 @@ public actor MCPClient {
         try await getTools()
     }
     
+    /// Connect to a remote MCP server using a RemoteServerConfig
+    /// - Parameter config: Remote server configuration containing URL, auth, and connection settings
+    public func connectToRemoteServer(config: MCPConfig.RemoteServerConfig) async throws {
+        // Parse and validate the server URL
+        guard let serverURL = URL(string: config.url),
+              let scheme = serverURL.scheme,
+              !scheme.isEmpty,
+              serverURL.host != nil else {
+            logger.error("Invalid server URL in RemoteServerConfig: \(config.url)")
+            throw MCPClientError.connectionFailed("Invalid server URL: \(config.url)")
+        }
+        
+        // Create authentication provider if auth configuration is provided
+        let authProvider: (any AuthenticationProvider)?
+        if let authType = config.authType, let authConfig = config.authConfig {
+            do {
+                authProvider = try AuthenticationFactory.createAuthProvider(
+                    authType: authType,
+                    config: authConfig
+                )
+                logger.info("Created authentication provider for type: \(authType)")
+            } catch {
+                logger.error("Failed to create authentication provider: \(error)")
+                throw MCPClientError.connectionFailed("Authentication configuration error: \(error.localizedDescription)")
+            }
+        } else {
+            authProvider = nil
+        }
+        
+        // Create RemoteTransport with configuration values
+        let transport = RemoteTransport(
+            serverURL: serverURL,
+            authProvider: authProvider,
+            connectionTimeout: config.connectionTimeout ?? self.connectionTimeout,
+            requestTimeout: config.requestTimeout ?? 60.0,
+            maxRetries: config.maxRetries ?? 3
+        )
+        
+        logger.info("Connecting to remote server '\(config.name)' at \(config.url)")
+        try await connect(transport: transport)
+        try await getTools()
+        logger.info("Successfully connected to remote server '\(config.name)'")
+    }
+    
     /// Connect to an MCP server using stdio pipes
     /// - Parameters:
     ///   - inPipe: Input pipe for receiving data from the server

@@ -298,6 +298,105 @@ func mcpManagerWithNewArchitectureExample() async {
     }
 }
 
+// Example: Remote server connection using RemoteServerConfig
+func remoteServerConfigExample() async {
+    let logger = Logger(label: "RemoteServerConfigExample")
+    logger.info("=== SwiftAgentKit Remote Server Config Example ===")
+    
+    // Example 1: Remote server with Bearer token authentication
+    let bearerTokenConfig = MCPConfig.RemoteServerConfig(
+        name: "api-server-bearer",
+        url: "https://api.example.com/mcp",
+        authType: "bearer",
+        authConfig: .object([
+            "token": .string("your-bearer-token-here")
+        ]),
+        connectionTimeout: 30.0,
+        requestTimeout: 60.0,
+        maxRetries: 3
+    )
+    
+    // Example 2: Remote server with API Key authentication
+    let apiKeyConfig = MCPConfig.RemoteServerConfig(
+        name: "api-server-key",
+        url: "https://api.example.com/mcp",
+        authType: "apiKey",
+        authConfig: .object([
+            "apiKey": .string("your-api-key-here"),
+            "headerName": .string("X-API-Key")
+        ]),
+        connectionTimeout: 30.0,
+        requestTimeout: 60.0,
+        maxRetries: 3
+    )
+    
+    // Example 3: Remote server with PKCE OAuth authentication
+    let pkceOAuthConfig = MCPConfig.RemoteServerConfig(
+        name: "oauth-server",
+        url: "https://mcp.example.com",
+        authType: "OAuth",
+        authConfig: .object([
+            "issuerURL": .string("https://auth.example.com"),
+            "clientId": .string("your-client-id"),
+            "redirectURI": .string("com.example.mcpclient://oauth"),
+            "scope": .string("mcp:read mcp:write"),
+            "useOpenIDConnectDiscovery": .boolean(true),
+            "resourceURI": .string("https://mcp.example.com")
+        ]),
+        connectionTimeout: 30.0,
+        requestTimeout: 60.0,
+        maxRetries: 3
+    )
+    
+    // Example 4: Remote server without authentication
+    let noAuthConfig = MCPConfig.RemoteServerConfig(
+        name: "public-server",
+        url: "https://public.mcp.example.com",
+        authType: nil,
+        authConfig: nil,
+        connectionTimeout: 15.0,
+        requestTimeout: 30.0,
+        maxRetries: 2
+    )
+    
+    let configs = [bearerTokenConfig, apiKeyConfig, pkceOAuthConfig, noAuthConfig]
+    
+    for config in configs {
+        logger.info("Testing connection to \(config.name) (\(config.url))")
+        
+        let client = MCPClient(name: "test-client", version: "1.0.0")
+        
+        do {
+            // Use the new connectToRemoteServer(config:) method
+            try await client.connectToRemoteServer(config: config)
+            logger.info("✓ Successfully connected to \(config.name)")
+            
+            // Check available tools
+            let toolCount = await client.tools.count
+            logger.info("  Available tools: \(toolCount)")
+            
+        } catch let mcpError as MCPClient.MCPClientError {
+            switch mcpError {
+            case .connectionFailed(let message):
+                logger.warning("⚠ Connection to \(config.name) failed: \(message)")
+            case .connectionTimeout(let timeout):
+                logger.warning("⏰ Connection to \(config.name) timed out after \(timeout)s")
+            case .notConnected:
+                logger.warning("🔌 Client not connected to \(config.name)")
+            case .pipeError(let message):
+                logger.warning("🔌 Pipe error with \(config.name): \(message)")
+            case .processTerminated(let message):
+                logger.warning("💀 Process terminated for \(config.name): \(message)")
+            }
+        } catch {
+            logger.error("❌ Unexpected error connecting to \(config.name): \(error)")
+        }
+    }
+    
+    logger.info("Note: These are example URLs and will fail to connect.")
+    logger.info("Replace with actual MCP server URLs and valid authentication credentials.")
+}
+
 // Run examples
 print("Starting MCP Examples...")
 
@@ -313,6 +412,8 @@ Task {
     await multipleServersExample()
     print("Running mcpManagerWithNewArchitectureExample...")
     await mcpManagerWithNewArchitectureExample()
+    print("Running remoteServerConfigExample...")
+    await remoteServerConfigExample()
     print("MCP Examples completed!")
 }
 
