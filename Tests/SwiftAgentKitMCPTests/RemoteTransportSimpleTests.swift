@@ -52,7 +52,9 @@ struct RemoteTransportSimpleTests {
             .networkError(testError),
             .invalidResponse("invalid response"),
             .serverError(500, "server error"),
-            .notConnected
+            .notConnected,
+            .oauthDiscoveryRequired(resourceMetadataURL: "https://example.com/.well-known/oauth-protected-resource"),
+            .oauthDiscoveryFailed("discovery failed")
         ]
         
         for error in errors {

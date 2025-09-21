@@ -235,6 +235,62 @@ The MCP module uses a JSON configuration file to define MCP servers and environm
 - Clear separation between server startup errors and communication errors
 - Proper error propagation through the stack
 
+## Remote MCP Server Authentication
+
+### Automatic OAuth Discovery
+
+When connecting to remote MCP servers that require OAuth authentication, SwiftAgentKit automatically handles OAuth discovery and dynamic client registration according to the MCP specification.
+
+#### How It Works
+
+1. **Initial Connection Attempt**: When no authentication is configured, the client first attempts to connect without authentication
+2. **OAuth Challenge Detection**: If the server responds with `401 Unauthorized` and includes a `WWW-Authenticate` header with `resource_metadata`, the client detects this as an OAuth discovery opportunity
+3. **Automatic Discovery**: The client automatically creates an `OAuthDiscoveryAuthProvider` and attempts OAuth discovery using the resource metadata
+4. **Dynamic Client Registration**: If needed, the client performs dynamic client registration with the authorization server
+5. **Retry Connection**: The client retries the connection with the discovered OAuth credentials
+
+#### Example Response Triggering OAuth Discovery
+
+```http
+HTTP/1.1 401 Unauthorized
+Content-Type: application/json; charset=utf-8
+WWW-Authenticate: Bearer resource_metadata="https://mcp.example.com/.well-known/oauth-protected-resource"
+
+{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"Missing or invalid OAuth authorization"}}
+```
+
+#### Configuration
+
+No special configuration is required. Simply omit the `authType` and `authConfig` fields:
+
+```swift
+let config = MCPConfig.RemoteServerConfig(
+    name: "oauth-server",
+    url: "https://mcp.example.com/api"
+    // No authType or authConfig - OAuth discovery will be attempted automatically
+)
+
+try await client.connectToRemoteServer(config: config)
+```
+
+#### Manual OAuth Configuration
+
+You can also manually configure OAuth if you already have credentials:
+
+```swift
+let config = MCPConfig.RemoteServerConfig(
+    name: "oauth-server",
+    url: "https://mcp.example.com/api",
+    authType: "OAuth",
+    authConfig: .object([
+        "resourceServerURL": .string("https://mcp.example.com"),
+        "clientId": .string("your-client-id"),
+        "redirectURI": .string("your-app://oauth-callback"),
+        "useOAuthDiscovery": .boolean(true)
+    ])
+)
+```
+
 ## Logging
 
 The MCP module uses Swift Logging for structured logging across all operations, providing cross-platform logging capabilities for debugging and monitoring. 

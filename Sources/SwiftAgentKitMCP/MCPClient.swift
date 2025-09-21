@@ -198,9 +198,71 @@ public actor MCPClient {
         )
         
         logger.info("Connecting to remote server '\(config.name)' at \(config.url)")
-        try await connect(transport: transport)
-        try await getTools()
-        logger.info("Successfully connected to remote server '\(config.name)'")
+        
+        do {
+            try await connect(transport: transport)
+            try await getTools()
+            logger.info("Successfully connected to remote server '\(config.name)'")
+        } catch let transportError as RemoteTransport.RemoteTransportError {
+            // Check if this is an OAuth discovery requirement
+            if case .oauthDiscoveryRequired(let resourceMetadataURL) = transportError {
+                logger.info("OAuth discovery required for MCP server, resource metadata: \(resourceMetadataURL)")
+                
+                // Attempt OAuth discovery and retry connection
+                try await connectWithOAuthDiscovery(serverURL: serverURL, config: config, resourceMetadataURL: resourceMetadataURL)
+            } else {
+                // Convert RemoteTransportError to MCPClientError
+                throw MCPClientError.connectionFailed("Transport connection error: \(transportError.localizedDescription)")
+            }
+        } catch let error as MCPClientError {
+            throw error
+        } catch {
+            throw MCPClientError.connectionFailed("Unexpected connection error: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Attempt OAuth discovery and dynamic client registration for MCP server
+    /// - Parameters:
+    ///   - serverURL: The MCP server URL
+    ///   - config: The remote server configuration
+    ///   - resourceMetadataURL: The resource metadata URL from the OAuth challenge
+    private func connectWithOAuthDiscovery(serverURL: URL, config: MCPConfig.RemoteServerConfig, resourceMetadataURL: String) async throws {
+        logger.info("Starting OAuth discovery process for MCP server")
+        
+        // Create OAuthDiscoveryAuthProvider with MCP-specific configuration
+        let redirectURI = URL(string: "com.swiftagentkit.mcp://oauth-callback")!
+        let discoveryAuthProvider = try OAuthDiscoveryAuthProvider(
+            resourceServerURL: serverURL,
+            clientId: "swiftagentkit-mcp-client",
+            scope: "mcp",
+            redirectURI: redirectURI,
+            resourceType: "mcp"
+        )
+        
+        // Create new transport with OAuth discovery provider
+        let discoveryTransport = RemoteTransport(
+            serverURL: serverURL,
+            authProvider: discoveryAuthProvider,
+            connectionTimeout: config.connectionTimeout ?? self.connectionTimeout,
+            requestTimeout: config.requestTimeout ?? 60.0,
+            maxRetries: config.maxRetries ?? 3
+        )
+        
+        do {
+            logger.info("Attempting connection with OAuth discovery provider")
+            try await connect(transport: discoveryTransport)
+            try await getTools()
+            logger.info("Successfully connected to remote server '\(config.name)' using OAuth discovery")
+        } catch {
+            logger.error("OAuth discovery failed for MCP server: \(error)")
+            
+            // If OAuth discovery fails, provide helpful error message
+            if error.localizedDescription.contains("manual intervention") {
+                throw MCPClientError.connectionFailed("OAuth discovery requires manual authorization. Please complete the OAuth flow in your browser and try again.")
+            } else {
+                throw MCPClientError.connectionFailed("OAuth discovery failed: \(error.localizedDescription)")
+            }
+        }
     }
     
     /// Connect to an MCP server using stdio pipes

@@ -21,6 +21,8 @@ public actor RemoteTransport: Transport {
         case invalidResponse(String)
         case serverError(Int, String)
         case notConnected
+        case oauthDiscoveryRequired(resourceMetadataURL: String)
+        case oauthDiscoveryFailed(String)
         
         public var errorDescription: String? {
             switch self {
@@ -38,6 +40,10 @@ public actor RemoteTransport: Transport {
                 return "Server error \(code): \(message)"
             case .notConnected:
                 return "Transport is not connected"
+            case .oauthDiscoveryRequired(let resourceMetadataURL):
+                return "OAuth discovery required for MCP server. Resource metadata available at: \(resourceMetadataURL)"
+            case .oauthDiscoveryFailed(let message):
+                return "OAuth discovery failed: \(message)"
             }
         }
     }
@@ -328,7 +334,14 @@ public actor RemoteTransport: Transport {
                         if let wwwAuthenticate = httpResponse.allHeaderFields["WWW-Authenticate"] as? String,
                            wwwAuthenticate.lowercased().contains("bearer") || wwwAuthenticate.lowercased().contains("oauth") {
                             logger.info("Detected OAuth challenge in WWW-Authenticate header: \(wwwAuthenticate)")
-                            throw RemoteTransportError.authenticationFailed("OAuth authentication required but no OAuth provider configured. Consider using OAuthDiscoveryAuthProvider.")
+                            
+                            // Check for resource_metadata which indicates MCP OAuth discovery opportunity
+                            if let resourceMetadataURL = extractResourceMetadataURL(from: wwwAuthenticate) {
+                                logger.info("Detected MCP OAuth discovery opportunity with resource_metadata: \(resourceMetadataURL)")
+                                throw RemoteTransportError.oauthDiscoveryRequired(resourceMetadataURL: resourceMetadataURL)
+                            } else {
+                                throw RemoteTransportError.authenticationFailed("OAuth authentication required but no OAuth provider configured. Consider using OAuthDiscoveryAuthProvider.")
+                            }
                         }
                         
                         throw RemoteTransportError.authenticationFailed("No authentication provider available for 401 challenge")
@@ -423,4 +436,23 @@ public actor RemoteTransport: Transport {
         // Must have either method (for requests) or result/error (for responses)
         return hasMethod || hasResult || hasError
     }
+    
+    /// Extract resource_metadata URL from WWW-Authenticate header
+    /// - Parameter wwwAuthenticate: The WWW-Authenticate header value
+    /// - Returns: The resource metadata URL if found
+    private nonisolated func extractResourceMetadataURL(from wwwAuthenticate: String) -> String? {
+        // Look for resource_metadata="url" pattern
+        let pattern = #"resource_metadata="([^"]+)""#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
+              let match = regex.firstMatch(in: wwwAuthenticate, options: [], range: NSRange(location: 0, length: wwwAuthenticate.count)),
+              match.numberOfRanges > 1 else {
+            return nil
+        }
+        
+        let range = match.range(at: 1)
+        let startIndex = wwwAuthenticate.index(wwwAuthenticate.startIndex, offsetBy: range.location)
+        let endIndex = wwwAuthenticate.index(startIndex, offsetBy: range.length)
+        return String(wwwAuthenticate[startIndex..<endIndex])
+    }
+    
 }

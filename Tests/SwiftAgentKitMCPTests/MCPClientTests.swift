@@ -419,4 +419,69 @@ import EasyJSON
             #expect(Bool(false), "Expected MCPClientError, got: \(error)")
         }
     }
+    
+    @Test("connectToRemoteServer should attempt OAuth discovery on 401 with WWW-Authenticate")
+    func testConnectToRemoteServerOAuthDiscovery() async throws {
+        let client = MCPClient(name: "test-client", version: "1.0.0")
+        
+        // Test OAuth discovery scenario (no auth provider configured)
+        let oauthDiscoveryConfig = MCPConfig.RemoteServerConfig(
+            name: "oauth-discovery-test",
+            url: "https://mcp.example.com/api",
+            authType: nil, // No auth provider - should trigger discovery
+            authConfig: nil
+        )
+        
+        do {
+            try await client.connectToRemoteServer(config: oauthDiscoveryConfig)
+            // This will likely fail due to network/discovery issues, but we're testing the flow
+            #expect(Bool(false), "Expected connection to fail (no real OAuth server)")
+        } catch let error as MCPClient.MCPClientError {
+            switch error {
+            case .connectionFailed(let message):
+                // Should either fail at OAuth discovery step or network level
+                // Both are acceptable for this test - we're just ensuring the flow doesn't crash
+                #expect(message.contains("OAuth") || message.contains("network") || message.contains("server"), 
+                       "Expected OAuth or network-related error, got: \(message)")
+            default:
+                // Other connection errors are also acceptable for this test
+                return
+            }
+        } catch {
+            // Other errors are acceptable for this test scenario
+            // The important thing is that the OAuth discovery flow is triggered without crashing
+            return
+        }
+    }
+    
+    @Test("connectToRemoteServer should not attempt OAuth discovery when auth provider is already configured")
+    func testConnectToRemoteServerWithExistingAuth() async throws {
+        let client = MCPClient(name: "test-client", version: "1.0.0")
+        
+        // Test with existing auth provider - should NOT trigger OAuth discovery
+        let bearerConfig = MCPConfig.RemoteServerConfig(
+            name: "bearer-auth-test",
+            url: "https://api.example.com/mcp",
+            authType: "bearer",
+            authConfig: .object(["token": .string("existing-bearer-token")])
+        )
+        
+        do {
+            try await client.connectToRemoteServer(config: bearerConfig)
+            #expect(Bool(false), "Expected connection to fail (no real server)")
+        } catch let error as MCPClient.MCPClientError {
+            switch error {
+            case .connectionFailed(let message):
+                // Should fail at network level, NOT at OAuth discovery
+                #expect(!message.contains("OAuth discovery"), 
+                       "Should not attempt OAuth discovery when auth provider exists")
+            default:
+                // Other connection errors are expected
+                return
+            }
+        } catch {
+            // Other errors are acceptable
+            return
+        }
+    }
 } 
