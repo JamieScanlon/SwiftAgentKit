@@ -296,31 +296,143 @@ public actor OAuthServerMetadataClient {
         self.urlSession = urlSession
     }
     
+    /// Generate MCP-compliant well-known discovery URLs for an issuer
+    /// - Parameter issuerURL: The issuer URL
+    /// - Returns: Array of discovery URLs in priority order as per MCP spec
+    private func generateDiscoveryURLs(for issuerURL: URL) -> [URL] {
+        var discoveryURLs: [URL] = []
+        
+        let pathComponents = issuerURL.pathComponents.filter { $0 != "/" }
+        let hasPathComponents = !pathComponents.isEmpty
+        
+        if hasPathComponents {
+            // For issuer URLs with path components (e.g., https://auth.example.com/tenant1)
+            // Priority order as per MCP spec:
+            
+            // 1. OAuth 2.0 Authorization Server Metadata with path insertion:
+            //    https://auth.example.com/.well-known/oauth-authorization-server/tenant1
+            if let oauthPathInsertionURL = constructPathInsertionURL(
+                issuerURL: issuerURL,
+                wellKnownPath: ".well-known/oauth-authorization-server"
+            ) {
+                discoveryURLs.append(oauthPathInsertionURL)
+            }
+            
+            // 2. OpenID Connect Discovery 1.0 with path insertion:
+            //    https://auth.example.com/.well-known/openid-configuration/tenant1
+            if let oidcPathInsertionURL = constructPathInsertionURL(
+                issuerURL: issuerURL,
+                wellKnownPath: ".well-known/openid-configuration"
+            ) {
+                discoveryURLs.append(oidcPathInsertionURL)
+            }
+            
+            // 3. OpenID Connect Discovery 1.0 path appending:
+            //    https://auth.example.com/tenant1/.well-known/openid-configuration
+            let oidcPathAppendingURL = issuerURL.appendingPathComponent(".well-known/openid-configuration")
+            discoveryURLs.append(oidcPathAppendingURL)
+            
+        } else {
+            // For issuer URLs without path components (e.g., https://auth.example.com)
+            
+            // 1. OAuth 2.0 Authorization Server Metadata:
+            //    https://auth.example.com/.well-known/oauth-authorization-server
+            let oauthURL = issuerURL.appendingPathComponent(".well-known/oauth-authorization-server")
+            discoveryURLs.append(oauthURL)
+            
+            // 2. OpenID Connect Discovery 1.0:
+            //    https://auth.example.com/.well-known/openid-configuration
+            let oidcURL = issuerURL.appendingPathComponent(".well-known/openid-configuration")
+            discoveryURLs.append(oidcURL)
+        }
+        
+        return discoveryURLs
+    }
+    
+    /// Construct a path insertion URL for well-known endpoints
+    /// - Parameters:
+    ///   - issuerURL: The original issuer URL
+    ///   - wellKnownPath: The well-known path (e.g., ".well-known/oauth-authorization-server")
+    /// - Returns: URL with path components inserted after the well-known path
+    private func constructPathInsertionURL(issuerURL: URL, wellKnownPath: String) -> URL? {
+        guard var components = URLComponents(url: issuerURL, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+        
+        // Extract the path components from the issuer URL (excluding root "/")
+        let originalPathComponents = issuerURL.pathComponents.filter { $0 != "/" }
+        
+        // Build the new path: /.well-known/endpoint/path1/path2/...
+        let wellKnownComponents = wellKnownPath.split(separator: "/").map(String.init)
+        let pathComponents = wellKnownComponents + originalPathComponents
+        
+        // Join path components properly with leading slash
+        components.path = "/" + pathComponents.joined(separator: "/")
+        
+        return components.url
+    }
+    
+    /// Discover OAuth server metadata from a specific well-known endpoint
+    /// - Parameter wellKnownURL: The well-known endpoint URL
+    /// - Returns: OAuth server metadata
+    /// - Throws: OAuthMetadataError if discovery fails
+    private func fetchOAuthServerMetadata(from wellKnownURL: URL) async throws -> OAuthServerMetadata {
+        logger.debug("Attempting to fetch OAuth server metadata from: \(wellKnownURL)")
+        
+        let (data, response) = try await urlSession.data(from: wellKnownURL)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OAuthMetadataError.invalidResponse("Invalid response type")
+        }
+        
+        guard 200...299 ~= httpResponse.statusCode else {
+            throw OAuthMetadataError.httpError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
+        }
+        
+        let metadata = try JSONDecoder().decode(OAuthServerMetadata.self, from: data)
+        logger.info("Successfully fetched OAuth server metadata from: \(wellKnownURL)")
+        return metadata
+    }
+    
+    /// Discover OpenID Connect provider metadata from a specific well-known endpoint
+    /// - Parameter wellKnownURL: The well-known endpoint URL
+    /// - Returns: OpenID Connect provider metadata
+    /// - Throws: OAuthMetadataError if discovery fails
+    private func fetchOpenIDConnectProviderMetadata(from wellKnownURL: URL) async throws -> OpenIDConnectProviderMetadata {
+        logger.debug("Attempting to fetch OpenID Connect provider metadata from: \(wellKnownURL)")
+        
+        let (data, response) = try await urlSession.data(from: wellKnownURL)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw OAuthMetadataError.invalidResponse("Invalid response type")
+        }
+        
+        guard 200...299 ~= httpResponse.statusCode else {
+            throw OAuthMetadataError.httpError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
+        }
+        
+        let metadata = try JSONDecoder().decode(OpenIDConnectProviderMetadata.self, from: data)
+        logger.info("Successfully fetched OpenID Connect provider metadata from: \(wellKnownURL)")
+        return metadata
+    }
+    
     /// Discover OAuth server metadata from the well-known endpoint (RFC 8414)
     /// - Parameter issuerURL: The issuer URL (e.g., "https://auth.example.com")
     /// - Returns: OAuth server metadata
     /// - Throws: OAuthMetadataError if discovery fails
     public func discoverOAuthServerMetadata(issuerURL: URL) async throws -> OAuthServerMetadata {
-        let wellKnownURL = issuerURL.appendingPathComponent(".well-known/oauth-authorization-server")
+        // For backward compatibility, use the first OAuth 2.0 endpoint from MCP-compliant discovery
+        let discoveryURLs = generateDiscoveryURLs(for: issuerURL)
+        let oauthURLs = discoveryURLs.filter { $0.path.contains("oauth-authorization-server") }
         
-        logger.info("Discovering OAuth server metadata from: \(wellKnownURL)")
+        guard let firstOAuthURL = oauthURLs.first else {
+            throw OAuthMetadataError.discoveryFailed("No OAuth 2.0 discovery URL could be generated")
+        }
+        
+        logger.info("Discovering OAuth server metadata from: \(firstOAuthURL)")
         
         do {
-            let (data, response) = try await urlSession.data(from: wellKnownURL)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw OAuthMetadataError.invalidResponse("Invalid response type")
-            }
-            
-            guard 200...299 ~= httpResponse.statusCode else {
-                throw OAuthMetadataError.httpError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
-            }
-            
-            let metadata = try JSONDecoder().decode(OAuthServerMetadata.self, from: data)
-            
-            logger.info("Successfully discovered OAuth server metadata")
-            return metadata
-            
+            return try await fetchOAuthServerMetadata(from: firstOAuthURL)
         } catch let error as OAuthMetadataError {
             throw error
         } catch {
@@ -334,26 +446,18 @@ public actor OAuthServerMetadataClient {
     /// - Returns: OpenID Connect provider metadata
     /// - Throws: OAuthMetadataError if discovery fails
     public func discoverOpenIDConnectProviderMetadata(issuerURL: URL) async throws -> OpenIDConnectProviderMetadata {
-        let wellKnownURL = issuerURL.appendingPathComponent(".well-known/openid_configuration")
+        // For backward compatibility, use the first OIDC endpoint from MCP-compliant discovery
+        let discoveryURLs = generateDiscoveryURLs(for: issuerURL)
+        let oidcURLs = discoveryURLs.filter { $0.path.contains("openid-configuration") }
         
-        logger.info("Discovering OpenID Connect provider metadata from: \(wellKnownURL)")
+        guard let firstOidcURL = oidcURLs.first else {
+            throw OAuthMetadataError.discoveryFailed("No OpenID Connect discovery URL could be generated")
+        }
+        
+        logger.info("Discovering OpenID Connect provider metadata from: \(firstOidcURL)")
         
         do {
-            let (data, response) = try await urlSession.data(from: wellKnownURL)
-            
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw OAuthMetadataError.invalidResponse("Invalid response type")
-            }
-            
-            guard 200...299 ~= httpResponse.statusCode else {
-                throw OAuthMetadataError.httpError(httpResponse.statusCode, "HTTP \(httpResponse.statusCode)")
-            }
-            
-            let metadata = try JSONDecoder().decode(OpenIDConnectProviderMetadata.self, from: data)
-            
-            logger.info("Successfully discovered OpenID Connect provider metadata")
-            return metadata
-            
+            return try await fetchOpenIDConnectProviderMetadata(from: firstOidcURL)
         } catch let error as OAuthMetadataError {
             throw error
         } catch {
@@ -362,38 +466,49 @@ public actor OAuthServerMetadataClient {
         }
     }
     
-    /// Discover authorization server metadata with fallback strategy
-    /// Tries OpenID Connect Discovery first, then falls back to OAuth 2.0 Authorization Server Metadata
+    /// Discover authorization server metadata with MCP-compliant priority ordering
+    /// Implements the full MCP specification for authorization server metadata discovery
     /// - Parameter issuerURL: The issuer URL (e.g., "https://auth.example.com")
-    /// - Returns: OAuth server metadata (from either OIDC or OAuth 2.0 discovery)
-    /// - Throws: OAuthMetadataError if both discovery methods fail
+    /// - Returns: OAuth server metadata (from the first successful endpoint)
+    /// - Throws: OAuthMetadataError if all discovery methods fail
     public func discoverAuthorizationServerMetadata(issuerURL: URL) async throws -> OAuthServerMetadata {
-        logger.info("Discovering authorization server metadata with fallback strategy from: \(issuerURL)")
+        logger.info("Discovering authorization server metadata with MCP-compliant priority ordering from: \(issuerURL)")
         
-        // Try OpenID Connect Discovery first (priority order as per spec)
-        do {
-            let oidcMetadata = try await discoverOpenIDConnectProviderMetadata(issuerURL: issuerURL)
-            logger.info("Successfully discovered authorization server metadata via OpenID Connect Discovery")
-            return oidcMetadata.oauthMetadata
-        } catch let error as OAuthMetadataError {
-            if case .httpError(let statusCode, _) = error, statusCode == 404 {
-                logger.debug("OpenID Connect Discovery endpoint not found (404), trying OAuth 2.0 discovery")
-            } else {
-                logger.warning("OpenID Connect Discovery failed: \(error), trying OAuth 2.0 discovery")
+        let discoveryURLs = generateDiscoveryURLs(for: issuerURL)
+        var lastError: Error?
+        
+        for (index, discoveryURL) in discoveryURLs.enumerated() {
+            do {
+                logger.debug("Trying discovery endpoint \(index + 1)/\(discoveryURLs.count): \(discoveryURL)")
+                
+                if discoveryURL.path.contains("oauth-authorization-server") {
+                    // OAuth 2.0 Authorization Server Metadata endpoint
+                    let metadata = try await fetchOAuthServerMetadata(from: discoveryURL)
+                    logger.info("Successfully discovered authorization server metadata via OAuth 2.0 from: \(discoveryURL)")
+                    return metadata
+                } else if discoveryURL.path.contains("openid-configuration") {
+                    // OpenID Connect Discovery endpoint
+                    let oidcMetadata = try await fetchOpenIDConnectProviderMetadata(from: discoveryURL)
+                    logger.info("Successfully discovered authorization server metadata via OpenID Connect from: \(discoveryURL)")
+                    return oidcMetadata.oauthMetadata
+                }
+                
+            } catch let error as OAuthMetadataError {
+                if case .httpError(let statusCode, _) = error, statusCode == 404 {
+                    logger.debug("Discovery endpoint not found (404): \(discoveryURL)")
+                } else {
+                    logger.warning("Discovery failed for \(discoveryURL): \(error)")
+                }
+                lastError = error
+            } catch {
+                logger.warning("Discovery failed for \(discoveryURL) with unexpected error: \(error)")
+                lastError = error
             }
-        } catch {
-            logger.warning("OpenID Connect Discovery failed with unexpected error: \(error), trying OAuth 2.0 discovery")
         }
         
-        // Fall back to OAuth 2.0 Authorization Server Metadata (RFC 8414)
-        do {
-            let oauthMetadata = try await discoverOAuthServerMetadata(issuerURL: issuerURL)
-            logger.info("Successfully discovered authorization server metadata via OAuth 2.0 discovery")
-            return oauthMetadata
-        } catch {
-            logger.error("Both OpenID Connect and OAuth 2.0 discovery failed")
-            throw OAuthMetadataError.discoveryFailed("Failed to discover authorization server metadata using both OpenID Connect Discovery and OAuth 2.0 Authorization Server Metadata discovery methods")
-        }
+        logger.error("All MCP-compliant discovery endpoints failed")
+        let errorMessage = lastError?.localizedDescription ?? "All discovery endpoints failed"
+        throw OAuthMetadataError.discoveryFailed("Failed to discover authorization server metadata using MCP-compliant discovery: \(errorMessage)")
     }
     
     /// Discover authorization server metadata from protected resource metadata
