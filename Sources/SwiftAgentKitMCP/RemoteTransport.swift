@@ -212,18 +212,6 @@ public actor RemoteTransport: Transport {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
         
-        // Add authentication headers if available
-        if let authProvider = authProvider {
-            do {
-                let authHeaders = try await authProvider.authenticationHeaders()
-                for (key, value) in authHeaders {
-                    request.setValue(value, forHTTPHeaderField: key)
-                }
-            } catch {
-                logger.error("Failed to get authentication headers: \(error)")
-                throw RemoteTransportError.authenticationFailed("Failed to get authentication headers: \(error)")
-            }
-        }
         
         // Send a minimal request body (empty JSON object is valid)
         request.httpBody = "{}".data(using: .utf8)
