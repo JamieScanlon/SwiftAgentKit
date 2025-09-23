@@ -61,6 +61,9 @@ let package = Package(
         .executable(
             name: "MCPServerExample",
             targets: ["MCPServerExample"]),
+        .executable(
+            name: "DynamicClientRegistrationExample",
+            targets: ["DynamicClientRegistrationExample"]),
 
     ],
     dependencies: [
@@ -237,6 +240,14 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ],
             path: "Examples/MCPServerExample"),
+        
+        .executableTarget(
+            name: "DynamicClientRegistrationExample",
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/DynamicClientRegistrationExample"),
 
         
         // Test targets

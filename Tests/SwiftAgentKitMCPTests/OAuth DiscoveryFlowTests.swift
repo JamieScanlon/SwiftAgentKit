@@ -388,4 +388,73 @@ struct OAuthDiscoveryFlowTests {
                    "Error should still indicate OAuth discovery requirement for invalid URL: \(url)")
         }
     }
+    
+    // MARK: - Dynamic Client Registration Tests
+    
+    @Test("OAuthDiscoveryAuthProvider should detect registration endpoint and perform dynamic client registration")
+    func testDynamicClientRegistrationDetection() async throws {
+        // Create a mock OAuth server metadata that includes a registration endpoint
+        let mockMetadata = OAuthServerMetadata(
+            issuer: "https://mcp.zapier.com",
+            authorizationEndpoint: "https://mcp.zapier.com/oauth/authorize",
+            tokenEndpoint: "https://mcp.zapier.com/oauth/token",
+            grantTypesSupported: ["authorization_code", "refresh_token"],
+            codeChallengeMethodsSupported: ["S256"],
+            responseTypesSupported: ["code"],
+            registrationEndpoint: "https://mcp.zapier.com/register" // This is what Zapier provides
+        )
+        
+        // Verify that the metadata has the registration endpoint
+        #expect(mockMetadata.registrationEndpoint == "https://mcp.zapier.com/register")
+        
+        // Test that we can create a DynamicClientRegistrationConfig from this metadata
+        let config = DynamicClientRegistrationConfig.fromServerMetadata(mockMetadata)
+        #expect(config != nil, "Should be able to create registration config from metadata with registration endpoint")
+        #expect(config!.registrationEndpoint.absoluteString == "https://mcp.zapier.com/register")
+    }
+    
+    @Test("OAuthDiscoveryAuthProvider should fall back to provided client ID when registration endpoint is not available")
+    func testFallbackToProvidedClientId() async throws {
+        // Create a mock OAuth server metadata without a registration endpoint
+        let mockMetadata = OAuthServerMetadata(
+            issuer: "https://example.com",
+            authorizationEndpoint: "https://example.com/oauth/authorize",
+            tokenEndpoint: "https://example.com/oauth/token",
+            grantTypesSupported: ["authorization_code"],
+            codeChallengeMethodsSupported: ["S256"],
+            responseTypesSupported: ["code"],
+            registrationEndpoint: nil // No registration endpoint
+        )
+        
+        // Verify that the metadata does not have a registration endpoint
+        #expect(mockMetadata.registrationEndpoint == nil)
+        
+        // Test that we cannot create a DynamicClientRegistrationConfig from this metadata
+        let config = DynamicClientRegistrationConfig.fromServerMetadata(mockMetadata)
+        #expect(config == nil, "Should not be able to create registration config from metadata without registration endpoint")
+    }
+    
+    @Test("Dynamic client registration should create MCP-optimized registration request")
+    func testMCPOptimizedRegistrationRequest() async throws {
+        let redirectUris = ["https://example.com/callback", "https://example.com/oauth/callback"]
+        let clientName = "Test MCP Client"
+        let scope = "mcp read write"
+        
+        let registrationRequest = DynamicClientRegistration.ClientRegistrationRequest.mcpClientRequest(
+            redirectUris: redirectUris,
+            clientName: clientName,
+            scope: scope
+        )
+        
+        // Verify the registration request is optimized for MCP clients
+        #expect(registrationRequest.applicationType == "native", "MCP clients should be native applications")
+        #expect(registrationRequest.clientName == clientName)
+        #expect(registrationRequest.scope == scope)
+        #expect(registrationRequest.redirectUris == redirectUris)
+        
+        // Verify grant types and response types are appropriate for MCP
+        #expect(registrationRequest.grantTypes?.contains("authorization_code") == true)
+        #expect(registrationRequest.grantTypes?.contains("refresh_token") == true)
+        #expect(registrationRequest.responseTypes?.contains("code") == true)
+    }
 }

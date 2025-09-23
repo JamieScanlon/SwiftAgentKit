@@ -31,6 +31,10 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     private var tokenExpiration: Date?
     private var refreshToken: String?
     
+    // Dynamic client registration state
+    private var registeredClientId: String?
+    private var registeredClientSecret: String?
+    
     /// Initialize OAuth Discovery authentication provider
     /// - Parameters:
     ///   - resourceServerURL: URL of the MCP server (Resource Server)
@@ -183,6 +187,9 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             try await performDiscovery()
         }
         
+        // Check if dynamic client registration is needed and perform it
+        try await ensureRegisteredClient()
+        
         // Perform OAuth flow to get access token
         try await performOAuthFlow()
     }
@@ -201,6 +208,70 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         _ = try oauthServerMetadata?.validatePKCESupport()
         
         logger.info("OAuth server discovery completed successfully")
+    }
+    
+    /// Ensure we have a registered client, performing dynamic client registration if needed
+    private func ensureRegisteredClient() async throws {
+        guard let metadata = oauthServerMetadata else {
+            throw AuthenticationError.authenticationFailed("No OAuth server metadata available")
+        }
+        
+        // If we already have a registered client ID, use it
+        if let registeredClientId = registeredClientId {
+            logger.info("Using existing registered client ID: \(registeredClientId)")
+            return
+        }
+        
+        // Check if the authorization server supports dynamic client registration
+        guard let registrationEndpoint = metadata.registrationEndpoint else {
+            logger.info("Authorization server does not support dynamic client registration, using provided client ID: \(clientId)")
+            return
+        }
+        
+        logger.info("Authorization server supports dynamic client registration at: \(registrationEndpoint)")
+        
+        // Perform dynamic client registration
+        try await performDynamicClientRegistration(registrationEndpoint: registrationEndpoint, metadata: metadata)
+    }
+    
+    /// Perform dynamic client registration with the authorization server
+    private func performDynamicClientRegistration(registrationEndpoint: String, metadata: OAuthServerMetadata) async throws {
+        guard let registrationURL = URL(string: registrationEndpoint) else {
+            throw AuthenticationError.authenticationFailed("Invalid registration endpoint URL")
+        }
+        
+        logger.info("Performing dynamic client registration")
+        
+        // Create registration configuration from server metadata
+        let registrationConfig = DynamicClientRegistrationConfig(
+            registrationEndpoint: registrationURL,
+            registrationAuthMethod: metadata.registrationEndpointAuthMethodsSupported?.first
+        )
+        
+        // Create registration request optimized for MCP clients
+        let registrationRequest = DynamicClientRegistration.ClientRegistrationRequest.mcpClientRequest(
+            redirectUris: [redirectURI.absoluteString],
+            clientName: "SwiftAgentKit MCP Client",
+            scope: scope
+        )
+        
+        // Create registration client and perform registration
+        let registrationClient = DynamicClientRegistrationClient(config: registrationConfig)
+        
+        do {
+            let response = try await registrationClient.registerClient(request: registrationRequest)
+            
+            logger.info("Successfully registered client with ID: \(response.clientId)")
+            
+            // Store the registered client credentials
+            registeredClientId = response.clientId
+            registeredClientSecret = response.clientSecret
+            
+        } catch {
+            logger.error("Dynamic client registration failed: \(error)")
+            // Fall back to using the provided client ID
+            logger.info("Falling back to provided client ID: \(clientId)")
+        }
     }
     
     /// Perform OAuth 2.1 authorization flow
@@ -226,11 +297,14 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         let _ = pkcePair.codeVerifier // Store for later use in token exchange
         let codeChallenge = pkcePair.codeChallenge
         
+        // Use registered client ID if available, otherwise fall back to provided client ID
+        let effectiveClientId = registeredClientId ?? clientId
+        
         // Build authorization URL with PKCE parameters
         var authURLComponents = URLComponents(url: authorizationURL, resolvingAgainstBaseURL: false)!
         var queryItems = [
             URLQueryItem(name: "response_type", value: "code"),
-            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "client_id", value: effectiveClientId),
             URLQueryItem(name: "redirect_uri", value: redirectURI.absoluteString),
             URLQueryItem(name: "code_challenge", value: codeChallenge),
             URLQueryItem(name: "code_challenge_method", value: "S256")
@@ -272,7 +346,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         throw OAuthManualFlowRequired(
             authorizationURL: finalAuthURL,
             redirectURI: redirectURI,
-            clientId: clientId,
+            clientId: effectiveClientId,
             scope: scope,
             resourceURI: resourceURI,
             additionalMetadata: additionalMetadata
@@ -299,12 +373,16 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
+        // Use registered client ID if available, otherwise fall back to provided client ID
+        let effectiveClientId = registeredClientId ?? clientId
+        let effectiveClientSecret = registeredClientSecret ?? clientSecret
+        
         var bodyComponents = URLComponents()
         bodyComponents.queryItems = [
             URLQueryItem(name: "grant_type", value: "authorization_code"),
             URLQueryItem(name: "code", value: authorizationCode),
             URLQueryItem(name: "redirect_uri", value: redirectURI.absoluteString),
-            URLQueryItem(name: "client_id", value: clientId),
+            URLQueryItem(name: "client_id", value: effectiveClientId),
             URLQueryItem(name: "code_verifier", value: codeVerifier)
         ]
         
@@ -314,7 +392,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             logger.info("Added resource parameter to token request: \(resourceURI)")
         }
         
-        if let clientSecret = clientSecret {
+        if let clientSecret = effectiveClientSecret {
             bodyComponents.queryItems?.append(URLQueryItem(name: "client_secret", value: clientSecret))
         }
         
@@ -367,11 +445,15 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
+        // Use registered client ID if available, otherwise fall back to provided client ID
+        let effectiveClientId = registeredClientId ?? clientId
+        let effectiveClientSecret = registeredClientSecret ?? clientSecret
+        
         var bodyComponents = URLComponents()
         bodyComponents.queryItems = [
             URLQueryItem(name: "grant_type", value: "refresh_token"),
             URLQueryItem(name: "refresh_token", value: refreshToken),
-            URLQueryItem(name: "client_id", value: clientId)
+            URLQueryItem(name: "client_id", value: effectiveClientId)
         ]
         
         // Add resource parameter as required by RFC 8707 for MCP clients
@@ -380,7 +462,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             logger.info("Added resource parameter to token refresh request: \(resourceURI)")
         }
         
-        if let clientSecret = clientSecret {
+        if let clientSecret = effectiveClientSecret {
             bodyComponents.queryItems?.append(URLQueryItem(name: "client_secret", value: clientSecret))
         }
         
