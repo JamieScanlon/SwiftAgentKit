@@ -111,6 +111,48 @@ let effectiveClientId = registeredClientId ?? clientId
 let effectiveClientSecret = registeredClientSecret ?? clientSecret
 ```
 
+### 2. DynamicClientRegistration.swift
+
+**Response Decoding Fix**: Added `CodingKeys` to handle Zapier's snake_case response format:
+
+```swift
+enum CodingKeys: String, CodingKey {
+    case clientId = "client_id"
+    case clientSecret = "client_secret"
+    case clientIdIssuedAt = "client_id_issued_at"
+    case clientSecretExpiresAt = "client_secret_expires_at"
+    case redirectUris = "redirect_uris"
+    case applicationType = "application_type"
+    case clientUri = "client_uri"
+    case contacts
+    case clientName = "client_name"
+    case logoUri = "logo_uri"
+    case tosUri = "tos_uri"
+    case policyUri = "policy_uri"
+    case jwksUri = "jwks_uri"
+    case jwks
+    case tokenEndpointAuthMethod = "token_endpoint_auth_method"
+    case grantTypes = "grant_types"
+    case responseTypes = "response_types"
+    case scope
+    case additionalMetadata
+}
+```
+
+**Zapier Response Format**:
+```json
+{
+  "client_id": "nla-YJgutuF1UAlgbomkQlGZOfTySeRITqiht3l9",
+  "client_id_issued_at": 1758671007,
+  "client_name": "SwiftAgentKit MCP Client",
+  "redirect_uris": ["http://localhost:8080/oauth/callback"],
+  "grant_types": ["authorization_code", "refresh_token"],
+  "token_endpoint_auth_method": "none",
+  "response_types": ["code"],
+  "scope": "profile email"
+}
+```
+
 ## How It Works Now
 
 ### For Zapier (with registration endpoint):
@@ -118,7 +160,7 @@ let effectiveClientSecret = registeredClientSecret ?? clientSecret
 1. **Discovery**: ✅ OAuth server metadata discovered
 2. **Registration Check**: ✅ `registration_endpoint` found: `https://mcp.zapier.com/register`
 3. **Dynamic Registration**: ✅ POST to registration endpoint with MCP-optimized client metadata
-4. **Get Valid Client ID**: ✅ Receive registered client ID from Zapier
+4. **Get Valid Client ID**: ✅ Receive registered client ID from Zapier (with proper snake_case → camelCase decoding)
 5. **OAuth Flow**: ✅ Use registered client ID for authorization and token exchange
 
 ### For Other Servers (without registration endpoint):
@@ -170,6 +212,7 @@ Added comprehensive tests to verify:
 - ✅ MCP-optimized registration request creation
 - ✅ Integration with existing OAuth discovery flow
 - ✅ Configurable redirect URI support
+- ✅ Zapier response format decoding (snake_case → camelCase mapping)
 
 ## Example Usage
 

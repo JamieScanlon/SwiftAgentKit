@@ -497,4 +497,48 @@ struct OAuthDiscoveryFlowTests {
         print("📋 Registration Request JSON:")
         print(jsonString)
     }
+    
+    @Test("Registration response should decode Zapier response correctly")
+    func testRegistrationResponseDecoding() async throws {
+        // This is the actual response format from Zapier
+        let zapierResponseJSON = """
+        {
+            "client_id": "nla-YJgutuF1UAlgbomkQlGZOfTySeRITqiht3l9",
+            "client_id_issued_at": 1758671007,
+            "client_name": "SwiftAgentKit MCP Client",
+            "redirect_uris": [
+                "http://localhost:8080/oauth/callback"
+            ],
+            "grant_types": [
+                "authorization_code",
+                "refresh_token"
+            ],
+            "token_endpoint_auth_method": "none",
+            "response_types": [
+                "code"
+            ],
+            "scope": "profile email"
+        }
+        """
+        
+        let responseData = zapierResponseJSON.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        
+        // This should now decode successfully with the CodingKeys mapping
+        let response = try decoder.decode(DynamicClientRegistration.ClientRegistrationResponse.self, from: responseData)
+        
+        #expect(response.clientId == "nla-YJgutuF1UAlgbomkQlGZOfTySeRITqiht3l9", "clientId should be decoded correctly")
+        #expect(response.clientIdIssuedAt == 1758671007, "clientIdIssuedAt should be decoded correctly")
+        #expect(response.clientName == "SwiftAgentKit MCP Client", "clientName should be decoded correctly")
+        #expect(response.redirectUris?.count == 1, "redirectUris should be decoded correctly")
+        #expect(response.redirectUris?.first == "http://localhost:8080/oauth/callback", "redirect URI should match")
+        #expect(response.grantTypes?.contains("authorization_code") == true, "grant_types should be decoded correctly")
+        #expect(response.tokenEndpointAuthMethod == "none", "token_endpoint_auth_method should be decoded correctly")
+        #expect(response.scope == "profile email", "scope should be decoded correctly")
+        
+        print("✅ Registration Response Decoding Test Passed!")
+        print("📋 Decoded Client ID: \(response.clientId)")
+        print("📋 Decoded Client Name: \(response.clientName ?? "nil")")
+        print("📋 Decoded Scope: \(response.scope ?? "nil")")
+    }
 }
