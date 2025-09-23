@@ -34,6 +34,7 @@ public struct MCPConfig: Codable, Sendable {
         public let connectionTimeout: TimeInterval?
         public let requestTimeout: TimeInterval?
         public let maxRetries: Int?
+        public let clientID: String?
         
         public init(
             name: String,
@@ -42,7 +43,8 @@ public struct MCPConfig: Codable, Sendable {
             authConfig: JSON? = nil,
             connectionTimeout: TimeInterval? = nil,
             requestTimeout: TimeInterval? = nil,
-            maxRetries: Int? = nil
+            maxRetries: Int? = nil,
+            clientID: String? = nil
         ) {
             self.name = name
             self.url = url
@@ -51,6 +53,7 @@ public struct MCPConfig: Codable, Sendable {
             self.connectionTimeout = connectionTimeout
             self.requestTimeout = requestTimeout
             self.maxRetries = maxRetries
+            self.clientID = clientID
         }
     }
     
@@ -229,6 +232,7 @@ public struct MCPConfigHelper {
                 let connectionTimeout = remoteServerConfig["connectionTimeout"] as? TimeInterval
                 let requestTimeout = remoteServerConfig["requestTimeout"] as? TimeInterval
                 let maxRetries = remoteServerConfig["maxRetries"] as? Int
+                let clientID = remoteServerConfig["clientID"] as? String
                 
                 let authConfigJson = authConfig != nil ? (try? JSON(authConfig!)) : nil
                 
@@ -239,7 +243,8 @@ public struct MCPConfigHelper {
                     authConfig: authConfigJson,
                     connectionTimeout: connectionTimeout,
                     requestTimeout: requestTimeout,
-                    maxRetries: maxRetries
+                    maxRetries: maxRetries,
+                    clientID: clientID
                 ))
             }
             mcpConfig.remoteServers = remoteServerConfigs
@@ -262,6 +267,7 @@ public struct MCPConfigHelper {
     ///   - connectionTimeout: Optional connection timeout
     ///   - requestTimeout: Optional request timeout
     ///   - maxRetries: Optional maximum number of retries
+    ///   - clientID: Optional client ID for OAuth discovery (defaults to "swiftagentkit-mcp-client")
     /// - Returns: Remote server configuration with Dynamic Client Registration
     public static func createRemoteServerWithDynamicClientRegistration(
         name: String,
@@ -275,7 +281,8 @@ public struct MCPConfigHelper {
         useCredentialStorage: Bool = true,
         connectionTimeout: TimeInterval? = nil,
         requestTimeout: TimeInterval? = nil,
-        maxRetries: Int? = nil
+        maxRetries: Int? = nil,
+        clientID: String? = nil
     ) -> MCPConfig.RemoteServerConfig {
         
         let dynamicClientRegConfig = MCPConfig.DynamicClientRegistrationConfig.mcpClientConfig(
@@ -307,7 +314,8 @@ public struct MCPConfigHelper {
             authConfig: authConfig,
             connectionTimeout: connectionTimeout,
             requestTimeout: requestTimeout,
-            maxRetries: maxRetries
+            maxRetries: maxRetries,
+            clientID: clientID
         )
     }
     
@@ -324,6 +332,7 @@ public struct MCPConfigHelper {
     ///   - connectionTimeout: Optional connection timeout
     ///   - requestTimeout: Optional request timeout
     ///   - maxRetries: Optional maximum number of retries
+    ///   - clientID: Optional client ID for OAuth discovery (defaults to "swiftagentkit-mcp-client")
     /// - Returns: Remote server configuration with Dynamic Client Registration, or nil if registration endpoint not available
     public static func createRemoteServerWithDynamicClientRegistrationFromMetadata(
         name: String,
@@ -336,7 +345,8 @@ public struct MCPConfigHelper {
         useCredentialStorage: Bool = true,
         connectionTimeout: TimeInterval? = nil,
         requestTimeout: TimeInterval? = nil,
-        maxRetries: Int? = nil
+        maxRetries: Int? = nil,
+        clientID: String? = nil
     ) -> MCPConfig.RemoteServerConfig? {
         
         guard let registrationEndpoint = serverMetadata.registrationEndpoint else {
@@ -354,7 +364,8 @@ public struct MCPConfigHelper {
             useCredentialStorage: useCredentialStorage,
             connectionTimeout: connectionTimeout,
             requestTimeout: requestTimeout,
-            maxRetries: maxRetries
+            maxRetries: maxRetries,
+            clientID: clientID
         )
     }
 }

@@ -436,6 +436,54 @@ func remoteServerConfigExample() async {
     logger.info("Replace with actual MCP server URLs and valid authentication credentials.")
 }
 
+// Example: Configurable ClientID
+func configurableClientIDExample() async {
+    let logger = Logger(label: "ConfigurableClientIDExample")
+    logger.info("=== SwiftAgentKit Configurable ClientID Example ===")
+    
+    // Example 1: Using default clientID
+    logger.info("1. Creating MCPClient with default clientID:")
+    let defaultClient = MCPClient(name: "default-client")
+    let defaultClientID = await defaultClient.clientID
+    logger.info("   Default clientID: \(defaultClientID)")
+    
+    // Example 2: Using custom clientID
+    logger.info("2. Creating MCPClient with custom clientID:")
+    let customClient = MCPClient(
+        name: "custom-client",
+        clientID: "my-custom-mcp-client"
+    )
+    let customClientID = await customClient.clientID
+    logger.info("   Custom clientID: \(customClientID)")
+    
+    // Example 3: Creating RemoteServerConfig with clientID
+    logger.info("3. Creating RemoteServerConfig with clientID:")
+    let remoteConfig = MCPConfig.RemoteServerConfig(
+        name: "example-server",
+        url: "https://api.example.com/mcp",
+        clientID: "server-specific-client-id"
+    )
+    logger.info("   Server config clientID: \(remoteConfig.clientID ?? "nil")")
+    
+    // Example 4: Using MCPConfigHelper with clientID
+    logger.info("4. Creating configuration with MCPConfigHelper:")
+    let helperConfig = MCPConfigHelper.createRemoteServerWithDynamicClientRegistration(
+        name: "helper-server",
+        url: "https://mcp.example.com/api",
+        registrationEndpoint: "https://auth.example.com/register",
+        redirectUris: ["com.example.app://oauth-callback"],
+        clientID: "helper-client-id"
+    )
+    logger.info("   Helper config clientID: \(helperConfig.clientID ?? "nil")")
+    
+    logger.info("✅ All clientID examples completed successfully!")
+    logger.info("The clientID is now configurable at multiple levels:")
+    logger.info("- MCPClient initializer (with default fallback)")
+    logger.info("- RemoteServerConfig for remote server connections")
+    logger.info("- MCPConfigHelper methods for dynamic client registration")
+    logger.info("- JSON configuration parsing")
+}
+
 // Example: OAuth Manual Flow Handling
 func oAuthManualFlowExample() async {
     let logger = Logger(label: "OAuthManualFlowExample")
@@ -558,6 +606,8 @@ Task {
     await remoteServerConfigExample()
     print("Running oAuthManualFlowExample...")
     await oAuthManualFlowExample()
+    print("Running configurableClientIDExample...")
+    await configurableClientIDExample()
     print("MCP Examples completed!")
 }
 

@@ -48,6 +48,7 @@ public actor MCPClient {
     public let version: String
     public let isStrict: Bool
     public let connectionTimeout: TimeInterval
+    public let clientID: String
     public var state: State = .notConnected
     
     public private(set) var tools: [ToolDefinition] = []
@@ -61,12 +62,14 @@ public actor MCPClient {
         version: String = "1.0", 
         isStrict: Bool = false,
         connectionTimeout: TimeInterval = 30.0,
+        clientID: String = "swiftagentkit-mcp-client",
         messageFilterConfig: MessageFilter.Configuration = .default
     ) {
         self.name = name
         self.version = version
         self.isStrict = isStrict
         self.connectionTimeout = connectionTimeout
+        self.clientID = clientID
         self.messageFilterConfig = messageFilterConfig
         // Client will be created when connecting to transport
     }
@@ -245,9 +248,10 @@ public actor MCPClient {
         
         // Create OAuthDiscoveryAuthProvider with MCP-specific configuration
         let redirectURI = URL(string: "com.swiftagentkit.mcp://oauth-callback")!
+        let clientID = config.clientID ?? self.clientID
         let discoveryAuthProvider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: serverURL,
-            clientId: "swiftagentkit-mcp-client",
+            clientId: clientID,
             scope: "mcp",
             redirectURI: redirectURI,
             resourceType: "mcp"

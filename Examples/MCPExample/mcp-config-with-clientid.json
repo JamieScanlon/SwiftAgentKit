@@ -1,0 +1,43 @@
+{
+  "mcpServers": {
+    "local-server": {
+      "command": "python",
+      "args": ["-m", "mcp_server"],
+      "env": {}
+    }
+  },
+  "remoteServers": {
+    "example-server": {
+      "url": "https://api.example.com/mcp",
+      "clientID": "my-custom-client-id",
+      "authType": "bearer",
+      "authConfig": {
+        "token": "your-bearer-token-here"
+      }
+    },
+    "oauth-server": {
+      "url": "https://oauth.example.com/mcp",
+      "clientID": "oauth-discovery-client",
+      "authType": "OAuth",
+      "authConfig": {
+        "useDynamicClientRegistration": true,
+        "registrationEndpoint": "https://auth.example.com/register",
+        "redirectUris": ["com.example.app://oauth-callback"],
+        "clientName": "MCP Client",
+        "scope": "mcp",
+        "useCredentialStorage": true
+      }
+    },
+    "default-client-server": {
+      "url": "https://default.example.com/mcp",
+      "authType": "apiKey",
+      "authConfig": {
+        "apiKey": "your-api-key-here",
+        "headerName": "X-API-Key"
+      }
+    }
+  },
+  "globalEnv": {
+    "MCP_LOG_LEVEL": "info"
+  }
+}
