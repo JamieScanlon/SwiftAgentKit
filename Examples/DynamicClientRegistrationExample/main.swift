@@ -14,7 +14,7 @@ struct DynamicClientRegistrationExample {
         // Example configuration for connecting to a server that supports dynamic client registration
         // (like Zapier MCP servers)
         let resourceServerURL = URL(string: "https://mcp.zapier.com/api/mcp/a/12345/mcp")!
-        let redirectURI = URL(string: "https://example.com/oauth/callback")!
+        let redirectURI = URL(string: "http://localhost:8080/oauth/callback")!
         
         do {
             // Create OAuth Discovery provider with a fallback client ID

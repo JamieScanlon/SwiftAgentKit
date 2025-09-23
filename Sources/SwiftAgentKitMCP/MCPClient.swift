@@ -246,8 +246,22 @@ public actor MCPClient {
     private func connectWithOAuthDiscovery(serverURL: URL, config: MCPConfig.RemoteServerConfig, resourceMetadataURL: String) async throws {
         logger.info("Starting OAuth discovery process for MCP server")
         
-        // Create OAuthDiscoveryAuthProvider with MCP-specific configuration
-        let redirectURI = URL(string: "com.swiftagentkit.mcp://oauth-callback")!
+        // Extract redirect URI from configuration or use default
+        let redirectURIString: String
+        if let authConfig = config.authConfig,
+           case .object(let authDict) = authConfig,
+           case .array(let redirectUris) = authDict["redirectUris"],
+           case .string(let firstRedirectURI) = redirectUris.first {
+            redirectURIString = firstRedirectURI
+        } else {
+            // Default fallback redirect URI
+            redirectURIString = "http://localhost:8080/oauth/callback"
+        }
+        
+        guard let redirectURI = URL(string: redirectURIString) else {
+            throw MCPClientError.connectionFailed("Invalid redirect URI: \(redirectURIString)")
+        }
+        
         let clientID = config.clientID ?? self.clientID
         let discoveryAuthProvider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: serverURL,

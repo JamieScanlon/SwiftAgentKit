@@ -128,6 +128,39 @@ let effectiveClientSecret = registeredClientSecret ?? clientSecret
 3. **Fallback**: ✅ Use provided client ID (`swiftagentkit-mcp-client`)
 4. **OAuth Flow**: ✅ Use provided client ID for authorization and token exchange
 
+## Configuration
+
+The redirect URI is now configurable through the MCP configuration file. You can specify it in the `authConfig` section:
+
+```json
+{
+  "remoteServers": {
+    "zapier-server": {
+      "url": "https://mcp.zapier.com/api/mcp/a/12345/mcp",
+      "authType": "OAuth",
+      "authConfig": {
+        "useDynamicClientRegistration": true,
+        "redirectUris": ["http://localhost:8080/oauth/callback"],
+        "clientName": "My MCP Client",
+        "scope": "mcp"
+      }
+    }
+  }
+}
+```
+
+**Important**: If no `redirectUris` are specified in the configuration, the system defaults to `http://localhost:8080/oauth/callback`.
+
+You can specify multiple redirect URIs if your application supports multiple callback schemes:
+
+```json
+"redirectUris": [
+  "http://localhost:8080/oauth/callback",
+  "https://myapp.com/oauth/callback",
+  "com.myapp://oauth-callback"
+]
+```
+
 ## Testing
 
 Added comprehensive tests to verify:
@@ -136,6 +169,7 @@ Added comprehensive tests to verify:
 - ✅ Fallback to provided client ID when registration not supported
 - ✅ MCP-optimized registration request creation
 - ✅ Integration with existing OAuth discovery flow
+- ✅ Configurable redirect URI support
 
 ## Example Usage
 

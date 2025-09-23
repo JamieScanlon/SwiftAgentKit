@@ -22,7 +22,20 @@
       "authConfig": {
         "useDynamicClientRegistration": true,
         "registrationEndpoint": "https://auth.example.com/register",
-        "redirectUris": ["com.example.app://oauth-callback"],
+        "redirectUris": ["http://localhost:8080/oauth/callback"],
+        "clientName": "MCP Client",
+        "scope": "mcp",
+        "useCredentialStorage": true
+      }
+    },
+    "oauth-server-custom-redirect": {
+      "url": "https://oauth.example.com/mcp",
+      "clientID": "oauth-discovery-client",
+      "authType": "OAuth",
+      "authConfig": {
+        "useDynamicClientRegistration": true,
+        "registrationEndpoint": "https://auth.example.com/register",
+        "redirectUris": ["https://myapp.com/oauth/callback", "com.myapp://oauth-callback"],
         "clientName": "MCP Client",
         "scope": "mcp",
         "useCredentialStorage": true
