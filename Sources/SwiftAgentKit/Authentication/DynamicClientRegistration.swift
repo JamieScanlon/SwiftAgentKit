@@ -58,6 +58,24 @@ public struct DynamicClientRegistration {
         /// Additional metadata fields
         public let additionalMetadata: [String: String]?
         
+        enum CodingKeys: String, CodingKey {
+            case redirectUris = "redirect_uris"
+            case applicationType = "application_type"
+            case clientUri = "client_uri"
+            case contacts
+            case clientName = "client_name"
+            case logoUri = "logo_uri"
+            case tosUri = "tos_uri"
+            case policyUri = "policy_uri"
+            case jwksUri = "jwks_uri"
+            case jwks
+            case tokenEndpointAuthMethod = "token_endpoint_auth_method"
+            case grantTypes = "grant_types"
+            case responseTypes = "response_types"
+            case scope
+            case additionalMetadata
+        }
+        
         public init(
             redirectUris: [String],
             applicationType: String? = nil,
@@ -103,6 +121,7 @@ public struct DynamicClientRegistration {
                 redirectUris: redirectUris,
                 applicationType: "native", // MCP clients are typically native applications
                 clientName: clientName ?? "MCP Client",
+                tokenEndpointAuthMethod: "none", // PKCE clients use "none" for token endpoint auth
                 grantTypes: ["authorization_code", "refresh_token"],
                 responseTypes: ["code"],
                 scope: scope ?? "mcp",

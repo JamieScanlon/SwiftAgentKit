@@ -255,6 +255,16 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             scope: scope
         )
         
+        // Log the registration request for debugging
+        logger.info("Sending registration request with metadata:")
+        logger.info("  - redirectUris: \(registrationRequest.redirectUris)")
+        logger.info("  - clientName: \(registrationRequest.clientName ?? "nil")")
+        logger.info("  - applicationType: \(registrationRequest.applicationType ?? "nil")")
+        logger.info("  - grantTypes: \(registrationRequest.grantTypes ?? [])")
+        logger.info("  - responseTypes: \(registrationRequest.responseTypes ?? [])")
+        logger.info("  - scope: \(registrationRequest.scope ?? "nil")")
+        logger.info("  - tokenEndpointAuthMethod: \(registrationRequest.tokenEndpointAuthMethod ?? "nil")")
+        
         // Create registration client and perform registration
         let registrationClient = DynamicClientRegistrationClient(config: registrationConfig)
         
@@ -267,8 +277,15 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             registeredClientId = response.clientId
             registeredClientSecret = response.clientSecret
             
+        } catch let registrationError as DynamicClientRegistrationError {
+            logger.error("Dynamic client registration failed with specific error: \(registrationError)")
+            if case .registrationError(let errorResponse) = registrationError {
+                logger.error("Registration error details: \(errorResponse.error) - \(errorResponse.errorDescription ?? "No description")")
+            }
+            // Fall back to using the provided client ID
+            logger.info("Falling back to provided client ID: \(clientId)")
         } catch {
-            logger.error("Dynamic client registration failed: \(error)")
+            logger.error("Dynamic client registration failed with unexpected error: \(error)")
             // Fall back to using the provided client ID
             logger.info("Falling back to provided client ID: \(clientId)")
         }

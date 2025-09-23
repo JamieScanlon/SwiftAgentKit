@@ -23,7 +23,7 @@ Modified `OAuthDiscoveryAuthProvider` to:
 
 ## Key Changes
 
-### OAuthDiscoveryAuthProvider.swift
+### 1. OAuthDiscoveryAuthProvider.swift
 
 ```swift
 // Added state for registered client credentials
@@ -65,7 +65,43 @@ private func ensureRegisteredClient() async throws {
 }
 ```
 
-### OAuth Flow Updates
+### 2. DynamicClientRegistration.swift
+
+Fixed the client registration request to include all required fields and proper JSON encoding:
+
+```swift
+// Added missing tokenEndpointAuthMethod field
+public static func mcpClientRequest(
+    redirectUris: [String],
+    clientName: String? = nil,
+    scope: String? = nil,
+    additionalMetadata: [String: String]? = nil
+) -> ClientRegistrationRequest {
+    return ClientRegistrationRequest(
+        redirectUris: redirectUris,
+        applicationType: "native",
+        clientName: clientName ?? "MCP Client",
+        tokenEndpointAuthMethod: "none", // PKCE clients use "none" for token endpoint auth
+        grantTypes: ["authorization_code", "refresh_token"],
+        responseTypes: ["code"],
+        scope: scope ?? "mcp",
+        additionalMetadata: additionalMetadata
+    )
+}
+
+// Added CodingKeys for proper snake_case JSON field names
+enum CodingKeys: String, CodingKey {
+    case redirectUris = "redirect_uris"
+    case applicationType = "application_type"
+    case clientName = "client_name"
+    case tokenEndpointAuthMethod = "token_endpoint_auth_method"
+    case grantTypes = "grant_types"
+    case responseTypes = "response_types"
+    // ... other fields
+}
+```
+
+### 3. OAuth Flow Updates
 
 Updated all OAuth flow methods to use the effective client ID:
 
@@ -127,9 +163,41 @@ let headers = try await authProvider.authenticationHeaders()
 - ✅ **MCP Optimized**: Registration requests are optimized for MCP clients
 - ✅ **Robust**: Graceful fallback if registration fails
 
+## Root Cause of the "invalid_client_metadata" Error
+
+The original implementation was sending invalid client metadata to Zapier because:
+
+1. **Missing `token_endpoint_auth_method` field**: Required for PKCE clients (should be "none")
+2. **Wrong JSON field names**: Using camelCase instead of snake_case as required by OAuth 2.0 Dynamic Client Registration spec
+
+## Fixed Client Metadata
+
+The registration request now includes all required fields with proper JSON encoding:
+
+```json
+{
+  "application_type" : "native",
+  "client_name" : "SwiftAgentKit MCP Client",
+  "grant_types" : [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "redirect_uris" : [
+    "https://example.com/oauth/callback"
+  ],
+  "response_types" : [
+    "code"
+  ],
+  "scope" : "mcp",
+  "token_endpoint_auth_method" : "none"
+}
+```
+
 ## Files Modified
 
 - `Sources/SwiftAgentKit/Authentication/OAuthDiscoveryAuthProvider.swift` - Main implementation
+- `Sources/SwiftAgentKit/Authentication/DynamicClientRegistration.swift` - Fixed metadata and JSON encoding
+- `Sources/SwiftAgentKit/Authentication/DynamicClientRegistrationClient.swift` - Enhanced error logging
 - `Tests/SwiftAgentKitMCPTests/OAuth DiscoveryFlowTests.swift` - Added tests
 - `Examples/DynamicClientRegistrationExample/main.swift` - Example usage
 

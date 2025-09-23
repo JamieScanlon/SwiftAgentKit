@@ -89,7 +89,13 @@ public actor DynamicClientRegistrationClient {
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
-            urlRequest.httpBody = try encoder.encode(registrationRequest)
+            let requestData = try encoder.encode(registrationRequest)
+            urlRequest.httpBody = requestData
+            
+            // Log the JSON being sent for debugging
+            if let jsonString = String(data: requestData, encoding: .utf8) {
+                logger.debug("Registration request JSON: \(jsonString)")
+            }
         } catch {
             logger.error("Failed to encode registration request: \(error)")
             throw DynamicClientRegistrationError.encodingError(error)
@@ -104,6 +110,11 @@ public actor DynamicClientRegistrationClient {
             }
             
             logger.info("Received registration response with status: \(httpResponse.statusCode)")
+            
+            // Log response body for debugging on errors
+            if httpResponse.statusCode >= 400, let responseBody = String(data: data, encoding: .utf8) {
+                logger.error("Registration response body: \(responseBody)")
+            }
             
             // Handle response based on status code
             switch httpResponse.statusCode {

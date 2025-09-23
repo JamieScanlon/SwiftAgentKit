@@ -451,10 +451,50 @@ struct OAuthDiscoveryFlowTests {
         #expect(registrationRequest.clientName == clientName)
         #expect(registrationRequest.scope == scope)
         #expect(registrationRequest.redirectUris == redirectUris)
+        #expect(registrationRequest.tokenEndpointAuthMethod == "none", "PKCE clients should use 'none' for token endpoint auth")
         
         // Verify grant types and response types are appropriate for MCP
         #expect(registrationRequest.grantTypes?.contains("authorization_code") == true)
         #expect(registrationRequest.grantTypes?.contains("refresh_token") == true)
         #expect(registrationRequest.responseTypes?.contains("code") == true)
+    }
+    
+    @Test("Registration request should produce valid JSON for Zapier")
+    func testRegistrationRequestJSON() async throws {
+        let redirectUris = ["https://example.com/oauth/callback"]
+        let clientName = "SwiftAgentKit MCP Client"
+        let scope = "mcp"
+        
+        let registrationRequest = DynamicClientRegistration.ClientRegistrationRequest.mcpClientRequest(
+            redirectUris: redirectUris,
+            clientName: clientName,
+            scope: scope
+        )
+        
+        // Encode to JSON to verify the exact format
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        
+        let jsonData = try encoder.encode(registrationRequest)
+        let jsonString = String(data: jsonData, encoding: .utf8)!
+        
+        // Verify the JSON contains all required fields
+        #expect(jsonString.contains("\"redirect_uris\""), "JSON should contain redirect_uris field")
+        #expect(jsonString.contains("\"client_name\""), "JSON should contain client_name field")
+        #expect(jsonString.contains("\"application_type\""), "JSON should contain application_type field")
+        #expect(jsonString.contains("\"grant_types\""), "JSON should contain grant_types field")
+        #expect(jsonString.contains("\"response_types\""), "JSON should contain response_types field")
+        #expect(jsonString.contains("\"scope\""), "JSON should contain scope field")
+        #expect(jsonString.contains("\"token_endpoint_auth_method\""), "JSON should contain token_endpoint_auth_method field")
+        
+        // Verify specific values
+        #expect(jsonString.contains("\"native\""), "JSON should contain 'native' application_type")
+        #expect(jsonString.contains("\"none\""), "JSON should contain 'none' token_endpoint_auth_method")
+        #expect(jsonString.contains("\"authorization_code\""), "JSON should contain authorization_code grant type")
+        #expect(jsonString.contains("\"code\""), "JSON should contain code response type")
+        
+        // Print the JSON for debugging (this will show in test output)
+        print("📋 Registration Request JSON:")
+        print(jsonString)
     }
 }
