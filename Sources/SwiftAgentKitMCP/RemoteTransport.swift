@@ -401,7 +401,7 @@ public actor RemoteTransport: Transport {
     
     private nonisolated func isValidJSONRPCMessage(_ data: Data) -> Bool {
         // First, check if it's valid JSON
-        guard let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return false
         }
         
