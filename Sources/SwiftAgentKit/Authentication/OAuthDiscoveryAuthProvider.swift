@@ -250,6 +250,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         // Select appropriate scope based on server capabilities and configuration
         let selectedScope = selectOptimalScope(serverMetadata: metadata, configuredScope: scope)
+        logger.info("Dynamic client registration selected scope: '\(selectedScope)' (configured: '\(scope ?? "nil")')")
+        logger.info("Server supported scopes: \(metadata.scopesSupported ?? [])")
         
         // Create registration request optimized for MCP clients
         let registrationRequest = DynamicClientRegistration.ClientRegistrationRequest.mcpClientRequest(
@@ -279,6 +281,13 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             // Store the registered client credentials
             registeredClientId = response.clientId
             registeredClientSecret = response.clientSecret
+            
+            logger.info("Dynamic client registration completed successfully")
+            logger.info("Registration Summary:")
+            logger.info("  - Registered Client ID: \(response.clientId)")
+            logger.info("  - Registration Scope: '\(selectedScope)'")
+            logger.info("  - Server Supported Scopes: \(metadata.scopesSupported ?? [])")
+            logger.info("  - This scope will be used consistently in OAuth flow")
             
         } catch let registrationError as DynamicClientRegistrationError {
             logger.error("Dynamic client registration failed with specific error: \(registrationError)")
@@ -407,9 +416,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         // Use registered client ID if available, otherwise fall back to provided client ID
         let effectiveClientId = registeredClientId ?? clientId
+        let clientIdSource = registeredClientId != nil ? "registered" : "provided"
+        logger.info("OAuth flow using \(clientIdSource) client ID: \(effectiveClientId)")
         
         // Select optimal scope for OAuth flow (same logic as registration)
         let effectiveScope = selectOptimalScope(serverMetadata: metadata, configuredScope: scope)
+        logger.info("OAuth flow selected scope: '\(effectiveScope)' (configured: '\(scope ?? "nil")')")
         
         // Build authorization URL with PKCE parameters
         var authURLComponents = URLComponents(url: authorizationURL, resolvingAgainstBaseURL: false)!
@@ -423,6 +435,9 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         if !effectiveScope.isEmpty {
             queryItems.append(URLQueryItem(name: "scope", value: effectiveScope))
+            logger.info("Added scope parameter to authorization URL: '\(effectiveScope)'")
+        } else {
+            logger.warning("No scope selected for OAuth flow - this may cause issues with some servers")
         }
         
         // Add resource parameter as required by RFC 8707 for MCP clients
@@ -438,6 +453,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         }
         
         logger.info("Authorization URL: \(finalAuthURL)")
+        logger.info("Authorization URL breakdown:")
+        logger.info("  - Client ID: \(effectiveClientId)")
+        logger.info("  - Scope: '\(effectiveScope)'")
+        logger.info("  - Redirect URI: \(redirectURI.absoluteString)")
+        logger.info("  - Code Challenge: \(codeChallenge)")
+        logger.info("  - Resource: \(resourceURI ?? "none")")
         
         // For a real implementation, this would:
         // 1. Open the authorization URL in a browser
@@ -487,6 +508,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // Use registered client ID if available, otherwise fall back to provided client ID
         let effectiveClientId = registeredClientId ?? clientId
         let effectiveClientSecret = registeredClientSecret ?? clientSecret
+        let clientIdSource = registeredClientId != nil ? "registered" : "provided"
+        logger.info("Token exchange using \(clientIdSource) client ID: \(effectiveClientId)")
+        
+        // Ensure we use the same scope that was registered
+        let effectiveScope = selectOptimalScope(serverMetadata: metadata, configuredScope: scope)
+        logger.info("Token exchange using scope: '\(effectiveScope)' (same as registration)")
         
         var bodyComponents = URLComponents()
         bodyComponents.queryItems = [
@@ -496,6 +523,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             URLQueryItem(name: "client_id", value: effectiveClientId),
             URLQueryItem(name: "code_verifier", value: codeVerifier)
         ]
+        
+        // Add scope parameter to match the authorization request
+        if !effectiveScope.isEmpty {
+            bodyComponents.queryItems?.append(URLQueryItem(name: "scope", value: effectiveScope))
+            logger.info("Added scope parameter to token exchange request: '\(effectiveScope)'")
+        }
         
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = resourceURI {
@@ -559,6 +592,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // Use registered client ID if available, otherwise fall back to provided client ID
         let effectiveClientId = registeredClientId ?? clientId
         let effectiveClientSecret = registeredClientSecret ?? clientSecret
+        let clientIdSource = registeredClientId != nil ? "registered" : "provided"
+        logger.info("Token refresh using \(clientIdSource) client ID: \(effectiveClientId)")
+        
+        // Ensure we use the same scope that was registered
+        let effectiveScope = selectOptimalScope(serverMetadata: metadata, configuredScope: scope)
+        logger.info("Token refresh using scope: '\(effectiveScope)' (same as registration)")
         
         var bodyComponents = URLComponents()
         bodyComponents.queryItems = [
@@ -566,6 +605,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             URLQueryItem(name: "refresh_token", value: refreshToken),
             URLQueryItem(name: "client_id", value: effectiveClientId)
         ]
+        
+        // Add scope parameter to match the original authorization request
+        if !effectiveScope.isEmpty {
+            bodyComponents.queryItems?.append(URLQueryItem(name: "scope", value: effectiveScope))
+            logger.info("Added scope parameter to token refresh request: '\(effectiveScope)'")
+        }
         
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = resourceURI {

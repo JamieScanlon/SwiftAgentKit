@@ -246,6 +246,54 @@ Added comprehensive tests to verify:
 - ✅ Zapier response format decoding (snake_case → camelCase mapping)
 - ✅ Intelligent scope selection based on server capabilities
 
+### Enhanced Logging
+
+The system now includes comprehensive logging to help debug OAuth flow issues:
+
+**Registration Logging**:
+```
+Dynamic client registration selected scope: 'profile email' (configured: 'mcp')
+Server supported scopes: ["profile", "email"]
+Registration Summary:
+  - Registered Client ID: nla-ABC123...
+  - Registration Scope: 'profile email'
+  - Server Supported Scopes: ["profile", "email"]
+  - This scope will be used consistently in OAuth flow
+```
+
+**OAuth Flow Logging**:
+```
+OAuth flow using registered client ID: nla-ABC123...
+OAuth flow selected scope: 'profile email' (configured: 'mcp')
+Added scope parameter to authorization URL: 'profile email'
+Authorization URL breakdown:
+  - Client ID: nla-ABC123...
+  - Scope: 'profile email'
+  - Redirect URI: http://localhost:8080/oauth/callback
+  - Code Challenge: ABC123...
+  - Resource: https://mcp.zapier.com/api/mcp/a/12345/mcp
+```
+
+**Token Exchange Logging**:
+```
+Token exchange using registered client ID: nla-ABC123...
+Token exchange using scope: 'profile email' (same as registration)
+Added scope parameter to token exchange request: 'profile email'
+```
+
+**Token Refresh Logging**:
+```
+Token refresh using registered client ID: nla-ABC123...
+Token refresh using scope: 'profile email' (same as registration)
+Added scope parameter to token refresh request: 'profile email'
+```
+
+This logging helps ensure:
+- ✅ Scope consistency across all OAuth steps
+- ✅ Proper client ID usage (registered vs provided)
+- ✅ Complete visibility into OAuth parameters
+- ✅ Easy debugging of scope-related issues
+
 ## Example Usage
 
 ```swift
