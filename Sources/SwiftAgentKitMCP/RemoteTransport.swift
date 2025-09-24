@@ -401,7 +401,7 @@ public actor RemoteTransport: Transport {
     
     private nonisolated func isValidJSONRPCMessage(_ data: Data) -> Bool {
         // First, check if it's valid JSON
-        guard let json = try? JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed) as? [String: Any] else {
+        guard let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
             return false
         }
         
@@ -418,6 +418,23 @@ public actor RemoteTransport: Transport {
         
         // Must have either method (for requests) or result/error (for responses)
         return hasMethod || hasResult || hasError
+    }
+    
+    /// Extracts JSON data from Server-Sent Events format
+    /// - Parameter sseMessage: The SSE message string
+    /// - Returns: The JSON data if found, nil otherwise
+    private nonisolated func extractJSONFromSSE(_ sseMessage: String) -> Data? {
+        let lines = sseMessage.components(separatedBy: .newlines)
+        
+        for line in lines {
+            let trimmedLine = line.trimmingCharacters(in: .whitespaces)
+            if trimmedLine.hasPrefix("data: ") {
+                let jsonString = String(trimmedLine.dropFirst(6)) // Remove "data: " prefix
+                return jsonString.data(using: .utf8)
+            }
+        }
+        
+        return nil
     }
     
     /// Extract resource_metadata URL from WWW-Authenticate header
