@@ -515,6 +515,14 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         let effectiveScope = selectOptimalScope(serverMetadata: metadata, configuredScope: scope)
         logger.info("Token exchange using scope: '\(effectiveScope)' (same as registration)")
         
+        // Critical verification: Ensure scope consistency
+        if let registeredClientId = registeredClientId {
+            logger.info("🔍 SCOPE CONSISTENCY CHECK:")
+            logger.info("  - Using registered client ID: \(registeredClientId)")
+            logger.info("  - Token exchange scope: '\(effectiveScope)'")
+            logger.info("  - This scope MUST match the registration scope exactly")
+        }
+        
         var bodyComponents = URLComponents()
         bodyComponents.queryItems = [
             URLQueryItem(name: "grant_type", value: "authorization_code"),
@@ -525,9 +533,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         ]
         
         // Add scope parameter to match the authorization request
+        // Note: Some OAuth servers require the scope parameter, others don't
+        // We include it to ensure consistency with the authorization request
         if !effectiveScope.isEmpty {
             bodyComponents.queryItems?.append(URLQueryItem(name: "scope", value: effectiveScope))
             logger.info("Added scope parameter to token exchange request: '\(effectiveScope)'")
+            logger.info("⚠️  If token exchange fails with 'invalid_scope', try removing scope parameter from token exchange")
         }
         
         // Add resource parameter as required by RFC 8707 for MCP clients
@@ -542,6 +553,13 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         request.httpBody = bodyComponents.query?.data(using: .utf8)
         
+        // Log the complete token exchange request for debugging
+        if let requestBody = String(data: request.httpBody ?? Data(), encoding: .utf8) {
+            logger.info("Token exchange request body: \(requestBody)")
+        }
+        logger.info("Token exchange request URL: \(tokenURL)")
+        logger.info("Token exchange request headers: \(request.allHTTPHeaderFields ?? [:])")
+        
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             
@@ -551,6 +569,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             
             guard 200...299 ~= httpResponse.statusCode else {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+                logger.error("Token exchange failed with status \(httpResponse.statusCode): \(errorMessage)")
+                logger.error("Token exchange request that failed: \(String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "unknown")")
                 throw AuthenticationError.authenticationFailed("Token exchange failed: \(errorMessage)")
             }
             
@@ -624,6 +644,13 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         request.httpBody = bodyComponents.query?.data(using: .utf8)
         
+        // Log the complete token refresh request for debugging
+        if let requestBody = String(data: request.httpBody ?? Data(), encoding: .utf8) {
+            logger.info("Token refresh request body: \(requestBody)")
+        }
+        logger.info("Token refresh request URL: \(tokenURL)")
+        logger.info("Token refresh request headers: \(request.allHTTPHeaderFields ?? [:])")
+        
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
             
@@ -633,6 +660,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             
             guard 200...299 ~= httpResponse.statusCode else {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
+                logger.error("Token refresh failed with status \(httpResponse.statusCode): \(errorMessage)")
+                logger.error("Token refresh request that failed: \(String(data: request.httpBody ?? Data(), encoding: .utf8) ?? "unknown")")
                 throw AuthenticationError.authenticationFailed("Token refresh failed: \(errorMessage)")
             }
             

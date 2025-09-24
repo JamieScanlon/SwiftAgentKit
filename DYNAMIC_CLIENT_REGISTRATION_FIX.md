@@ -278,7 +278,15 @@ Authorization URL breakdown:
 ```
 Token exchange using registered client ID: nla-ABC123...
 Token exchange using scope: 'profile email' (same as registration)
+🔍 SCOPE CONSISTENCY CHECK:
+  - Using registered client ID: nla-ABC123...
+  - Token exchange scope: 'profile email'
+  - This scope MUST match the registration scope exactly
 Added scope parameter to token exchange request: 'profile email'
+⚠️  If token exchange fails with 'invalid_scope', try removing scope parameter from token exchange
+Token exchange request body: grant_type=authorization_code&code=ABC123&redirect_uri=http://localhost:8080/oauth/callback&client_id=nla-ABC123&code_verifier=ABC123&scope=profile%20email&resource=https://mcp.zapier.com/api/mcp/a/12345/mcp
+Token exchange request URL: https://mcp.zapier.com/token
+Token exchange request headers: ["Content-Type": "application/x-www-form-urlencoded"]
 ```
 
 **Token Refresh Logging**:
@@ -293,6 +301,22 @@ This logging helps ensure:
 - ✅ Proper client ID usage (registered vs provided)
 - ✅ Complete visibility into OAuth parameters
 - ✅ Easy debugging of scope-related issues
+- ✅ Complete token exchange request visibility
+- ✅ Clear error messages with request details
+
+### Common OAuth Issues and Solutions
+
+**Issue**: Token exchange fails with `invalid_scope` error
+**Possible Causes**:
+1. **Scope Parameter Issue**: Some OAuth servers don't expect scope in token exchange if it matches the authorization request
+2. **Scope Format Mismatch**: URL encoding differences between authorization and token exchange
+3. **Client Registration Mismatch**: Registered scope doesn't match authorization scope
+
+**Debugging Steps**:
+1. Check the token exchange request body in the logs
+2. Verify the scope parameter matches exactly what was registered
+3. Try removing the scope parameter from token exchange (some servers don't require it)
+4. Ensure the client_id matches the registered client ID exactly
 
 ## Example Usage
 
