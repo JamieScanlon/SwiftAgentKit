@@ -310,20 +310,34 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         }
         
         // Try to find the best scope from server's supported scopes
-        // Prioritize combined scopes over individual ones
-        let preferredScopes = [
+        // First check for exact combined scopes (highest priority)
+        let exactCombinedScopes = [
             "mcp",                    // Generic MCP scope
             "profile email",          // Combined scope for Zapier
             "openid profile email",   // Full OpenID Connect scope
-            "openid",                 // Basic OpenID Connect
-            "profile",                // Individual profile scope
-            "email"                   // Individual email scope
         ]
         
-        for preferredScope in preferredScopes {
-            if serverSupportedScopes.contains(preferredScope) {
-                logger.info("Selected server-supported scope: \(preferredScope)")
-                return preferredScope
+        for combinedScope in exactCombinedScopes {
+            if serverSupportedScopes.contains(combinedScope) {
+                logger.info("Selected exact server-supported scope: \(combinedScope)")
+                return combinedScope
+            }
+        }
+        
+        // Check for scope combinations we can build from individual scopes
+        let builtCombinedScope = buildOptimalScope(from: serverSupportedScopes)
+        if !builtCombinedScope.isEmpty {
+            logger.info("Built combined scope from individual scopes: \(builtCombinedScope)")
+            return builtCombinedScope
+        }
+        
+        // Fall back to individual scopes in preference order
+        let individualScopes = ["openid", "profile", "email"]
+        
+        for individualScope in individualScopes {
+            if serverSupportedScopes.contains(individualScope) {
+                logger.info("Selected individual server-supported scope: \(individualScope)")
+                return individualScope
             }
         }
         
@@ -336,6 +350,36 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // Fallback to default scope if server doesn't specify supported scopes
         logger.info("No server-supported scopes found, using default: mcp")
         return "mcp"
+    }
+    
+    /// Build optimal scope by combining individual scopes when possible
+    private func buildOptimalScope(from serverSupportedScopes: [String]) -> String {
+        // Check for common scope combinations we can build from individual scopes
+        // Order by priority: most comprehensive first
+        
+        // Check if we can build "openid profile email" from individual scopes (highest priority)
+        if serverSupportedScopes.contains("openid") && 
+           serverSupportedScopes.contains("profile") && 
+           serverSupportedScopes.contains("email") {
+            return "openid profile email"
+        }
+        
+        // Check if we can build "profile email" from individual scopes
+        if serverSupportedScopes.contains("profile") && serverSupportedScopes.contains("email") {
+            return "profile email"
+        }
+        
+        // Check if we can build "openid profile" from individual scopes
+        if serverSupportedScopes.contains("openid") && serverSupportedScopes.contains("profile") {
+            return "openid profile"
+        }
+        
+        // Check if we can build "openid email" from individual scopes
+        if serverSupportedScopes.contains("openid") && serverSupportedScopes.contains("email") {
+            return "openid email"
+        }
+        
+        return ""
     }
     
     /// Perform OAuth 2.1 authorization flow

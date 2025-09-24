@@ -560,29 +560,45 @@ struct OAuthDiscoveryFlowTests {
         let selectedScope1 = await authProvider1.selectOptimalScope(serverMetadata: metadataWithMcp, configuredScope: "mcp")
         #expect(selectedScope1 == "mcp", "Should use configured scope when server supports it")
         
-        // Test 2: Configured scope not supported by server - should prefer combined scope
-        let metadataWithCombinedScopes = OAuthServerMetadata(
+        // Test 2: Configured scope not supported by server - should prefer exact combined scope
+        let metadataWithExactCombinedScopes = OAuthServerMetadata(
             scopesSupported: ["profile email", "profile", "email", "openid"]
         )
         
-        let selectedScope2 = await authProvider1.selectOptimalScope(serverMetadata: metadataWithCombinedScopes, configuredScope: "mcp")
-        #expect(selectedScope2 == "profile email", "Should prefer combined 'profile email' over individual scopes")
+        let selectedScope2 = await authProvider1.selectOptimalScope(serverMetadata: metadataWithExactCombinedScopes, configuredScope: "mcp")
+        #expect(selectedScope2 == "profile email", "Should prefer exact combined 'profile email' when available")
         
-        // Test 2b: Test scope preference order
-        let metadataWithIndividualOnly = OAuthServerMetadata(
+        // Test 2a: Should build combined scope from individual scopes (prioritizes most comprehensive)
+        let metadataWithIndividualScopes = OAuthServerMetadata(
             scopesSupported: ["profile", "email", "openid"]
         )
         
-        let selectedScope2b = await authProvider1.selectOptimalScope(serverMetadata: metadataWithIndividualOnly, configuredScope: nil)
-        #expect(selectedScope2b == "openid", "Should use openid scope when available (more comprehensive than profile)")
+        let selectedScope2a = await authProvider1.selectOptimalScope(serverMetadata: metadataWithIndividualScopes, configuredScope: "mcp")
+        #expect(selectedScope2a == "openid profile email", "Should build most comprehensive 'openid profile email' when all three scopes available")
         
-        // Test 2c: Test profile vs email preference when openid not available
-        let metadataProfileEmailOnly = OAuthServerMetadata(
+        // Test 2b: Test openid combination
+        let metadataWithOpenIdIndividual = OAuthServerMetadata(
+            scopesSupported: ["openid", "profile", "email"]
+        )
+        
+        let selectedScope2b = await authProvider1.selectOptimalScope(serverMetadata: metadataWithOpenIdIndividual, configuredScope: nil)
+        #expect(selectedScope2b == "openid profile email", "Should build 'openid profile email' from individual scopes")
+        
+        // Test 2c: Test Zapier scenario - profile and email only (no openid)
+        let metadataZapierStyle = OAuthServerMetadata(
             scopesSupported: ["profile", "email"]
         )
         
-        let selectedScope2c = await authProvider1.selectOptimalScope(serverMetadata: metadataProfileEmailOnly, configuredScope: nil)
-        #expect(selectedScope2c == "profile", "Should prefer profile over email when openid not available")
+        let selectedScope2c = await authProvider1.selectOptimalScope(serverMetadata: metadataZapierStyle, configuredScope: "mcp")
+        #expect(selectedScope2c == "profile email", "Should build 'profile email' for Zapier-style servers with profile and email scopes")
+        
+        // Test 2d: Test profile vs email preference when only one available
+        let metadataProfileOnly = OAuthServerMetadata(
+            scopesSupported: ["profile"]
+        )
+        
+        let selectedScope2d = await authProvider1.selectOptimalScope(serverMetadata: metadataProfileOnly, configuredScope: nil)
+        #expect(selectedScope2d == "profile", "Should use individual profile scope when email not available")
         
         // Test 3: No configured scope - should pick best available
         let selectedScope3 = await authProvider1.selectOptimalScope(serverMetadata: metadataWithMcp, configuredScope: nil)
@@ -595,9 +611,11 @@ struct OAuthDiscoveryFlowTests {
         
         print("✅ Intelligent Scope Selection Test Passed!")
         print("📋 Test 1 - Configured + Supported: \(selectedScope1)")
-        print("📋 Test 2 - Combined Scope Preference: \(selectedScope2)")
-        print("📋 Test 2b - OpenID Preference: \(selectedScope2b)")
-        print("📋 Test 2c - Profile vs Email: \(selectedScope2c)")
+        print("📋 Test 2 - Exact Combined Scope: \(selectedScope2)")
+        print("📋 Test 2a - Most Comprehensive: \(selectedScope2a)")
+        print("📋 Test 2b - OpenID Combination: \(selectedScope2b)")
+        print("📋 Test 2c - Zapier Scenario: \(selectedScope2c)")
+        print("📋 Test 2d - Individual Scope: \(selectedScope2d)")
         print("📋 Test 3 - No Config + Server Supported: \(selectedScope3)")
         print("📋 Test 4 - No Config + No Server Support: \(selectedScope4)")
     }
