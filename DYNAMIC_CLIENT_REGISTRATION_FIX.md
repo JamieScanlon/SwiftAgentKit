@@ -172,13 +172,13 @@ enum CodingKeys: String, CodingKey {
 
 ## Configuration
 
-The redirect URI is now configurable through the MCP configuration file. You can specify it in the `authConfig` section:
+Both the redirect URI and scope are now configurable through the MCP configuration file. You can specify them in the `authConfig` section:
 
 ```json
 {
   "remoteServers": {
-    "zapier-server": {
-      "url": "https://mcp.zapier.com/api/mcp/a/12345/mcp",
+    "generic-mcp-server": {
+      "url": "https://mcp.example.com/api/mcp",
       "authType": "OAuth",
       "authConfig": {
         "useDynamicClientRegistration": true,
@@ -186,12 +186,36 @@ The redirect URI is now configurable through the MCP configuration file. You can
         "clientName": "My MCP Client",
         "scope": "mcp"
       }
+    },
+    "zapier-server": {
+      "url": "https://mcp.zapier.com/api/mcp/a/12345/mcp",
+      "authType": "OAuth",
+      "authConfig": {
+        "useDynamicClientRegistration": true,
+        "redirectUris": ["http://localhost:8080/oauth/callback"],
+        "clientName": "SwiftAgentKit MCP Client",
+        "scope": "profile email"
+      }
     }
   }
 }
 ```
 
-**Important**: If no `redirectUris` are specified in the configuration, the system defaults to `http://localhost:8080/oauth/callback`.
+**Configuration Options**:
+
+- **redirectUris**: If not specified, defaults to `["http://localhost:8080/oauth/callback"]`
+- **scope**: If not specified, the system will intelligently select the best scope based on what the server supports
+- **Intelligent Scope Selection**: The system automatically discovers server-supported scopes and selects the most appropriate one:
+  1. If you configure a scope and the server supports it, that scope is used
+  2. If the configured scope isn't supported, the system falls back to preferred scopes in order: `["mcp", "profile email", "openid", "profile", "email"]`
+  3. If no preferred scope is available, the first server-supported scope is used
+  4. If the server doesn't specify supported scopes, defaults to `"mcp"`
+
+**Common Server Scopes**:
+- Generic MCP servers: `"mcp"`
+- Zapier: `"profile email"`
+- OpenID Connect servers: `"openid profile email"`
+- Custom servers: Check their documentation for required scopes
 
 You can specify multiple redirect URIs if your application supports multiple callback schemes:
 
@@ -213,6 +237,7 @@ Added comprehensive tests to verify:
 - ✅ Integration with existing OAuth discovery flow
 - ✅ Configurable redirect URI support
 - ✅ Zapier response format decoding (snake_case → camelCase mapping)
+- ✅ Intelligent scope selection based on server capabilities
 
 ## Example Usage
 

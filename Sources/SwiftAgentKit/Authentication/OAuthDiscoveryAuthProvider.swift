@@ -248,11 +248,14 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             registrationAuthMethod: metadata.registrationEndpointAuthMethodsSupported?.first
         )
         
+        // Select appropriate scope based on server capabilities and configuration
+        let selectedScope = selectOptimalScope(serverMetadata: metadata, configuredScope: scope)
+        
         // Create registration request optimized for MCP clients
         let registrationRequest = DynamicClientRegistration.ClientRegistrationRequest.mcpClientRequest(
             redirectUris: [redirectURI.absoluteString],
             clientName: "SwiftAgentKit MCP Client",
-            scope: scope
+            scope: selectedScope
         )
         
         // Log the registration request for debugging
@@ -291,6 +294,42 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         }
     }
     
+    /// Select optimal scope based on server capabilities and configuration
+    internal func selectOptimalScope(serverMetadata: OAuthServerMetadata, configuredScope: String?) -> String {
+        let serverSupportedScopes = serverMetadata.scopesSupported ?? []
+        
+        // If a scope is explicitly configured, check if the server supports it
+        if let configuredScope = configuredScope, !configuredScope.isEmpty {
+            // Check if the configured scope is supported by the server
+            if serverSupportedScopes.contains(configuredScope) {
+                logger.info("Using configured scope: \(configuredScope)")
+                return configuredScope
+            } else {
+                logger.warning("Configured scope '\(configuredScope)' not supported by server. Supported scopes: \(serverSupportedScopes)")
+            }
+        }
+        
+        // Try to find the best scope from server's supported scopes
+        let preferredScopes = ["mcp", "profile email", "openid", "profile", "email"]
+        
+        for preferredScope in preferredScopes {
+            if serverSupportedScopes.contains(preferredScope) {
+                logger.info("Selected server-supported scope: \(preferredScope)")
+                return preferredScope
+            }
+        }
+        
+        // If no preferred scope is found, use the first available scope
+        if let firstScope = serverSupportedScopes.first {
+            logger.info("Using first available server scope: \(firstScope)")
+            return firstScope
+        }
+        
+        // Fallback to default scope if server doesn't specify supported scopes
+        logger.info("No server-supported scopes found, using default: mcp")
+        return "mcp"
+    }
+    
     /// Perform OAuth 2.1 authorization flow
     private func performOAuthFlow() async throws {
         guard let metadata = oauthServerMetadata else {
@@ -317,6 +356,9 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // Use registered client ID if available, otherwise fall back to provided client ID
         let effectiveClientId = registeredClientId ?? clientId
         
+        // Select optimal scope for OAuth flow (same logic as registration)
+        let effectiveScope = selectOptimalScope(serverMetadata: metadata, configuredScope: scope)
+        
         // Build authorization URL with PKCE parameters
         var authURLComponents = URLComponents(url: authorizationURL, resolvingAgainstBaseURL: false)!
         var queryItems = [
@@ -327,8 +369,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             URLQueryItem(name: "code_challenge_method", value: "S256")
         ]
         
-        if let scope = scope {
-            queryItems.append(URLQueryItem(name: "scope", value: scope))
+        if !effectiveScope.isEmpty {
+            queryItems.append(URLQueryItem(name: "scope", value: effectiveScope))
         }
         
         // Add resource parameter as required by RFC 8707 for MCP clients

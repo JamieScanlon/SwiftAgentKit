@@ -28,6 +28,19 @@
         "useCredentialStorage": true
       }
     },
+    "zapier-server": {
+      "url": "https://mcp.zapier.com/api/mcp/a/12345/mcp",
+      "clientID": "oauth-discovery-client",
+      "authType": "OAuth",
+      "authConfig": {
+        "useDynamicClientRegistration": true,
+        "registrationEndpoint": "https://mcp.zapier.com/register",
+        "redirectUris": ["http://localhost:8080/oauth/callback"],
+        "clientName": "SwiftAgentKit MCP Client",
+        "scope": "profile email",
+        "useCredentialStorage": true
+      }
+    },
     "oauth-server-custom-redirect": {
       "url": "https://oauth.example.com/mcp",
       "clientID": "oauth-discovery-client",

@@ -541,4 +541,46 @@ struct OAuthDiscoveryFlowTests {
         print("📋 Decoded Client Name: \(response.clientName ?? "nil")")
         print("📋 Decoded Scope: \(response.scope ?? "nil")")
     }
+    
+    @Test("Scope selection should use server-supported scopes intelligently")
+    func testIntelligentScopeSelection() async throws {
+        // Test 1: Configured scope that matches server support
+        let metadataWithMcp = OAuthServerMetadata(
+            scopesSupported: ["mcp", "openid", "profile"]
+        )
+        
+        let authProvider1 = try OAuthDiscoveryAuthProvider(
+            resourceServerURL: URL(string: "https://example.com")!,
+            clientId: "test-client",
+            scope: "mcp",
+            redirectURI: URL(string: "http://localhost:8080/callback")!
+        )
+        
+        // Access internal method (for testing purposes)
+        let selectedScope1 = await authProvider1.selectOptimalScope(serverMetadata: metadataWithMcp, configuredScope: "mcp")
+        #expect(selectedScope1 == "mcp", "Should use configured scope when server supports it")
+        
+        // Test 2: Configured scope not supported by server
+        let metadataWithoutMcp = OAuthServerMetadata(
+            scopesSupported: ["profile email", "openid"]
+        )
+        
+        let selectedScope2 = await authProvider1.selectOptimalScope(serverMetadata: metadataWithoutMcp, configuredScope: "mcp")
+        #expect(selectedScope2 == "profile email", "Should fall back to preferred scope when configured scope not supported")
+        
+        // Test 3: No configured scope - should pick best available
+        let selectedScope3 = await authProvider1.selectOptimalScope(serverMetadata: metadataWithMcp, configuredScope: nil)
+        #expect(selectedScope3 == "mcp", "Should pick preferred scope when none configured")
+        
+        // Test 4: No server-supported scopes - should use default
+        let metadataEmpty = OAuthServerMetadata(scopesSupported: [])
+        let selectedScope4 = await authProvider1.selectOptimalScope(serverMetadata: metadataEmpty, configuredScope: nil)
+        #expect(selectedScope4 == "mcp", "Should use default scope when server doesn't specify supported scopes")
+        
+        print("✅ Intelligent Scope Selection Test Passed!")
+        print("📋 Test 1 - Configured + Supported: \(selectedScope1)")
+        print("📋 Test 2 - Configured + Not Supported: \(selectedScope2)")
+        print("📋 Test 3 - No Config + Server Supported: \(selectedScope3)")
+        print("📋 Test 4 - No Config + No Server Support: \(selectedScope4)")
+    }
 }

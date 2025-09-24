@@ -124,7 +124,7 @@ public struct DynamicClientRegistration {
                 tokenEndpointAuthMethod: "none", // PKCE clients use "none" for token endpoint auth
                 grantTypes: ["authorization_code", "refresh_token"],
                 responseTypes: ["code"],
-                scope: scope ?? "mcp",
+                scope: scope ?? "mcp", // Default scope for MCP clients
                 additionalMetadata: additionalMetadata
             )
         }

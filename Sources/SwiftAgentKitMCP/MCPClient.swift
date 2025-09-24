@@ -258,6 +258,17 @@ public actor MCPClient {
             redirectURIString = "http://localhost:8080/oauth/callback"
         }
         
+        // Extract scope from configuration or use default
+        let scopeString: String
+        if let authConfig = config.authConfig,
+           case .object(let authDict) = authConfig,
+           case .string(let scope) = authDict["scope"] {
+            scopeString = scope
+        } else {
+            // Default scope that works for most MCP servers
+            scopeString = "mcp"
+        }
+        
         guard let redirectURI = URL(string: redirectURIString) else {
             throw MCPClientError.connectionFailed("Invalid redirect URI: \(redirectURIString)")
         }
@@ -266,7 +277,7 @@ public actor MCPClient {
         let discoveryAuthProvider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: serverURL,
             clientId: clientID,
-            scope: "mcp",
+            scope: scopeString,
             redirectURI: redirectURI,
             resourceType: "mcp"
         )
