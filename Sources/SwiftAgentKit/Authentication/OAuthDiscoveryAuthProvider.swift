@@ -479,7 +479,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             authorizationURL: finalAuthURL,
             redirectURI: redirectURI,
             clientId: effectiveClientId,
-            scope: scope,
+            scope: effectiveScope,
             resourceURI: resourceURI,
             additionalMetadata: additionalMetadata
         )
