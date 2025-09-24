@@ -207,7 +207,13 @@ Both the redirect URI and scope are now configurable through the MCP configurati
 - **scope**: If not specified, the system will intelligently select the best scope based on what the server supports
 - **Intelligent Scope Selection**: The system automatically discovers server-supported scopes and selects the most appropriate one:
   1. If you configure a scope and the server supports it, that scope is used
-  2. If the configured scope isn't supported, the system falls back to preferred scopes in order: `["mcp", "profile email", "openid", "profile", "email"]`
+  2. If the configured scope isn't supported, the system falls back to preferred scopes in priority order:
+     - `"mcp"` (generic MCP scope)
+     - `"profile email"` (combined scope for Zapier)
+     - `"openid profile email"` (full OpenID Connect scope)
+     - `"openid"` (basic OpenID Connect)
+     - `"profile"` (individual profile scope)
+     - `"email"` (individual email scope)
   3. If no preferred scope is available, the first server-supported scope is used
   4. If the server doesn't specify supported scopes, defaults to `"mcp"`
 

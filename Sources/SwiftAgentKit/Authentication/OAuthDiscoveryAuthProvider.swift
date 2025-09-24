@@ -310,7 +310,15 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         }
         
         // Try to find the best scope from server's supported scopes
-        let preferredScopes = ["mcp", "profile email", "openid", "profile", "email"]
+        // Prioritize combined scopes over individual ones
+        let preferredScopes = [
+            "mcp",                    // Generic MCP scope
+            "profile email",          // Combined scope for Zapier
+            "openid profile email",   // Full OpenID Connect scope
+            "openid",                 // Basic OpenID Connect
+            "profile",                // Individual profile scope
+            "email"                   // Individual email scope
+        ]
         
         for preferredScope in preferredScopes {
             if serverSupportedScopes.contains(preferredScope) {
