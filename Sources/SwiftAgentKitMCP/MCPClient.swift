@@ -190,7 +190,8 @@ public actor MCPClient {
             do {
                 authProvider = try AuthenticationFactory.createAuthProvider(
                     authType: authType,
-                    config: authConfig
+                    config: authConfig,
+                    serverURL: config.url
                 )
                 logger.info("Created authentication provider for type: \(authType)")
             } catch {

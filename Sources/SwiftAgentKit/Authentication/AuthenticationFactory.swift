@@ -35,6 +35,35 @@ public struct AuthenticationFactory {
         return try createAuthProvider(scheme: scheme, config: config)
     }
     
+    /// Creates an authentication provider based on the configuration with automatic resource URL injection
+    /// - Parameters:
+    ///   - authType: Type of authentication (e.g., "bearer", "apikey", "basic")
+    ///   - config: Authentication configuration as JSON
+    ///   - serverURL: The server URL to use for automatic resource URL injection
+    /// - Returns: Configured authentication provider
+    /// - Throws: AuthenticationError if configuration is invalid
+    public static func createAuthProvider(
+        authType: String,
+        config: JSON,
+        serverURL: String
+    ) throws -> any AuthenticationProvider {
+        
+        logger.info("Creating authentication provider for type: \(authType) with server URL: \(serverURL)")
+        
+        guard let scheme = AuthenticationScheme(rawValue: authType) else {
+            logger.error("Unsupported authentication type: \(authType)")
+            throw AuthenticationError.unsupportedAuthScheme(authType)
+        }
+        
+        // For OAuth providers, automatically add the resource parameter as required by RFC 8707
+        var processedConfig = config
+        if scheme == .oauth {
+            processedConfig = try addResourceURLsToOAuthConfig(config: config, serverURL: serverURL)
+        }
+        
+        return try createAuthProvider(scheme: scheme, config: processedConfig)
+    }
+    
     /// Creates an authentication provider based on the scheme enum
     /// - Parameters:
     ///   - scheme: Authentication scheme enum
@@ -188,6 +217,44 @@ public struct AuthenticationFactory {
         
         logger.debug("No authentication configuration found in environment for server: \(serverName)")
         return nil
+    }
+    
+    /// Adds resource URLs to OAuth configuration automatically
+    /// - Parameters:
+    ///   - config: Original OAuth configuration
+    ///   - serverURL: Server URL to use for resource URL generation
+    /// - Returns: Updated configuration with resource URLs added
+    /// - Throws: AuthenticationError if server URL is invalid
+    private static func addResourceURLsToOAuthConfig(config: JSON, serverURL: String) throws -> JSON {
+        guard let serverURLObject = URL(string: serverURL) else {
+            throw AuthenticationError.authenticationFailed("Invalid server URL: \(serverURL)")
+        }
+        
+        // Extract canonical resource URI from server URL
+        var uriString = serverURLObject.absoluteString
+        // Remove trailing slash if present (unless it's the root path)
+        if uriString.hasSuffix("/") && uriString != serverURLObject.scheme! + "://" + serverURLObject.host! + "/" {
+            uriString = String(uriString.dropLast())
+        }
+        let canonicalResourceURI = uriString
+        
+        // Add resource URI and resource server URL to auth config if not already present
+        if case .object(var configDict) = config {
+            if configDict["resourceURI"] == nil {
+                configDict["resourceURI"] = .string(canonicalResourceURI)
+                logger.info("Added resource parameter: \(canonicalResourceURI)")
+            }
+            
+            // Add resourceServerURL for direct OAuth configurations
+            if configDict["resourceServerURL"] == nil {
+                configDict["resourceServerURL"] = .string(uriString)
+                logger.info("Added resourceServerURL: \(uriString)")
+            }
+            
+            return .object(configDict)
+        }
+        
+        return config
     }
     
     // MARK: - Private Factory Methods
