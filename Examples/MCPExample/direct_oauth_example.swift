@@ -20,6 +20,7 @@ func directOAuthExample() async throws {
     // Example 1: Direct OAuth configuration with user-provided credentials
     // This configuration will now respect the user's clientId and clientSecret
     // instead of falling back to the hardcoded 'swiftagentkit-mcp-client'
+    // Note: resourceServerURL is automatically added from the server URL
     let directOAuthConfig = MCPConfig.RemoteServerConfig(
         name: "github-copilot",
         url: "https://api.githubcopilot.com/mcp/",
@@ -29,6 +30,7 @@ func directOAuthExample() async throws {
             "clientSecret": .string("5e8d1e60bf4d9cc996706b314045d7032c5675f1"),
             "scope": .string("mcp"),
             "redirectURI": .string("http://localhost:8080/oauth/callback")
+            // Note: resourceServerURL is automatically added by SwiftAgentKit
         ]),
         clientID: "Ov23liq1k8JLpjhION2Z"
     )
@@ -55,7 +57,8 @@ func directOAuthExample() async throws {
     logger.info("  2. Use the user-provided clientId: 'Ov23liq1k8JLpjhION2Z'")
     logger.info("  3. Use the user-provided clientSecret")
     logger.info("  4. Automatically add resourceServerURL from the server URL")
-    logger.info("  5. NOT fall back to hardcoded 'swiftagentkit-mcp-client'")
+    logger.info("  5. Automatically add resourceURI for RFC 8707 compliance")
+    logger.info("  6. NOT fall back to hardcoded 'swiftagentkit-mcp-client'")
     
     // Example 4: Show the difference from OAuth Discovery
     logger.info("=== Comparison with OAuth Discovery ===")

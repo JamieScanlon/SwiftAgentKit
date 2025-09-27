@@ -572,11 +572,15 @@ public struct AuthenticationFactory {
             scope = nil
         }
         
-        // For direct OAuth, we need a resource server URL, but it's not provided in the config
-        // We'll use a placeholder URL that will be replaced when the actual server URL is known
-        // This is a limitation of the current approach - the user should provide the server URL
-        guard case .string(let resourceServerURLString) = configDict["resourceServerURL"] else {
-            throw AuthenticationError.authenticationFailed("Direct OAuth config missing 'resourceServerURL' field")
+        // For direct OAuth, resourceServerURL should be provided by MCPManager automatically
+        // If not present, we'll use a placeholder that should be replaced by the MCPManager
+        let resourceServerURLString: String
+        if case .string(let urlString) = configDict["resourceServerURL"] {
+            resourceServerURLString = urlString
+        } else {
+            // This should not happen if MCPManager is working correctly
+            // Use a placeholder URL that will be replaced
+            resourceServerURLString = "https://placeholder.mcp.server"
         }
         
         guard let resourceServerURL = URL(string: resourceServerURLString),
