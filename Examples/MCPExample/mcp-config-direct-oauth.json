@@ -1,0 +1,36 @@
+{
+  "mcpServers": {
+    "local-server": {
+      "command": "python",
+      "args": ["-m", "mcp_server"],
+      "env": {}
+    }
+  },
+  "remoteServers": {
+    "github-copilot": {
+      "url": "https://api.githubcopilot.com/mcp/",
+      "clientID": "Ov23liq1k8JLpjhION2Z",
+      "authType": "OAuth",
+      "authConfig": {
+        "clientId": "Ov23liq1k8JLpjhION2Z",
+        "clientSecret": "5e8d1e60bf4d9cc996706b314045d7032c5675f1",
+        "scope": "mcp",
+        "redirectURI": "http://localhost:8080/oauth/callback"
+      }
+    },
+    "example-direct-oauth": {
+      "url": "https://mcp.example.com",
+      "clientID": "my-custom-client-id",
+      "authType": "OAuth",
+      "authConfig": {
+        "clientId": "my-custom-client-id",
+        "clientSecret": "my-custom-client-secret",
+        "scope": "mcp read write",
+        "redirectURI": "http://localhost:8080/oauth/callback"
+      }
+    }
+  },
+  "globalEnv": {
+    "MCP_LOG_LEVEL": "info"
+  }
+}

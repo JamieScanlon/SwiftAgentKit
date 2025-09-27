@@ -68,6 +68,8 @@ public struct AuthenticationFactory {
                 return try createPKCEOAuthProvider(config: config)
             } else if isOAuthDiscoveryConfig(config: config) {
                 return try createOAuthDiscoveryProvider(config: config)
+            } else if isDirectOAuthConfig(config: config) {
+                return try createDirectOAuthProvider(config: config)
             } else {
                 return try createOAuthProvider(config: config)
             }
@@ -358,6 +360,24 @@ public struct AuthenticationFactory {
                configDict["useOAuthDiscovery"] != nil
     }
     
+    private static func isDirectOAuthConfig(config: JSON) -> Bool {
+        guard case .object(let configDict) = config else {
+            return false
+        }
+        
+        // Check if this is a direct OAuth configuration with clientId and clientSecret
+        // but without accessToken (which would indicate a pre-existing token)
+        // and without issuerURL (which would indicate PKCE OAuth)
+        // and without useOAuthDiscovery flag (which would indicate OAuth Discovery)
+        return configDict["clientId"] != nil && 
+               configDict["clientSecret"] != nil &&
+               configDict["redirectURI"] != nil &&
+               configDict["accessToken"] == nil &&
+               configDict["issuerURL"] == nil &&
+               configDict["useOAuthDiscovery"] == nil &&
+               configDict["useDynamicClientRegistration"] == nil
+    }
+    
     private static func createPKCEOAuthProvider(config: JSON) throws -> PKCEOAuthAuthProvider {
         guard case .object(let configDict) = config else {
             throw AuthenticationError.authenticationFailed("PKCE OAuth config must be an object")
@@ -507,6 +527,81 @@ public struct AuthenticationFactory {
             preConfiguredAuthServerURL = nil
         }
         
+        return try OAuthDiscoveryAuthProvider(
+            resourceServerURL: resourceServerURL,
+            clientId: clientId,
+            clientSecret: clientSecret,
+            scope: scope,
+            redirectURI: redirectURI,
+            resourceType: resourceType,
+            preConfiguredAuthServerURL: preConfiguredAuthServerURL
+        )
+    }
+    
+    private static func createDirectOAuthProvider(config: JSON) throws -> OAuthDiscoveryAuthProvider {
+        guard case .object(let configDict) = config else {
+            throw AuthenticationError.authenticationFailed("Direct OAuth config must be an object")
+        }
+        
+        // Required fields
+        guard case .string(let clientId) = configDict["clientId"], !clientId.isEmpty else {
+            throw AuthenticationError.authenticationFailed("Direct OAuth config missing 'clientId' field")
+        }
+        
+        guard case .string(let redirectURIString) = configDict["redirectURI"] else {
+            throw AuthenticationError.authenticationFailed("Direct OAuth config missing 'redirectURI' field")
+        }
+        
+        guard let redirectURI = URL(string: redirectURIString),
+              redirectURI.scheme != nil else {
+            throw AuthenticationError.authenticationFailed("Invalid redirect URI: \(redirectURIString)")
+        }
+        
+        // Optional fields
+        let clientSecret: String?
+        if case .string(let secret) = configDict["clientSecret"] {
+            clientSecret = secret
+        } else {
+            clientSecret = nil
+        }
+        
+        let scope: String?
+        if case .string(let scopeValue) = configDict["scope"] {
+            scope = scopeValue
+        } else {
+            scope = nil
+        }
+        
+        // For direct OAuth, we need a resource server URL, but it's not provided in the config
+        // We'll use a placeholder URL that will be replaced when the actual server URL is known
+        // This is a limitation of the current approach - the user should provide the server URL
+        guard case .string(let resourceServerURLString) = configDict["resourceServerURL"] else {
+            throw AuthenticationError.authenticationFailed("Direct OAuth config missing 'resourceServerURL' field")
+        }
+        
+        guard let resourceServerURL = URL(string: resourceServerURLString),
+              resourceServerURL.scheme != nil,
+              resourceServerURL.host != nil else {
+            throw AuthenticationError.authenticationFailed("Invalid resource server URL: \(resourceServerURLString)")
+        }
+        
+        let resourceType: String?
+        if case .string(let type) = configDict["resourceType"] {
+            resourceType = type
+        } else {
+            resourceType = "mcp"
+        }
+        
+        let preConfiguredAuthServerURL: URL?
+        if case .string(let authServerURLString) = configDict["preConfiguredAuthServerURL"],
+           let authServerURL = URL(string: authServerURLString) {
+            preConfiguredAuthServerURL = authServerURL
+        } else {
+            preConfiguredAuthServerURL = nil
+        }
+        
+        // Use OAuthDiscoveryAuthProvider but with the user's credentials
+        // This will respect the user's clientId and clientSecret instead of using hardcoded values
         return try OAuthDiscoveryAuthProvider(
             resourceServerURL: resourceServerURL,
             clientId: clientId,

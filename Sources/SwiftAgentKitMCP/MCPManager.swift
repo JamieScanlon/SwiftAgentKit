@@ -203,13 +203,20 @@ public actor MCPManager {
                 }
                 let canonicalResourceURI = uriString
                 
-                // Add resource URI to auth config if not already present
+                // Add resource URI and resource server URL to auth config if not already present
                 if case .object(var configDict) = authConfig {
                     if configDict["resourceURI"] == nil {
                         configDict["resourceURI"] = .string(canonicalResourceURI)
-                        authConfig = .object(configDict)
                         logger.info("Added resource parameter for MCP server '\(remoteConfig.name)': \(canonicalResourceURI)")
                     }
+                    
+                    // Add resourceServerURL for direct OAuth configurations
+                    if configDict["resourceServerURL"] == nil {
+                        configDict["resourceServerURL"] = .string(uriString)
+                        logger.info("Added resourceServerURL for MCP server '\(remoteConfig.name)': \(uriString)")
+                    }
+                    
+                    authConfig = .object(configDict)
                 }
             }
         }
