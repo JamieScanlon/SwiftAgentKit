@@ -306,6 +306,139 @@ struct RemoteTransportSimpleTests {
         
         // Should complete without errors
     }
+    
+    // MARK: - SSE Response Handling Tests
+    
+    @Test("Should extract JSON from SSE data field")
+    func testSSEJSONExtraction() async throws {
+        let serverURL = URL(string: "https://api.example.com/mcp")!
+        let transport = RemoteTransport(serverURL: serverURL)
+        
+        // Test basic SSE format
+        let sseMessage = """
+        event: message
+        data: {"jsonrpc": "2.0", "result": "test", "id": 1}
+        
+        """
+        
+        let extractedData = transport.extractJSONFromSSE(sseMessage)
+        #expect(extractedData != nil)
+        
+        let jsonString = String(data: extractedData!, encoding: .utf8)!
+        #expect(jsonString.contains("\"jsonrpc\": \"2.0\""))
+        #expect(jsonString.contains("\"result\": \"test\""))
+    }
+    
+    @Test("Should handle SSE without event field")
+    func testSSEWithoutEvent() async throws {
+        let serverURL = URL(string: "https://api.example.com/mcp")!
+        let transport = RemoteTransport(serverURL: serverURL)
+        
+        // Test SSE with only data field
+        let sseMessage = """
+        data: {"jsonrpc": "2.0", "method": "test", "id": 2}
+        
+        """
+        
+        let extractedData = transport.extractJSONFromSSE(sseMessage)
+        #expect(extractedData != nil)
+        
+        let jsonString = String(data: extractedData!, encoding: .utf8)!
+        #expect(jsonString.contains("\"method\": \"test\""))
+    }
+    
+    @Test("Should handle multiple data fields in SSE")
+    func testSSEMultipleDataFields() async throws {
+        let serverURL = URL(string: "https://api.example.com/mcp")!
+        let transport = RemoteTransport(serverURL: serverURL)
+        
+        // Test SSE with multiple data fields
+        let sseMessage = """
+        data: {"jsonrpc": "2.0"
+        data: , "error": {"code": -1, "message": "test error"}
+        data: , "id": 3}
+        
+        """
+        
+        let extractedData = transport.extractJSONFromSSE(sseMessage)
+        #expect(extractedData != nil)
+        
+        let jsonString = String(data: extractedData!, encoding: .utf8)!
+        #expect(jsonString.contains("\"jsonrpc\": \"2.0\""))
+        #expect(jsonString.contains("\"error\""))
+    }
+    
+    @Test("Should handle SSE with no space after data colon")
+    func testSSENoSpaceAfterColon() async throws {
+        let serverURL = URL(string: "https://api.example.com/mcp")!
+        let transport = RemoteTransport(serverURL: serverURL)
+        
+        // Test SSE without space after colon
+        let sseMessage = """
+        data:{"jsonrpc": "2.0", "result": "no-space", "id": 4}
+        
+        """
+        
+        let extractedData = transport.extractJSONFromSSE(sseMessage)
+        #expect(extractedData != nil)
+        
+        let jsonString = String(data: extractedData!, encoding: .utf8)!
+        #expect(jsonString.contains("\"result\": \"no-space\""))
+    }
+    
+    @Test("Should handle empty data fields in SSE")
+    func testSSEEmptyDataFields() async throws {
+        let serverURL = URL(string: "https://api.example.com/mcp")!
+        let transport = RemoteTransport(serverURL: serverURL)
+        
+        // Test SSE with empty data field (used as separator)
+        let sseMessage = """
+        data: {"jsonrpc": "2.0", "result": "test", "id": 5}
+        data:
+        data: {"jsonrpc": "2.0", "result": "another", "id": 6}
+        
+        """
+        
+        let extractedData = transport.extractJSONFromSSE(sseMessage)
+        #expect(extractedData != nil)
+        
+        let jsonString = String(data: extractedData!, encoding: .utf8)!
+        #expect(jsonString.contains("\"result\": \"test\""))
+        #expect(jsonString.contains("\"result\": \"another\""))
+    }
+    
+    @Test("Should handle fallback for plain JSON")
+    func testSSEFallbackToPlainJSON() async throws {
+        let serverURL = URL(string: "https://api.example.com/mcp")!
+        let transport = RemoteTransport(serverURL: serverURL)
+        
+        // Test fallback for plain JSON without SSE format
+        let plainJSON = """
+        {"jsonrpc": "2.0", "result": "plain-json", "id": 7}
+        """
+        
+        let extractedData = transport.extractJSONFromSSE(plainJSON)
+        #expect(extractedData != nil)
+        
+        let jsonString = String(data: extractedData!, encoding: .utf8)!
+        #expect(jsonString.contains("\"result\": \"plain-json\""))
+    }
+    
+    @Test("Should return nil for invalid SSE")
+    func testInvalidSSE() async throws {
+        let serverURL = URL(string: "https://api.example.com/mcp")!
+        let transport = RemoteTransport(serverURL: serverURL)
+        
+        // Test invalid SSE format
+        let invalidSSE = """
+        event: test
+        some-other-field: value
+        
+        """
+        
+        let extractedData = transport.extractJSONFromSSE(invalidSSE)
+        #expect(extractedData == nil)
+    }
 }
 
 // MARK: - Test Helper Classes

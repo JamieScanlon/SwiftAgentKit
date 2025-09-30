@@ -49,7 +49,7 @@ struct OAuthDiscoveryFlowTests {
         // Test various case combinations that real servers might return
         let testCases = [
             "WWW-Authenticate",
-            "Www-Authenticate", // Zapier format
+            "Www-Authenticate",
             "www-authenticate",
             "WWW-authenticate",
             "www-Authenticate"

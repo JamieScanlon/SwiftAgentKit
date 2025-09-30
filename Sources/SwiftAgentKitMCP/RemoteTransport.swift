@@ -183,13 +183,30 @@ public actor RemoteTransport: Transport {
         if let responseData = response.data, !responseData.isEmpty {
             logger.debug("Received \(responseData.count) bytes response")
             
+            // Check if this is a Server-Sent Events (SSE) response
+            var processedData = responseData
+            if let httpResponse = response.response as? HTTPURLResponse,
+               let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type"),
+               contentType.contains("text/event-stream") {
+                
+                logger.debug("Detected SSE response, attempting to unwrap JSON")
+                
+                if let responseString = String(data: responseData, encoding: .utf8),
+                   let unwrappedJSONData = extractJSONFromSSE(responseString) {
+                    processedData = unwrappedJSONData
+                    logger.debug("Successfully unwrapped JSON from SSE response")
+                } else {
+                    logger.warning("Failed to extract JSON from SSE response, using raw data")
+                }
+            }
+            
             // Validate that it's a proper JSON-RPC response
-            if isValidJSONRPCMessage(responseData) {
-                messageContinuation?.yield(responseData)
+            if isValidJSONRPCMessage(processedData) {
+                messageContinuation?.yield(processedData)
             } else {
                 logger.warning("Received non-JSON-RPC response from server")
                 // Still yield it in case it's a valid response in a different format
-                messageContinuation?.yield(responseData)
+                messageContinuation?.yield(processedData)
             }
         }
     }
@@ -423,15 +440,39 @@ public actor RemoteTransport: Transport {
     /// Extracts JSON data from Server-Sent Events format
     /// - Parameter sseMessage: The SSE message string
     /// - Returns: The JSON data if found, nil otherwise
-    private nonisolated func extractJSONFromSSE(_ sseMessage: String) -> Data? {
+    nonisolated func extractJSONFromSSE(_ sseMessage: String) -> Data? {
         let lines = sseMessage.components(separatedBy: .newlines)
+        var jsonStrings: [String] = []
         
+        // Process each line to extract data fields
         for line in lines {
             let trimmedLine = line.trimmingCharacters(in: .whitespaces)
-            if trimmedLine.hasPrefix("data: ") {
-                let jsonString = String(trimmedLine.dropFirst(6)) // Remove "data: " prefix
-                return jsonString.data(using: .utf8)
+            
+            // Handle different SSE data formats:
+            // - "data: json_content"
+            // - "data:json_content" (no space)
+            // - "data: " followed by JSON
+            if trimmedLine.hasPrefix("data:") {
+                let dataContent = String(trimmedLine.dropFirst(5)) // Remove "data:" prefix
+                let trimmedData = dataContent.trimmingCharacters(in: .whitespaces)
+                
+                // Skip empty data fields (used as separators in SSE)
+                if !trimmedData.isEmpty {
+                    jsonStrings.append(trimmedData)
+                }
             }
+        }
+        
+        // If we found data fields, join them (SSE allows multiple data fields per event)
+        if !jsonStrings.isEmpty {
+            let combinedJSON = jsonStrings.joined(separator: "\n")
+            return combinedJSON.data(using: .utf8)
+        }
+        
+        // If no data fields found, check if the entire message is JSON (fallback)
+        let trimmedMessage = sseMessage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedMessage.isEmpty && (trimmedMessage.hasPrefix("{") || trimmedMessage.hasPrefix("[")) {
+            return trimmedMessage.data(using: .utf8)
         }
         
         return nil

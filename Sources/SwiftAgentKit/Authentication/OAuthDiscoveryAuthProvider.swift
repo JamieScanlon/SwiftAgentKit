@@ -322,7 +322,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // First check for exact combined scopes (highest priority)
         let exactCombinedScopes = [
             "mcp",                    // Generic MCP scope
-            "profile email",          // Combined scope for Zapier
+            "profile email",          // Combined scope
             "openid profile email",   // Full OpenID Connect scope
         ]
         
