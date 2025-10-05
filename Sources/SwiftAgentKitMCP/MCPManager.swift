@@ -240,7 +240,7 @@ extension Tool {
         }
         returnValue["function"] = [
             "name": name,
-            "description": description,
+            "description": description ?? "",
             "parameters": [
                 "type": "object",
                 "properties": properties,

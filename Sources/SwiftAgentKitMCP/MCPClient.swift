@@ -486,6 +486,6 @@ extension ToolDefinition {
                 }
             }
         }
-        self.init(name: tool.name, description: tool.description, parameters: parameters, type: .mcpTool)
+        self.init(name: tool.name, description: tool.description ?? "", parameters: parameters, type: .mcpTool)
     }
 }
