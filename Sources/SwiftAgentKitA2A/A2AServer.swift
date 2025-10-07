@@ -7,6 +7,7 @@
 
 import Foundation
 import Vapor
+import EasyJSON
 
 // Alias protocol-defined types for convenience
 typealias AgentCapabilities = AgentCard.AgentCapabilities
@@ -134,10 +135,18 @@ public actor A2AServer {
         guard isAuthorized(req) else {
             return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
         }
-        let params = try req.content.decode(MessageSendParams.self)
+        
+        // Decode JSON-RPC request envelope to capture request id and params
+        let rpcRequest: JSONRPCRequest<MessageSendParams>
+        do {
+            rpcRequest = try req.content.decode(JSONRPCRequest<MessageSendParams>.self)
+        } catch {
+            return jsonRPCErrorResponse(code: ErrorCode.invalidParams.rawValue, message: "Could not decode JSON-RPC request: \(error)", status: .badRequest)
+        }
+        let params = rpcRequest.params
+        let requestId = rpcRequest.id
         
         // Create initial task
-        
         let taskId = UUID().uuidString
         let contextId = UUID().uuidString
         
@@ -155,10 +164,21 @@ public actor A2AServer {
         
         try await adapter.handleSend(params, task: task, store: taskStore)
         
-        let updatedTask = await taskStore.getTask(id: taskId)
-        let data = try encoder.encode(updatedTask)
+        guard let updatedTask = await taskStore.getTask(id: taskId) else {
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after processing", status: .internalServerError)
+        }
+        
+        // Wrap response in JSON-RPC envelope
+        let rpcResponse = [
+            "jsonrpc": "2.0",
+            "id": requestId,
+            "result": updatedTask
+        ] as [String : Any]
+        
+        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
         let response = Response(status: .ok)
         response.body = .init(data: data)
+        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
         return response
     }
     
@@ -272,10 +292,20 @@ public actor A2AServer {
         guard isAuthorized(req) else {
             return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
         }
-        let taskRequest = try req.content.decode(TaskQueryParams.self)
+        
+        // Decode JSON-RPC request envelope
+        let rpcRequest: JSONRPCRequest<TaskQueryParams>
+        do {
+            rpcRequest = try req.content.decode(JSONRPCRequest<TaskQueryParams>.self)
+        } catch {
+            return jsonRPCErrorResponse(code: ErrorCode.invalidParams.rawValue, message: "Could not decode JSON-RPC request: \(error)", status: .badRequest)
+        }
+        let taskRequest = rpcRequest.params
+        let requestId = rpcRequest.id
+        
         let taskId = taskRequest.taskId
         guard var task = await self.taskStore.getTask(id: taskId) else {
-            return jsonRPCErrorResponse(code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
         }
         
         let historyLength = taskRequest.historyLength ?? -1
@@ -286,9 +316,17 @@ public actor A2AServer {
             task.history = hist.suffix(historyLength)
         }
         
+        // Wrap response in JSON-RPC envelope
+        let rpcResponse = [
+            "jsonrpc": "2.0",
+            "id": requestId,
+            "result": task
+        ] as [String : Any]
+        
+        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
         let response = Response(status: .ok)
-        let data = try! encoder.encode(task)
         response.body = .init(data: data)
+        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
         return response
     }
     
@@ -296,11 +334,20 @@ public actor A2AServer {
         guard isAuthorized(req) else {
             return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
         }
-        let taskRequest = try req.content.decode(TaskIdParams.self)
+        
+        // Decode JSON-RPC request envelope
+        let rpcRequest: JSONRPCRequest<TaskIdParams>
+        do {
+            rpcRequest = try req.content.decode(JSONRPCRequest<TaskIdParams>.self)
+        } catch {
+            return jsonRPCErrorResponse(code: ErrorCode.invalidParams.rawValue, message: "Could not decode JSON-RPC request: \(error)", status: .badRequest)
+        }
+        let taskRequest = rpcRequest.params
+        let requestId = rpcRequest.id
         let taskId = taskRequest.taskId
         
         guard let task = await self.taskStore.getTask(id: taskId) else {
-            return jsonRPCErrorResponse(code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
         }
         
         if task.status.state != .completed && task.status.state != .failed && task.status.state != .canceled {
@@ -310,24 +357,59 @@ public actor A2AServer {
         }
         
         guard let updatedTask = await self.taskStore.getTask(id: taskId) else {
-            return jsonRPCErrorResponse(code: ErrorCode.taskNotFound.rawValue, message: "Task not found after update", status: .notFound)
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after update", status: .notFound)
         }
         
+        // Wrap response in JSON-RPC envelope
+        let rpcResponse = [
+            "jsonrpc": "2.0",
+            "id": requestId,
+            "result": updatedTask
+        ] as [String : Any]
+        
+        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
         let response = Response(status: .ok)
-        let data = try! encoder.encode(updatedTask)
         response.body = .init(data: data)
+        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
         return response
     }
     
     private func handlePushConfigSet(_ req: Request) async throws -> Response {
-        let config = try req.content.decode(TaskPushNotificationConfig.self)
+        // Decode JSON-RPC request envelope
+        let rpcRequest: JSONRPCRequest<TaskPushNotificationConfig>
+        do {
+            rpcRequest = try req.content.decode(JSONRPCRequest<TaskPushNotificationConfig>.self)
+        } catch {
+            return jsonRPCErrorResponse(code: ErrorCode.invalidParams.rawValue, message: "Could not decode JSON-RPC request: \(error)", status: .badRequest)
+        }
+        let config = rpcRequest.params
+        let requestId = rpcRequest.id
+        
+        // Wrap response in JSON-RPC envelope
+        let rpcResponse = [
+            "jsonrpc": "2.0",
+            "id": requestId,
+            "result": config
+        ] as [String : Any]
+        
+        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
         let response = Response(status: .ok)
-        response.body = try .init(data: encoder.encode(config))
+        response.body = .init(data: data)
+        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
         return response
     }
     
     private func handlePushConfigGet(_ req: Request) async throws -> Response {
-        let taskIdParams = try req.content.decode(TaskIdParams.self)
+        // Decode JSON-RPC request envelope
+        let rpcRequest: JSONRPCRequest<TaskIdParams>
+        do {
+            rpcRequest = try req.content.decode(JSONRPCRequest<TaskIdParams>.self)
+        } catch {
+            return jsonRPCErrorResponse(code: ErrorCode.invalidParams.rawValue, message: "Could not decode JSON-RPC request: \(error)", status: .badRequest)
+        }
+        let taskIdParams = rpcRequest.params
+        let requestId = rpcRequest.id
+        
         let dummy = TaskPushNotificationConfig(
             taskId: taskIdParams.taskId,
             pushNotificationConfig: PushNotificationConfig(
@@ -337,8 +419,18 @@ public actor A2AServer {
                 authentication: nil
             )
         )
+        
+        // Wrap response in JSON-RPC envelope
+        let rpcResponse = [
+            "jsonrpc": "2.0",
+            "id": requestId,
+            "result": dummy
+        ] as [String : Any]
+        
+        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
         let response = Response(status: .ok)
-        response.body = try .init(data: encoder.encode(dummy))
+        response.body = .init(data: data)
+        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
         return response
     }
     
@@ -346,8 +438,31 @@ public actor A2AServer {
         guard isAuthorized(req) else {
             return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
         }
+        
+        // Decode JSON-RPC request envelope (params are optional for this endpoint)
+        // Per A2A spec 7.10, this endpoint can have optional AuthenticatedExtendedCardParams
+        let requestId: Int
+        do {
+            // Try to decode as JSON-RPC request with optional params
+            if let rpcRequest = try? req.content.decode(JSONRPCRequest<JSON>.self) {
+                requestId = rpcRequest.id
+            } else {
+                // If it fails, default to id 1 (shouldn't happen with proper clients)
+                requestId = 1
+            }
+        }
+        
+        // Wrap response in JSON-RPC envelope
+        let rpcResponse = [
+            "jsonrpc": "2.0",
+            "id": requestId,
+            "result": agentCard
+        ] as [String : Any]
+        
+        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
         let response = Response(status: .ok)
-        response.body = try .init(data: encoder.encode(agentCard))
+        response.body = .init(data: data)
+        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
         return response
     }
     
@@ -362,7 +477,7 @@ public actor A2AServer {
         let taskIdParams = rpcRequest.params
         let requestId = rpcRequest.id
         guard let task = await self.taskStore.getTask(id: taskIdParams.taskId) else {
-            return jsonRPCErrorResponse(code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
         }
         
         let now = ISO8601DateFormatter().string(from: Date())

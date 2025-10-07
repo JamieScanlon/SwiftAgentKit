@@ -89,20 +89,27 @@ struct BearerTokenAuthProviderTests {
     @Test("Token refresh should be called when token is expired")
     func testTokenRefreshOnExpiredToken() async throws {
         let pastDate = Date().addingTimeInterval(-3600) // 1 hour ago
-        var refreshCalled = false
         let newToken = "refreshed-token"
+        
+        // Use an actor to safely track state
+        actor RefreshTracker {
+            var called = false
+            func markCalled() { called = true }
+        }
+        let tracker = RefreshTracker()
         
         let provider = BearerTokenAuthProvider(
             token: "old-token",
             expiresAt: pastDate,
-            refreshHandler: {
-                refreshCalled = true
+            refreshHandler: { @Sendable in
+                await tracker.markCalled()
                 return newToken
             }
         )
         
         let headers = try await provider.authenticationHeaders()
         
+        let refreshCalled = await tracker.called
         #expect(refreshCalled == true)
         #expect(headers["Authorization"] == "Bearer \(newToken)")
     }
@@ -142,13 +149,19 @@ struct BearerTokenAuthProviderTests {
     
     @Test("Handle authentication challenge should refresh token")
     func testHandleAuthenticationChallengeRefreshToken() async throws {
-        var refreshCalled = false
         let newToken = "challenge-refreshed-token"
+        
+        // Use an actor to safely track state
+        actor RefreshTracker {
+            var called = false
+            func markCalled() { called = true }
+        }
+        let tracker = RefreshTracker()
         
         let provider = BearerTokenAuthProvider(
             token: "old-token",
-            refreshHandler: {
-                refreshCalled = true
+            refreshHandler: { @Sendable in
+                await tracker.markCalled()
                 return newToken
             }
         )
@@ -162,6 +175,7 @@ struct BearerTokenAuthProviderTests {
         
         let headers = try await provider.handleAuthenticationChallenge(challenge)
         
+        let refreshCalled = await tracker.called
         #expect(refreshCalled == true)
         #expect(headers["Authorization"] == "Bearer \(newToken)")
     }
@@ -230,16 +244,25 @@ struct BearerTokenAuthProviderTests {
     @Test("Concurrent refresh calls should work correctly")
     func testConcurrentRefreshCalls() async throws {
         let pastDate = Date().addingTimeInterval(-3600) // 1 hour ago
-        var refreshCallCount = 0
+        
+        // Use an actor to safely track state
+        actor RefreshCounter {
+            var count = 0
+            func increment() -> Int {
+                count += 1
+                return count
+            }
+        }
+        let counter = RefreshCounter()
         
         let provider = BearerTokenAuthProvider(
             token: "old-token",
             expiresAt: pastDate,
-            refreshHandler: {
-                refreshCallCount += 1
+            refreshHandler: { @Sendable in
+                let callNumber = await counter.increment()
                 // Simulate some async work
                 try await Task.sleep(nanoseconds: 10_000_000) // 10ms
-                return "refreshed-token-\(refreshCallCount)"
+                return "refreshed-token-\(callNumber)"
             }
         )
         
@@ -265,6 +288,7 @@ struct BearerTokenAuthProviderTests {
             }
             
             // Refresh should have been called (due to expired token)
+            let refreshCallCount = await counter.count
             #expect(refreshCallCount > 0)
         }
     }

@@ -107,14 +107,21 @@ struct MockLLM: LLMProtocol {
         
         // Get the message stream
         let messageStream = await orchestrator.messageStream
-        var finalConversation: [Message]?
+        
+        // Use an actor to safely track messages
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) {
+                messages.append(message)
+            }
+        }
+        let collector = MessageCollector()
         
         // Start listening to the stream
         _ = Task {
             for await message in messageStream {
                 #expect(message.role == .assistant)
-                finalConversation = finalConversation ?? []
-                finalConversation?.append(message)
+                await collector.append(message)
             }
         }
         
@@ -124,10 +131,10 @@ struct MockLLM: LLMProtocol {
         // Give a small delay to allow stream listeners to process messages
         try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
         
-        #expect(finalConversation != nil)
-        #expect(finalConversation!.count >= 1) // At least one new message
-        #expect(finalConversation!.last?.role == .assistant)
-        #expect(finalConversation!.last?.content.contains("Mock response") == true)
+        let finalConversation = await collector.messages
+        #expect(finalConversation.count >= 1) // At least one new message
+        #expect(finalConversation.last?.role == .assistant)
+        #expect(finalConversation.last?.content.contains("Mock response") == true)
     }
     
     @Test("updateConversation handles streaming responses")
@@ -142,16 +149,23 @@ struct MockLLM: LLMProtocol {
         
         // Get the message stream
         let messageStream = await orchestrator.messageStream
-        var streamCount = 0
-        var finalConversation: [Message]?
+        
+        // Use an actor to safely track messages
+        actor MessageCollector {
+            var count = 0
+            var messages: [Message] = []
+            func append(_ message: Message) {
+                count += 1
+                messages.append(message)
+            }
+        }
+        let collector = MessageCollector()
         
         // Start listening to the stream
         _ = Task {
             for await message in messageStream {
-                streamCount += 1
                 #expect(message.role == .assistant)
-                finalConversation = finalConversation ?? []
-                finalConversation?.append(message)
+                await collector.append(message)
             }
         }
         
@@ -161,10 +175,11 @@ struct MockLLM: LLMProtocol {
         // Give a small delay to allow stream listeners to process messages
         try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
         
+        let streamCount = await collector.count
+        let finalConversation = await collector.messages
         #expect(streamCount > 0) // Should have received some streaming chunks
-        #expect(finalConversation != nil)
-        #expect(finalConversation!.count >= 1) // At least one new message
-        #expect(finalConversation!.last?.role == .assistant)
+        #expect(finalConversation.count >= 1) // At least one new message
+        #expect(finalConversation.last?.role == .assistant)
     }
     
     @Test("updateConversation preserves original message order")
@@ -180,14 +195,21 @@ struct MockLLM: LLMProtocol {
         
         // Get the message stream
         let messageStream = await orchestrator.messageStream
-        var finalConversation: [Message]?
+        
+        // Use an actor to safely track messages
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) {
+                messages.append(message)
+            }
+        }
+        let collector = MessageCollector()
         
         // Start listening to the stream
         _ = Task {
             for await message in messageStream {
                 #expect(message.role == .assistant)
-                finalConversation = finalConversation ?? []
-                finalConversation?.append(message)
+                await collector.append(message)
             }
         }
         
@@ -197,11 +219,11 @@ struct MockLLM: LLMProtocol {
         // Give a small delay to allow stream listeners to process messages
         try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
         
-        #expect(finalConversation != nil)
-        #expect(finalConversation!.count >= 1) // At least one new message
+        let finalConversation = await collector.messages
+        #expect(finalConversation.count >= 1) // At least one new message
         
         // Check that we received at least one new message
-        #expect(finalConversation!.last?.role == .assistant) // New response
+        #expect(finalConversation.last?.role == .assistant) // New response
     }
     
     @Test("updateConversation handles available tools")
@@ -226,14 +248,21 @@ struct MockLLM: LLMProtocol {
         
         // Get the message stream
         let messageStream = await orchestrator.messageStream
-        var finalConversation: [Message]?
+        
+        // Use an actor to safely track messages
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) {
+                messages.append(message)
+            }
+        }
+        let collector = MessageCollector()
         
         // Start listening to the stream
         _ = Task {
             for await message in messageStream {
                 #expect(message.role == .assistant)
-                finalConversation = finalConversation ?? []
-                finalConversation?.append(message)
+                await collector.append(message)
             }
         }
         
@@ -243,9 +272,9 @@ struct MockLLM: LLMProtocol {
         // Give a small delay to allow stream listeners to process messages
         try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
         
-        #expect(finalConversation != nil)
-        #expect(finalConversation!.count >= 1) // At least one new message
-        #expect(finalConversation!.last?.role == .assistant)
+        let finalConversation = await collector.messages
+        #expect(finalConversation.count >= 1) // At least one new message
+        #expect(finalConversation.last?.role == .assistant)
     }
     
     @Test("availableTools property returns empty array when no managers are configured")

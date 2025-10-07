@@ -130,26 +130,18 @@ func main() async {
         // Get both streams
         let messageStream = await orchestrator.messageStream
         let partialContentStream = await orchestrator.partialContentStream
-        var finalConversation: [Message]?
-        var messageCount = 0
-        var partialCount = 0
-        
         logger.info("Processing conversation...")
         
         // Start listening to streams before processing
         _ = Task {
             for await message in messageStream {
                 logger.info("Received final message: \(message.content)")
-                finalConversation = finalConversation ?? []
-                finalConversation?.append(message)
-                messageCount += 1
             }
         }
         
         _ = Task {
             for await partialContent in partialContentStream {
                 logger.info("Received partial content: \(partialContent)")
-                partialCount += 1
             }
         }
         
@@ -162,13 +154,8 @@ func main() async {
         
         // The method has finished, but streams continue to exist
         logger.info("Conversation processing finished, streams remain active")
-        
-        if let finalConversation = finalConversation {
-            logger.info("Conversation processed successfully!")
-            logger.info("Original messages: \(conversation.count)")
-            logger.info("Updated messages: \(finalConversation.count)")
-            logger.info("Latest response: \(finalConversation.last?.content ?? "No response")")
-        }
+        logger.info("Conversation processed successfully!")
+        logger.info("Original messages: \(conversation.count)")
     }
     
     logger.info("Orchestrator example completed")
