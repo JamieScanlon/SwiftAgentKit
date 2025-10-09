@@ -14,6 +14,7 @@ import Network
 /// Available transport types for MCP server
 public enum TransportType {
     case stdio
+    case chunkedStdio // Use this for local stdio with chunking support to handle large messages
     case httpClient(endpoint: URL, streaming: Bool = true, sseInitializationTimeout: TimeInterval = 10)
     case network(connection: NWConnection)
     
@@ -22,6 +23,8 @@ public enum TransportType {
         switch self {
         case .stdio:
             return MCP.StdioTransport()
+        case .chunkedStdio:
+            return ChunkedStdioTransport()
         case .httpClient(let endpoint, let streaming, let timeout):
             return MCP.HTTPClientTransport(
                 endpoint: endpoint,

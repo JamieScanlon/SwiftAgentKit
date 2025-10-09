@@ -62,6 +62,25 @@ let server = MCPServer(name: "my-tool-server", version: "1.0.0")
 let server = MCPServer(name: "my-tool-server", version: "1.0.0", transportType: .stdio)
 ```
 
+#### Chunked Stdio Transport (Recommended for Large Messages)
+```swift
+// Chunked stdio transport - handles messages larger than 64KB
+// Recommended for servers that may send/receive large data
+let server = MCPServer(
+    name: "my-tool-server",
+    version: "1.0.0",
+    transportType: .chunkedStdio
+)
+```
+
+**When to use chunked stdio:**
+- ✅ Messages may exceed 64KB (macOS pipe buffer limit)
+- ✅ Transferring large tool results or file contents
+- ✅ Working with large datasets
+- ✅ Need transparent handling of large messages
+
+See [MessageChunking.md](../../docs/MessageChunking.md) for detailed documentation.
+
 #### HTTP Client Transport
 ```swift
 // HTTP client transport for connecting to remote MCP servers
@@ -332,7 +351,54 @@ let config = MessageFilter.Configuration(
 
 ## Transport
 
-Currently supports stdio transport for easy integration with MCP clients. The server reads from stdin and writes to stdout, making it compatible with standard MCP client implementations.
+### Stdio Transport
+
+The server supports stdio transport for easy integration with MCP clients. The server reads from stdin and writes to stdout, making it compatible with standard MCP client implementations.
+
+### Message Chunking for Large Data
+
+On macOS, pipe buffers have a 64KB limit. For applications that need to send or receive large messages (> 64KB), SwiftAgentKit provides transparent message chunking:
+
+**Problem:**
+- macOS pipe buffer limit: 64KB
+- Large JSON-RPC messages fail with `EPIPE` or `EAGAIN`
+- Tool responses with large data can't be transmitted
+
+**Solution:**
+- Use `transportType: .chunkedStdio` for the server
+- Client-side `ClientTransport` automatically supports chunking
+- Messages are transparently split into ~60KB frames
+- Frames are reassembled on the receiving end
+
+**How it works:**
+1. Messages > 60KB are automatically chunked
+2. Each chunk has a header: `messageId:chunkIndex:totalChunks:data`
+3. Receiving end reassembles chunks transparently
+4. Application code doesn't need to change
+
+**Example:**
+```swift
+// Server with chunking
+let server = MCPServer(
+    name: "large-data-server",
+    version: "1.0.0",
+    transportType: .chunkedStdio  // Enable chunking
+)
+
+await server.registerTool(toolDefinition: toolDef) { arguments in
+    // Can return data > 64KB without issues
+    let largeData = generateLargeReport()  // e.g., 200KB
+    return .success(largeData)
+}
+
+// Client automatically handles chunking
+let client = MCPClient(name: "client")
+try await client.connect(inPipe: inPipe, outPipe: outPipe)
+let result = try await client.callTool("generate_report")
+// Works seamlessly even with 200KB response!
+```
+
+For complete documentation, see [docs/MessageChunking.md](../../docs/MessageChunking.md).
 
 ## Examples
 

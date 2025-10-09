@@ -13,11 +13,13 @@ import System
 actor ClientTransport: Transport {
     
     nonisolated let logger: Logging.Logger
+    private let chunker: MessageChunker
     
     init(inPipe: Pipe, outPipe: Pipe, logger: Logging.Logger? = nil) {
         self.inPipe = inPipe
         self.outPipe = outPipe
         self.logger = logger ?? Logging.Logger(label: "mcp.transport.stdio")
+        self.chunker = MessageChunker(logger: self.logger)
         
         // Create message stream
         var continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation!
@@ -43,19 +45,23 @@ actor ClientTransport: Transport {
         isConnected = false
         messageContinuation.finish()
         outPipe.fileHandleForReading.readabilityHandler = nil
+        await chunker.clearBuffers()
         logger.info("Transport disconnected")
     }
     
-    /// Sends data
+    /// Sends data, chunking if necessary
     func send(_ data: Data) async throws {
         guard isConnected else {
             throw MCPError.transportError(Errno(rawValue: ENOTCONN))
         }
         
-        // Add newline as delimiter
-        var messageWithNewline = data
-        messageWithNewline.append(UInt8(ascii: "\n"))
-        try inPipe.fileHandleForWriting.write(contentsOf: messageWithNewline)
+        // Chunk the message
+        let frames = await chunker.chunkMessage(data)
+        
+        // Send each frame
+        for frame in frames {
+            try inPipe.fileHandleForWriting.write(contentsOf: frame)
+        }
     }
     
     /// Receives data in an async sequence
@@ -70,45 +76,68 @@ actor ClientTransport: Transport {
     private var isConnected = false
     private let messageStream: AsyncThrowingStream<Data, Swift.Error>
     private let messageContinuation: AsyncThrowingStream<Data, Swift.Error>.Continuation
+    private var buffer = Data() // Buffer for incoming data
     
-    /// Continuous loop that reads and processes incoming messages
+    /// Continuous loop that reads and processes incoming frames
     ///
     /// This method runs in the background while the transport is connected,
-    /// parsing complete messages delimited by newlines and yielding them
-    /// to the message stream. Messages are filtered to remove log output
+    /// reading frames, reassembling chunked messages, and yielding complete
+    /// messages to the stream. Messages are filtered to remove log output
     /// that might interfere with the MCP protocol.
     private func readLoop() async {
         outPipe.fileHandleForReading.readabilityHandler = { pipeHandle in
             let data = pipeHandle.availableData
-            self.logger.debug("Received raw data: \(String(data: data, encoding: .utf8) ?? "")")
+            guard !data.isEmpty else { return }
             
-            // Filter the message to remove log output
-            // Note: We need to handle this synchronously since readabilityHandler is not async
-            let messageString = String(data: data, encoding: .utf8) ?? ""
-            let lines = messageString.components(separatedBy: .newlines)
-            var validMessages: [String] = []
-            
-            for line in lines {
-                let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmedLine.isEmpty else { continue }
-                
-                // Check if this line is a valid JSON-RPC message
-                if self.isValidJSONRPCMessage(trimmedLine) {
-                    validMessages.append(trimmedLine)
-                } else {
-                    self.logger.debug("Filtered: \(trimmedLine)")
-                }
+            // Process the received data in an actor-isolated context
+            Task {
+                await self.processReceivedData(data)
             }
+        }
+    }
+    
+    /// Process received data in an actor-isolated context
+    private func processReceivedData(_ data: Data) async {
+        buffer.append(data)
+        
+        // Process complete frames (delimited by newlines)
+        while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+            let frameData = buffer[..<newlineIndex]
+            buffer.removeSubrange(...newlineIndex)
             
-            // Yield valid messages if any
-            if !validMessages.isEmpty {
-                let filteredMessage = validMessages.joined(separator: "\n") + "\n"
-                if let filteredData = filteredMessage.data(using: .utf8) {
-                    self.logger.debug("Filtered data: \(String(data: filteredData, encoding: .utf8) ?? "")")
-                    self.messageContinuation.yield(filteredData)
+            // Try to process as a frame
+            do {
+                if let completeMessage = try await chunker.processFrame(Data(frameData) + Data([UInt8(ascii: "\n")])) {
+                    // Filter the complete message to remove log output
+                    let messageString = String(data: completeMessage, encoding: .utf8) ?? ""
+                    let lines = messageString.components(separatedBy: .newlines)
+                    var validMessages: [String] = []
+                    
+                    for line in lines {
+                        let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmedLine.isEmpty else { continue }
+                        
+                        // Check if this line is a valid JSON-RPC message
+                        if isValidJSONRPCMessage(trimmedLine) {
+                            validMessages.append(trimmedLine)
+                        } else {
+                            logger.debug("Filtered: \(trimmedLine)")
+                        }
+                    }
+                    
+                    // Yield valid messages if any
+                    if !validMessages.isEmpty {
+                        let filteredMessage = validMessages.joined(separator: "\n") + "\n"
+                        if let filteredData = filteredMessage.data(using: .utf8) {
+                            logger.debug("Yielding complete message: \(String(data: filteredData, encoding: .utf8) ?? "")")
+                            messageContinuation.yield(filteredData)
+                        }
+                    } else {
+                        logger.debug("Message filtered out (likely log output)")
+                    }
                 }
-            } else {
-                self.logger.debug("Message filtered out (likely log output)")
+            } catch {
+                logger.error("Error processing frame: \(error)")
             }
         }
     }
