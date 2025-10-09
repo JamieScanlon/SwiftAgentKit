@@ -100,46 +100,84 @@ actor ClientTransport: Transport {
     private func processReceivedData(_ data: Data) async {
         buffer.append(data)
         
-        // Process complete frames (delimited by newlines)
+        // Process complete lines (delimited by newlines)
         while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-            let frameData = buffer[..<newlineIndex]
+            let lineData = buffer[..<newlineIndex]
             buffer.removeSubrange(...newlineIndex)
             
-            // Try to process as a frame
-            do {
-                if let completeMessage = try await chunker.processFrame(Data(frameData) + Data([UInt8(ascii: "\n")])) {
-                    // Filter the complete message to remove log output
-                    let messageString = String(data: completeMessage, encoding: .utf8) ?? ""
-                    let lines = messageString.components(separatedBy: .newlines)
-                    var validMessages: [String] = []
-                    
-                    for line in lines {
-                        let trimmedLine = line.trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !trimmedLine.isEmpty else { continue }
-                        
-                        // Check if this line is a valid JSON-RPC message
-                        if isValidJSONRPCMessage(trimmedLine) {
-                            validMessages.append(trimmedLine)
-                        } else {
-                            logger.debug("Filtered: \(trimmedLine)")
-                        }
-                    }
-                    
-                    // Yield valid messages if any
-                    if !validMessages.isEmpty {
-                        let filteredMessage = validMessages.joined(separator: "\n") + "\n"
-                        if let filteredData = filteredMessage.data(using: .utf8) {
-                            logger.debug("Yielding complete message: \(String(data: filteredData, encoding: .utf8) ?? "")")
-                            messageContinuation.yield(filteredData)
-                        }
-                    } else {
-                        logger.debug("Message filtered out (likely log output)")
-                    }
+            guard let lineString = String(data: lineData, encoding: .utf8) else {
+                logger.debug("Unable to decode line data")
+                continue
+            }
+            
+            let trimmedLine = lineString.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedLine.isEmpty else { continue }
+            
+            // First check if this is a valid JSON-RPC message (non-chunked)
+            if isValidJSONRPCMessage(trimmedLine) {
+                // This is a complete JSON-RPC message, yield it directly
+                let messageWithNewline = trimmedLine + "\n"
+                if let messageData = messageWithNewline.data(using: .utf8) {
+                    logger.debug("Yielding non-chunked message: \(trimmedLine)")
+                    messageContinuation.yield(messageData)
                 }
-            } catch {
-                logger.error("Error processing frame: \(error)")
+                continue
+            }
+            
+            // Check if this looks like a frame (has the messageId:index:total: format)
+            if isFrameFormat(trimmedLine) {
+                // Try to process as a chunked frame
+                do {
+                    let frameData = Data(lineData) + Data([UInt8(ascii: "\n")])
+                    if let completeMessage = try await chunker.processFrame(frameData) {
+                        // We have a complete reassembled message
+                        // Filter it to ensure it's valid JSON-RPC
+                        let messageString = String(data: completeMessage, encoding: .utf8) ?? ""
+                        let lines = messageString.components(separatedBy: .newlines)
+                        var validMessages: [String] = []
+                        
+                        for line in lines {
+                            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !trimmed.isEmpty else { continue }
+                            
+                            if isValidJSONRPCMessage(trimmed) {
+                                validMessages.append(trimmed)
+                            } else {
+                                logger.debug("Filtered from reassembled message: \(trimmed)")
+                            }
+                        }
+                        
+                        // Yield valid messages if any
+                        if !validMessages.isEmpty {
+                            let filteredMessage = validMessages.joined(separator: "\n") + "\n"
+                            if let filteredData = filteredMessage.data(using: .utf8) {
+                                logger.debug("Yielding reassembled message: \(validMessages.count) line(s)")
+                                messageContinuation.yield(filteredData)
+                            }
+                        }
+                    }
+                    // If nil, we're still waiting for more chunks
+                } catch {
+                    logger.debug("Not a valid frame, likely log output: \(trimmedLine)")
+                }
+            } else {
+                // Not a JSON-RPC message and not a frame format - filter as log output
+                logger.debug("Filtered log message: \(trimmedLine)")
             }
         }
+    }
+    
+    /// Check if a line matches the frame format (messageId:index:total:...)
+    private func isFrameFormat(_ line: String) -> Bool {
+        let components = line.components(separatedBy: ":")
+        // Frame format: messageId:chunkIndex:totalChunks:data
+        // Need at least 4 components, and components 1 and 2 should be numbers
+        guard components.count >= 4,
+              let _ = Int(components[1]),
+              let _ = Int(components[2]) else {
+            return false
+        }
+        return true
     }
     
     /// Validates if a string is a valid JSON-RPC message
