@@ -6,12 +6,13 @@
 //
 
 import Foundation
+import EasyJSON
 
 public struct ToolCall: Sendable {
     public let name: String
-    public let arguments: [String: Sendable]
+    public let arguments: JSON
     public let instructions: String?
-    public init(name: String, arguments: [String: Sendable] = [:], instructions: String? = nil) {
+    public init(name: String, arguments: JSON = .object([:]), instructions: String? = nil) {
         self.name = name
         self.arguments = arguments
         self.instructions = instructions
@@ -480,11 +481,10 @@ public struct ToolCall: Sendable {
         let argsString = String(trimmed[argsStartIndex..<argsEndIndex]).trimmingCharacters(in: .whitespaces)
         
         // Parse arguments
-        var arguments: [String: Sendable] = [:]
+        var arguments: JSON = .object([:])
         
         if !argsString.isEmpty {
-            let args = parseToolCallArgumentsFromString(argsString)
-            arguments = args
+            arguments = parseToolCallArgumentsFromString(argsString)
         }
         
         return ToolCall(name: functionName, arguments: arguments)
@@ -508,27 +508,12 @@ public struct ToolCall: Sendable {
             return nil
         }
         
-        // Convert the arguments to the expected format
-        var toolCallArguments: [String: Sendable] = [:]
-        for (key, value) in argumentsDict {
-            if let stringValue = value as? String {
-                toolCallArguments[key] = stringValue
-            } else if let numberValue = value as? NSNumber {
-                toolCallArguments[key] = numberValue
-            } else if let boolValue = value as? Bool {
-                toolCallArguments[key] = boolValue
-            } else if let arrayValue = value as? [String] {
-                toolCallArguments[key] = arrayValue
-            } else if let dictValue = value as? [String: String] {
-                toolCallArguments[key] = dictValue
-            } else if let intValue = value as? Int {
-                toolCallArguments[key] = intValue
-            } else if let doubleValue = value as? Double {
-                toolCallArguments[key] = doubleValue
-            }
+        // Convert the arguments to JSON
+        guard let arguments = try? JSON(argumentsDict) else {
+            return nil
         }
         
-        return ToolCall(name: name, arguments: toolCallArguments)
+        return ToolCall(name: name, arguments: arguments)
     }
     
     private static func parseToolcallFromJsonString(_ jsonString: String) -> ToolCall? {
@@ -551,33 +536,28 @@ public struct ToolCall: Sendable {
                 return nil
             }
             
-            var arguments: [String: Sendable] = [:]
+            var arguments: JSON = .object([:])
             
             if let parameters = dict["parameters"] as? [String: Any] {
+                // Convert [String: Any] to [String: JSON] manually to handle all types properly
+                var jsonDict: [String: JSON] = [:]
                 for (key, value) in parameters {
-                    // Convert values to appropriate types
-                    if let stringValue = value as? String {
-                        arguments[key] = stringValue
-                    } else if let boolValue = value as? Bool {
-                        arguments[key] = boolValue
+                    if let boolValue = value as? Bool {
+                        jsonDict[key] = .boolean(boolValue)
                     } else if let intValue = value as? Int {
-                        arguments[key] = intValue
+                        jsonDict[key] = .integer(intValue)
                     } else if let doubleValue = value as? Double {
-                        arguments[key] = doubleValue
-                    } else if let nsNumber = value as? NSNumber {
-                        // Handle NSNumber types (including booleans from JSON)
-                        if CFGetTypeID(nsNumber) == CFBooleanGetTypeID() {
-                            arguments[key] = nsNumber.boolValue
-                        } else if CFNumberIsFloatType(nsNumber) {
-                            arguments[key] = nsNumber.doubleValue
-                        } else {
-                            arguments[key] = nsNumber.intValue
-                        }
+                        jsonDict[key] = .double(doubleValue)
+                    } else if let stringValue = value as? String {
+                        jsonDict[key] = .string(stringValue)
                     } else {
-                        // Convert other types to strings
-                        arguments[key] = String(describing: value)
+                        // For other types, try using JSON's initializer
+                        if let json = try? JSON(value) {
+                            jsonDict[key] = json
+                        }
                     }
                 }
+                arguments = .object(jsonDict)
             }
             
             return ToolCall(name: name, arguments: arguments)
@@ -586,8 +566,8 @@ public struct ToolCall: Sendable {
         }
     }
     
-    private static func parseToolCallArgumentsFromString(_ argsString: String) -> [String: Sendable] {
-        var arguments: [String: Sendable] = [:]
+    private static func parseToolCallArgumentsFromString(_ argsString: String) -> JSON {
+        var argumentsDict: [String: JSON] = [:]
         var currentArg = ""
         var currentValue = ""
         var inQuotes = false
@@ -612,7 +592,7 @@ public struct ToolCall: Sendable {
                         // This is a quoted unnamed argument
                         let value = currentValue.trimmingCharacters(in: .whitespaces)
                         if !value.isEmpty {
-                            arguments[String(positionalIndex)] = value
+                            argumentsDict[String(positionalIndex)] = .string(value)
                             positionalIndex += 1
                         }
                         currentValue = ""
@@ -646,13 +626,13 @@ public struct ToolCall: Sendable {
                             // Named argument: key=value
                             let value = currentValue.trimmingCharacters(in: .whitespaces)
                             if !key.isEmpty {
-                                arguments[key] = value
+                                argumentsDict[key] = .string(value)
                             }
                         } else {
                             // Unnamed argument: just value
                             let value = currentArg.trimmingCharacters(in: .whitespaces)
                             if !value.isEmpty {
-                                arguments[String(positionalIndex)] = value
+                                argumentsDict[String(positionalIndex)] = .string(value)
                                 positionalIndex += 1
                             }
                         }
@@ -679,17 +659,17 @@ public struct ToolCall: Sendable {
             // Named argument: key=value
             let value = currentValue.trimmingCharacters(in: .whitespaces)
             if !key.isEmpty {
-                arguments[key] = value
+                argumentsDict[key] = .string(value)
             }
         } else {
             // Unnamed argument: just value
             let value = currentArg.trimmingCharacters(in: .whitespaces)
             if !value.isEmpty {
-                arguments[String(positionalIndex)] = value
+                argumentsDict[String(positionalIndex)] = .string(value)
             }
         }
         
-        return arguments
+        return .object(argumentsDict)
     }
 }
 

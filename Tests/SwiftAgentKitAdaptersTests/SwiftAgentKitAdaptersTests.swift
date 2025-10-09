@@ -490,7 +490,7 @@ import MCP
     @Test("A2AToolProvider should handle tool execution with empty clients")
     func testA2AToolProviderExecuteToolWithEmptyClients() async throws {
         let provider = A2AToolProvider(clients: [])
-        let toolCall = ToolCall(name: "test", arguments: ["input": "test"])
+        let toolCall = ToolCall(name: "test", arguments: try! JSON(["input": "test"]))
         
         let result = try await provider.executeTool(toolCall)
         
@@ -529,7 +529,7 @@ import MCP
     @Test("MCPToolProvider should handle tool execution with empty clients")
     func testMCPToolProviderExecuteToolWithEmptyClients() async throws {
         let provider = MCPToolProvider(clients: [])
-        let toolCall = ToolCall(name: "test", arguments: ["input": "test"])
+        let toolCall = ToolCall(name: "test", arguments: try! JSON(["input": "test"]))
         
         let result = try await provider.executeTool(toolCall)
         
@@ -551,7 +551,7 @@ import MCP
     @Test("ToolManager should execute tool with empty providers")
     func testToolManagerExecuteToolWithEmptyProviders() async throws {
         let manager = ToolManager(providers: [])
-        let toolCall = ToolCall(name: "test", arguments: ["input": "test"])
+        let toolCall = ToolCall(name: "test", arguments: try! JSON(["input": "test"]))
         
         let result = try await manager.executeTool(toolCall)
         

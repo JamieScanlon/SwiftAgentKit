@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import SwiftAgentKit
 import SwiftAgentKitMCP
+import EasyJSON
 
 // Example: New MCP Architecture with MCPServerManager and MCPClient
 func newMCPArchitectureExample() async {
@@ -279,7 +280,7 @@ func mcpManagerWithNewArchitectureExample() async {
         // Demonstrate tool call
         let toolCall = ToolCall(
             name: "example_tool",
-            arguments: ["input": "Hello from new architecture!"],
+            arguments: try! JSON(["input": "Hello from new architecture!"]),
             instructions: "Process this input"
         )
         

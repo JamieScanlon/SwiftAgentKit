@@ -37,7 +37,9 @@ public actor A2AManager {
     
     public func agentCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
         for client in clients {
-            guard let instructions: String = toolCall.arguments["instructions"] as? String else { continue }
+            // Extract instructions from JSON arguments
+            guard case .object(let argsDict) = toolCall.arguments,
+                  case .string(let instructions) = argsDict["instructions"] else { continue }
             let a2aMessage = A2AMessage(role: "user", parts: [.text(text: instructions)], messageId: UUID().uuidString)
             let params: MessageSendParams = .init(message: a2aMessage)
             let contents = try await client.streamMessage(params: params)

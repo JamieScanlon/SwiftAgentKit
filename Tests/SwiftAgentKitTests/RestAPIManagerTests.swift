@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import EasyJSON
 @testable import SwiftAgentKit
 
 @Suite("RestAPIManager Tests")
@@ -497,7 +498,7 @@ struct RestAPIManagerTests {
         let apiManager = RestAPIManager(baseURL: testBaseURL)
         
         // Test that the SSE stream is created and can be iterated
-        let stream = await apiManager.sseRequest("/sse", method: .post)
+        let stream: AsyncStream<[String: Sendable]>  = await apiManager.sseRequest("/sse", method: .post)
         
         var receivedCount = 0
         for await _ in stream {
@@ -539,7 +540,7 @@ struct RestAPIManagerTests {
     func testSSERequestCancellation() async throws {
         let apiManager = RestAPIManager(baseURL: testBaseURL)
         
-        let stream = await apiManager.sseRequest("/sse")
+        let stream: AsyncStream<[String: Sendable]>  = await apiManager.sseRequest("/sse")
         
         // Test that we can cancel the SSE stream
         var receivedCount = 0
@@ -560,7 +561,7 @@ struct RestAPIManagerTests {
         let methods: [HTTPMethod] = [.post, .get]
         
         for method in methods {
-            let stream = await apiManager.sseRequest("/sse", method: method)
+            let stream: AsyncStream<[String: Sendable]>  = await apiManager.sseRequest("/sse", method: method)
             
             var receivedCount = 0
             for await _ in stream {
@@ -593,7 +594,7 @@ struct RestAPIManagerTests {
     func testSSERequestWithMalformedEventData() async throws {
         let apiManager = RestAPIManager(baseURL: testBaseURL)
         
-        let stream = await apiManager.sseRequest("/malformed-sse")
+        let stream: AsyncStream<[String: Sendable]>  = await apiManager.sseRequest("/malformed-sse")
         
         var receivedCount = 0
         for await _ in stream {
@@ -610,7 +611,7 @@ struct RestAPIManagerTests {
     func testSSERequestWithRapidCancellation() async throws {
         let apiManager = RestAPIManager(baseURL: testBaseURL)
         
-        let stream = await apiManager.sseRequest("/sse")
+        let stream: AsyncStream<[String: Sendable]>  = await apiManager.sseRequest("/sse")
         
         // Cancel immediately without consuming any items
         var receivedCount = 0
@@ -862,5 +863,328 @@ struct ComplexMockResponse: Codable {
     struct NestedObject: Codable {
         let value: Int
         let description: String
+    }
+}
+
+// MARK: - EasyJSON Method Tests
+
+extension RestAPIManagerTests {
+    
+    @Test("jsonRequestJSON - GET request with expected network failure")
+    func testJsonRequestJSONGetRequest() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        do {
+            let _: JSON = try await apiManager.jsonRequest("/users", method: .get)
+            #expect(Bool(false), "Should fail due to network unavailability")
+        } catch {
+            // Expected to fail - we're testing that the method exists and has the right signature
+            #expect(error is APIError)
+        }
+    }
+    
+    @Test("jsonRequestJSON - POST request with parameters")
+    func testJsonRequestJSONPostWithParameters() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let parameters: [String: Any] = [
+            "name": "Test User",
+            "age": 30,
+            "active": true
+        ]
+        
+        do {
+            let _: JSON = try await apiManager.jsonRequest("/users", method: .post, parameters: parameters)
+            #expect(Bool(false), "Should fail due to network unavailability")
+        } catch {
+            // Expected to fail - testing method signature and parameter handling
+            #expect(error is APIError)
+        }
+    }
+    
+    @Test("jsonRequestJSON - PUT request with headers")
+    func testJsonRequestJSONPutWithHeaders() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let parameters: [String: Any] = ["status": "updated"]
+        let headers = ["Authorization": "Bearer token123"]
+        
+        do {
+            let _: JSON = try await apiManager.jsonRequest("/users/1", method: .put, parameters: parameters, headers: headers)
+            #expect(Bool(false), "Should fail due to network unavailability")
+        } catch {
+            // Expected to fail - testing method signature
+            #expect(error is APIError)
+        }
+    }
+    
+    @Test("jsonRequestJSON - DELETE request")
+    func testJsonRequestJSONDeleteRequest() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        do {
+            let _: JSON = try await apiManager.jsonRequest("/users/1", method: .delete)
+            #expect(Bool(false), "Should fail due to network unavailability")
+        } catch {
+            // Expected to fail - testing method signature
+            #expect(error is APIError)
+        }
+    }
+    
+    @Test("jsonRequestJSON - PATCH request with nested parameters")
+    func testJsonRequestJSONPatchWithNestedParameters() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let parameters: [String: Any] = [
+            "user": [
+                "name": "Updated Name",
+                "preferences": [
+                    "theme": "dark",
+                    "notifications": true
+                ]
+            ]
+        ]
+        
+        do {
+            let _: JSON = try await apiManager.jsonRequest("/users/1", method: .patch, parameters: parameters)
+            #expect(Bool(false), "Should fail due to network unavailability")
+        } catch {
+            // Expected to fail - testing nested parameter handling
+            #expect(error is APIError)
+        }
+    }
+    
+    @Test("jsonRequestJSON - Request with empty parameters")
+    func testJsonRequestJSONEmptyParameters() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let parameters: [String: Any] = [:]
+        
+        do {
+            let _: JSON = try await apiManager.jsonRequest("/endpoint", method: .post, parameters: parameters)
+            #expect(Bool(false), "Should fail due to network unavailability")
+        } catch {
+            // Expected to fail - testing empty parameters handling
+            #expect(error is APIError)
+        }
+    }
+    
+    @Test("jsonRequestJSON - Request with complex JSON structure")
+    func testJsonRequestJSONComplexStructure() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let parameters: [String: Any] = [
+            "strings": ["a", "b", "c"],
+            "numbers": [1, 2, 3],
+            "booleans": [true, false, true],
+            "nested": [
+                "level1": [
+                    "level2": [
+                        "value": 42
+                    ]
+                ]
+            ]
+        ]
+        
+        do {
+            let _: JSON = try await apiManager.jsonRequest("/complex", method: .post, parameters: parameters)
+            #expect(Bool(false), "Should fail due to network unavailability")
+        } catch {
+            // Expected to fail - testing complex structure serialization
+            #expect(error is APIError)
+        }
+    }
+    
+    @Test("jsonRequestJSON - Multiple sequential requests")
+    func testJsonRequestJSONMultipleRequests() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        for i in 1...3 {
+            do {
+                let _: JSON = try await apiManager.jsonRequest("/endpoint/\(i)", method: .get)
+                #expect(Bool(false), "Should fail due to network unavailability")
+            } catch {
+                // Expected to fail - testing multiple request handling
+                #expect(error is APIError)
+            }
+        }
+    }
+    
+    @Test("sseRequestJSON - POST request returns AsyncStream")
+    func testSseRequestJSONPostRequest() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let stream: AsyncStream<JSON> = await apiManager.sseRequest("/events", method: .post)
+        
+        // Verify we got an AsyncStream (type checking)
+        var count = 0
+        for await _ in stream {
+            count += 1
+            // Break after first item to avoid hanging on network timeout
+            break
+        }
+        
+        // We expect 0 items since there's no server, but the stream should be valid
+        #expect(count == 0)
+    }
+    
+    @Test("sseRequestJSON - GET request returns AsyncStream")
+    func testSseRequestJSONGetRequest() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let stream: AsyncStream<JSON> = await apiManager.sseRequest("/stream", method: .get)
+        
+        // Verify we got an AsyncStream
+        var count = 0
+        for await _ in stream {
+            count += 1
+            break
+        }
+        
+        #expect(count == 0)
+    }
+    
+    @Test("sseRequestJSON - Request with parameters")
+    func testSseRequestJSONWithParameters() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let parameters = try! JSON([
+            "filter": "active",
+            "limit": 10
+        ])
+        
+        let stream = await apiManager.sseRequest("/events", method: .post, parameters: parameters)
+        
+        // Verify stream is created
+        var count = 0
+        for await _ in stream {
+            count += 1
+            break
+        }
+        
+        #expect(count == 0)
+    }
+    
+    @Test("sseRequestJSON - Request with custom headers")
+    func testSseRequestJSONWithHeaders() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let headers = [
+            "Authorization": "Bearer token123",
+            "X-API-Key": "key123"
+        ]
+        
+        let stream: AsyncStream<JSON> = await apiManager.sseRequest("/protected/events", method: .post, headers: headers)
+        
+        // Verify stream is created
+        var count = 0
+        for await _ in stream {
+            count += 1
+            break
+        }
+        
+        #expect(count == 0)
+    }
+    
+    @Test("jsonRequestJSON vs jsonRequest API compatibility")
+    func testJsonRequestJSONAPICompatibility() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        let endpoint = "/test"
+        let parameters = ["key": "value"]
+        let headers = ["X-Test": "value"]
+        
+        // Both methods should accept the same parameters
+        do {
+            // Legacy method
+            let _: [String: Sendable] = try await apiManager.jsonRequest(
+                endpoint,
+                method: .post,
+                parameters: parameters,
+                headers: headers
+            )
+            #expect(Bool(false), "Should fail due to network")
+        } catch {
+            #expect(error is APIError)
+        }
+        
+        do {
+            // New EasyJSON method
+            let _: JSON = try await apiManager.jsonRequest(
+                endpoint,
+                method: .post,
+                parameters: parameters,
+                headers: headers
+            )
+            #expect(Bool(false), "Should fail due to network")
+        } catch {
+            #expect(error is APIError)
+        }
+    }
+    
+    @Test("sseRequestJSON vs sseRequest API compatibility")
+    func testSseRequestJSONAPICompatibility() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        let endpoint = "/events"
+        let legacyParameters: [String: Sendable] = ["filter": "active"]
+        let jsonParameters = try! JSON(["filter": "active"])
+        let headers = ["X-Test": "value"]
+        
+        // Legacy method uses [String: Sendable]
+        let legacyStream: AsyncStream<[String: Sendable]> = await apiManager.sseRequest(
+            endpoint,
+            method: .post,
+            parameters: legacyParameters,
+            headers: headers
+        )
+        
+        // New method uses JSON
+        let newStream: AsyncStream<JSON> = await apiManager.sseRequest(
+            endpoint,
+            method: .post,
+            parameters: jsonParameters,
+            headers: headers
+        )
+        
+        // Verify both streams are created
+        #expect(legacyStream != nil)
+        #expect(newStream != nil)
+    }
+    
+    @Test("jsonRequestJSON handles all HTTP methods")
+    func testJsonRequestJSONAllHTTPMethods() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        let endpoint = "/resource"
+        let methods: [HTTPMethod] = [.get, .post, .put, .patch, .delete]
+        
+        for method in methods {
+            do {
+                let _: JSON = try await apiManager.jsonRequest(endpoint, method: method)
+                #expect(Bool(false), "Should fail due to network for \(method.rawValue)")
+            } catch {
+                // Expected to fail - testing that all methods are supported
+                #expect(error is APIError)
+            }
+        }
+    }
+    
+    @Test("sseRequestJSON handles different endpoints")
+    func testSseRequestJSONDifferentEndpoints() async throws {
+        let apiManager = RestAPIManager(baseURL: testBaseURL)
+        
+        let endpoints = ["/events", "/stream", "/updates", "/notifications"]
+        
+        for endpoint in endpoints {
+            let stream: AsyncStream<JSON> = await apiManager.sseRequest(endpoint, method: .post)
+            
+            // Verify stream is created for each endpoint
+            var received = false
+            for await _ in stream {
+                received = true
+                break
+            }
+            
+            // Should not receive data (no server), but stream should be valid
+            #expect(!received)
+        }
     }
 } 

@@ -7,6 +7,7 @@
 
 import Foundation
 import Logging
+import EasyJSON
 
 public actor RestAPIManager {
     
@@ -102,6 +103,30 @@ public actor RestAPIManager {
         }
     }
     
+    /// Performs a request and returns the response as EasyJSON.JSON
+    public func jsonRequest(_ endpoint: String,
+                                method: HTTPMethod = .get,
+                                parameters: [String: Any]? = nil,
+                                headers: [String: String]? = nil) async throws -> JSON {
+        
+        let request = try requestBuilder.createRequest(endpoint: endpoint, method: method, parameters: parameters, headers: headers)
+        
+        do {
+            let (data, response) = try await session.data(for: request)
+            
+            // Validate response
+            guard let httpResponse = response as? HTTPURLResponse else {
+                throw APIError.invalidResponse
+            }
+            try responseValidator.validateResponse(httpResponse, data: data)
+            return try responseValidator.decodeEasyJSON(from: data)
+        } catch let error as APIError {
+            throw error
+        } catch {
+            throw APIError.requestFailed(error)
+        }
+    }
+    
     /// Performs a request and returns an AsyncStream of partial decoded objects
     public func streamRequest(_ endpoint: String,
                                      method: HTTPMethod = .get,
@@ -116,6 +141,17 @@ public actor RestAPIManager {
                           method: HTTPMethod = .post,
                           parameters: [String: Sendable]? = nil,
                           headers: [String: String]? = nil) -> AsyncStream<[String: Sendable]> {
+        return sseClient.sseRequest(endpoint, method: method, parameters: parameters, headers: headers)
+    }
+    
+   
+    
+    /// Performs a Server-Sent Events (SSE) request and returns an AsyncStream of EasyJSON.JSON objects
+    /// This method automatically handles SSE parsing and returns complete JSON objects from the data events
+    public func sseRequest(_ endpoint: String,
+                               method: HTTPMethod = .post,
+                               parameters: JSON? = nil,
+                               headers: [String: String]? = nil) -> AsyncStream<JSON> {
         return sseClient.sseRequest(endpoint, method: method, parameters: parameters, headers: headers)
     }
     

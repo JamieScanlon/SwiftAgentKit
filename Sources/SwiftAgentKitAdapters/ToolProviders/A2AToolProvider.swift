@@ -44,9 +44,18 @@ public struct A2AToolProvider: ToolProvider {
             guard let agentCard = await client.agentCard,
                   agentCard.name == toolCall.name else { continue }
             
+            // Extract instructions from JSON arguments
+            let instructions: String
+            if case .object(let argsDict) = toolCall.arguments,
+               case .string(let instructionsStr) = argsDict["instructions"] {
+                instructions = instructionsStr
+            } else {
+                instructions = ""
+            }
+            
             let a2aMessage = A2AMessage(
                 role: "user",
-                parts: [.text(text: toolCall.arguments["instructions"] as? String ?? "")],
+                parts: [.text(text: instructions)],
                 messageId: UUID().uuidString
             )
             let params = MessageSendParams(message: a2aMessage)

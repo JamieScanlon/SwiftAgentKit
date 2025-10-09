@@ -366,7 +366,7 @@ public struct AnthropicAdapter: AgentAdapter {
             "Content-Type": "application/json"
         ]
         
-        let response = try await apiManager.jsonRequest(
+        let response: [String: Sendable] = try await apiManager.jsonRequest(
             "messages",
             method: .post,
             parameters: requestBody,

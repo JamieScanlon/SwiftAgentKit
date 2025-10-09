@@ -2,6 +2,7 @@ import Foundation
 import Logging
 import SwiftAgentKit
 import SwiftAgentKitA2A
+import EasyJSON
 
 // Example: A2A (Agent-to-Agent) usage with A2AManager
 func a2aManagerExample() async {
@@ -58,9 +59,9 @@ func a2aManagerExample() async {
         // Example: Create a tool call for an A2A agent
         let toolCall = ToolCall(
             name: "agent_interaction",
-            arguments: [
+            arguments: try! JSON([
                 "instructions": "Hello! Can you help me with a task? Please provide a brief response."
-            ],
+            ]),
             instructions: "Send a greeting and request for help to the A2A agent"
         )
         
@@ -110,9 +111,9 @@ func a2aManagerWithRealConfigExample() async {
         // Example: Create a tool call for a real A2A agent
         let toolCall = ToolCall(
             name: "text_generation",
-            arguments: [
+            arguments: try! JSON([
                 "instructions": "Write a short story about a robot learning to paint"
-            ],
+            ]),
             instructions: "Generate creative text based on the provided prompt"
         )
         
@@ -152,7 +153,7 @@ func a2aManagerErrorHandlingExample() async {
     }
     
     // Example 2: Try to make an agent call before initialization
-    let toolCall = ToolCall(name: "test_agent", arguments: [:])
+    let toolCall = ToolCall(name: "test_agent", arguments: .object([:])) 
     
     do {
         logger.info("Attempting agent call before initialization...")
@@ -209,17 +210,17 @@ func a2aManagerMultipleAgentsExample() async {
         let agentCalls = [
             ToolCall(
                 name: "text_generation",
-                arguments: ["instructions": "Hello, how are you?"],
+                arguments: try! JSON(["instructions": "Hello, how are you?"]),
                 instructions: "Generate a friendly response"
             ),
             ToolCall(
                 name: "image_analysis",
-                arguments: ["instructions": "Analyze this image: https://example.com/image.jpg"],
+                arguments: try! JSON(["instructions": "Analyze this image: https://example.com/image.jpg"]),
                 instructions: "Analyze the content of this image"
             ),
             ToolCall(
                 name: "data_processing",
-                arguments: ["instructions": "Process this data: sample data in JSON format"],
+                arguments: try! JSON(["instructions": "Process this data: sample data in JSON format"]),
                 instructions: "Process the provided data"
             )
         ]
@@ -266,9 +267,9 @@ func a2aManagerStreamingExample() async {
         // Example: Create a tool call that might result in streaming responses
         let toolCall = ToolCall(
             name: "long_text_generation",
-            arguments: [
+            arguments: try! JSON([
                 "instructions": "Write a detailed story about space exploration with multiple chapters"
-            ],
+            ]),
             instructions: "Generate a long-form story that will be streamed back"
         )
         

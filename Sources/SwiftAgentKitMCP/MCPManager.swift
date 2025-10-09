@@ -9,6 +9,7 @@ import Foundation
 import Logging
 import MCP
 import SwiftAgentKit
+import EasyJSON
 
 /// Manages tool calling via MCP
 /// Loads a configuration of available MCP servers
@@ -253,25 +254,29 @@ extension Tool {
 
 extension ToolCall {
     public func argumentsToValue() -> [String: Value] {
-        func convertSendableToValue(value: Sendable) -> Value {
-            if let boolValue = value as? Bool {
+        func convertJSONToValue(_ json: JSON) -> Value {
+            switch json {
+            case .boolean(let boolValue):
                 return Value.bool(boolValue)
-            } else if let intValue = value as? Int {
+            case .integer(let intValue):
                 return Value.int(intValue)
-            } else if let doubleValue = value as? Double {
+            case .double(let doubleValue):
                 return Value.double(doubleValue)
-            } else if let stringValue = value as? String {
+            case .string(let stringValue):
                 return Value.string(stringValue)
-            } else if let dataValue = value as? Data {
-                return Value.data(mimeType: nil, dataValue)
-            } else if let arrayValue = value as? [Sendable] {
-                return Value.array(arrayValue.map(convertSendableToValue))
-            } else if let objectValue = value as? [String: Sendable] {
-                return Value.object(objectValue.mapValues(convertSendableToValue))
-            } else {
-                return Value.null
+            case .array(let arrayValue):
+                return Value.array(arrayValue.map(convertJSONToValue))
+            case .object(let objectValue):
+                return Value.object(objectValue.mapValues(convertJSONToValue))
             }
         }
-        return arguments.mapValues(convertSendableToValue)
+        
+        // Extract the object dictionary from JSON
+        guard case .object(let dict) = arguments else {
+            return [:]
+        }
+        
+        return dict.mapValues(convertJSONToValue)
     }
 }
+

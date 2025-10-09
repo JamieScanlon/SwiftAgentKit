@@ -197,7 +197,13 @@ struct CustomToolProvider: ToolProvider {
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         switch toolCall.name {
         case "custom_function":
-            let input = toolCall.arguments["input"] as? String ?? "no input"
+            let input: String
+            if case .object(let argsDict) = toolCall.arguments,
+               case .string(let inputStr) = argsDict["input"] {
+                input = inputStr
+            } else {
+                input = "no input"
+            }
             return ToolResult(
                 success: true,
                 content: "Custom function executed successfully with input: \(input)",
@@ -205,8 +211,23 @@ struct CustomToolProvider: ToolProvider {
             )
             
         case "weather_tool":
-            let location = toolCall.arguments["location"] as? String ?? "unknown"
-            let units = toolCall.arguments["units"] as? String ?? "celsius"
+            let location: String
+            let units: String
+            if case .object(let argsDict) = toolCall.arguments {
+                if case .string(let locationStr) = argsDict["location"] {
+                    location = locationStr
+                } else {
+                    location = "unknown"
+                }
+                if case .string(let unitsStr) = argsDict["units"] {
+                    units = unitsStr
+                } else {
+                    units = "celsius"
+                }
+            } else {
+                location = "unknown"
+                units = "celsius"
+            }
             return ToolResult(
                 success: true,
                 content: "Weather in \(location): 22°\(units), sunny with light breeze",

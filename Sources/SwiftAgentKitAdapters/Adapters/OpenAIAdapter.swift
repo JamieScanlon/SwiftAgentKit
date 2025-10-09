@@ -10,6 +10,7 @@ import SwiftAgentKitA2A
 import SwiftAgentKit
 import Logging
 import OpenAI
+import EasyJSON
 
 /// OpenAI API adapter for A2A protocol
 public struct OpenAIAdapter: ToolAwareAdapter {
@@ -1035,8 +1036,15 @@ extension ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallPar
     
     func toToolCall() -> ToolCall {
         let argsJSONString = self.function.arguments
-        let args = try? JSONSerialization.jsonObject(with: argsJSONString.data(using: .utf8)!, options: []) as? [String: Sendable]
-        return ToolCall(name: self.function.name, arguments: args ?? [:])
+        let args: JSON
+        if let argsData = argsJSONString.data(using: .utf8),
+           let argsDict = try? JSONSerialization.jsonObject(with: argsData, options: []) as? [String: Any],
+           let json = try? JSON(argsDict) {
+            args = json
+        } else {
+            args = .object([:])
+        }
+        return ToolCall(name: self.function.name, arguments: args)
     }
 }
 
@@ -1045,8 +1053,15 @@ extension ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall {
     func toToolCall() -> ToolCall? {
         if let name = self.function?.name {
             let argsJSONString = self.function?.arguments ?? ""
-            let args = try? JSONSerialization.jsonObject(with: argsJSONString.data(using: .utf8)!, options: []) as? [String: Sendable]
-            return ToolCall(name: name, arguments: args ?? [:])
+            let args: JSON
+            if let argsData = argsJSONString.data(using: .utf8),
+               let argsDict = try? JSONSerialization.jsonObject(with: argsData, options: []) as? [String: Any],
+               let json = try? JSON(argsDict) {
+                args = json
+            } else {
+                args = .object([:])
+            }
+            return ToolCall(name: name, arguments: args)
         }
         return nil
     }

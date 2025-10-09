@@ -3,6 +3,22 @@ import Testing
 import SwiftAgentKit
 import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
+import EasyJSON
+
+// Helper extension for easier testing
+extension JSON {
+    subscript(key: String) -> Any? {
+        guard case .object(let dict) = self else { return nil }
+        guard let value = dict[key] else { return nil }
+        switch value {
+        case .string(let s): return s
+        case .integer(let i): return i
+        case .double(let d): return d
+        case .boolean(let b): return b
+        default: return nil
+        }
+    }
+}
 
 @Suite("ToolProxyAdapter Tests")
 struct ToolAwareAdapterTests {

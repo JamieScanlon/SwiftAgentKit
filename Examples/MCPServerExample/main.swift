@@ -4,7 +4,6 @@ import SwiftAgentKitMCP
 import EasyJSON
 import SwiftAgentKit
 
-@main
 struct MCPServerExample {
     static func main() async throws {
         // Configure logging

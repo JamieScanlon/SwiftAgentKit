@@ -2,6 +2,7 @@ import Foundation
 import SwiftAgentKitOrchestrator
 import SwiftAgentKit
 import Logging
+import EasyJSON
 
 // Mock LLM for demonstration
 struct MockLLM: LLMProtocol {
@@ -35,7 +36,7 @@ struct MockLLM: LLMProtocol {
                 logger.info("LLM making tool call for weather information")
                 let toolCall = ToolCall(
                     name: "get_weather",
-                    arguments: ["location": "current"]
+                    arguments: try! JSON(["location": "current"])
                 )
                 return LLMResponse.withToolCalls(
                     content: "I need to check the weather for you.",
@@ -71,7 +72,7 @@ struct MockLLM: LLMProtocol {
                         // Then yield the tool call
                         let toolCall = ToolCall(
                             name: "get_weather",
-                            arguments: ["location": "current"]
+                            arguments: try! JSON(["location": "current"])
                         )
                         continuation.yield(.complete(LLMResponse.withToolCalls(
                             content: "I need to check the weather for you.",

@@ -222,7 +222,7 @@ struct MCPManagerRemoteTests {
         
         let toolCall = ToolCall(
             name: "nonexistent_tool",
-            arguments: ["test": "value"],
+            arguments: try! JSON(["test": "value"]),
             instructions: "Test instruction"
         )
         
@@ -407,7 +407,7 @@ struct MCPManagerRemoteTests {
         
         let toolCall = ToolCall(
             name: "test_tool",
-            arguments: ["param": "value"],
+            arguments: try! JSON(["param": "value"]),
             instructions: "Test tool call"
         )
         
@@ -453,7 +453,7 @@ struct MCPManagerRemoteTests {
                     do {
                         let toolCall = ToolCall(
                             name: "concurrent_tool_\(i)",
-                            arguments: ["id": i],
+                            arguments: try! JSON(["id": i]),
                             instructions: "Concurrent test"
                         )
                         _ = try await manager.toolCall(toolCall)

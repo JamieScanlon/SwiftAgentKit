@@ -10,7 +10,6 @@ import SwiftAgentKit
 
 /// Example demonstrating PKCE OAuth authentication for MCP clients
 /// This example shows how to implement PKCE OAuth as required by the MCP specification
-@main
 struct PKCEOAuthExample {
     static func main() async {
         print("PKCE OAuth Example for MCP Clients")

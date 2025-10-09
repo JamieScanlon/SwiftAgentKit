@@ -387,7 +387,7 @@ public struct GeminiAdapter: AgentAdapter {
         let endpoint = "/models/\(config.model):generateContent"
         
         do {
-            let response = try await apiManager.jsonRequest(
+            let response: [String: Sendable] = try await apiManager.jsonRequest(
                 endpoint,
                 method: .post,
                 parameters: requestBody,
