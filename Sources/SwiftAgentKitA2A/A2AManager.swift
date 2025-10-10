@@ -36,48 +36,60 @@ public actor A2AManager {
     }
     
     public func agentCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
+        // Find the client whose agent card name matches the tool call name
+        var matchingClient: A2AClient?
         for client in clients {
-            // Extract instructions from JSON arguments
-            guard case .object(let argsDict) = toolCall.arguments,
-                  case .string(let instructions) = argsDict["instructions"] else { continue }
-            let a2aMessage = A2AMessage(role: "user", parts: [.text(text: instructions)], messageId: UUID().uuidString)
-            let params: MessageSendParams = .init(message: a2aMessage)
-            let contents = try await client.streamMessage(params: params)
-            var returnResponses: [LLMResponse] = []
-            var responseText: String = ""
-            for await content in contents {
-                switch content.result {
-                case .message(let aMessage):
-                    let text = aMessage.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
-                    returnResponses.append(LLMResponse.complete(content: text))
-                case .task(let task):
-                    var text: String = ""
-                    if let artifacts = task.artifacts {
-                        for artifact in artifacts {
-                            text += artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
-                        }
-                    }
-                    returnResponses.append(LLMResponse.complete(content: text))
-                case .taskArtifactUpdate(let event):
-                    if event.append == true {
-                        responseText += event.artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
-                    } else {
-                        responseText = event.artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
-                    }
-                    if event.lastChunk == true {
-                        returnResponses.append(LLMResponse.complete(content: responseText))
-                        responseText = ""
-                    }
-                case .taskStatusUpdate(let event):
-                    if event.status.state == .completed, !responseText.isEmpty {
-                        returnResponses.append(LLMResponse.complete(content: responseText))
-                        responseText = ""
+            guard let agentCard = await client.agentCard else { continue }
+            if agentCard.name == toolCall.name {
+                matchingClient = client
+                break
+            }
+        }
+        
+        guard let client = matchingClient else {
+            return nil
+        }
+        
+        // Extract instructions from JSON arguments
+        guard case .object(let argsDict) = toolCall.arguments,
+              case .string(let instructions) = argsDict["instructions"] else { return nil }
+        
+        let a2aMessage = A2AMessage(role: "user", parts: [.text(text: instructions)], messageId: UUID().uuidString)
+        let params: MessageSendParams = .init(message: a2aMessage)
+        let contents = try await client.streamMessage(params: params)
+        var returnResponses: [LLMResponse] = []
+        var responseText: String = ""
+        for await content in contents {
+            switch content.result {
+            case .message(let aMessage):
+                let text = aMessage.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                returnResponses.append(LLMResponse.complete(content: text))
+            case .task(let task):
+                var text: String = ""
+                if let artifacts = task.artifacts {
+                    for artifact in artifacts {
+                        text += artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
                     }
                 }
+                returnResponses.append(LLMResponse.complete(content: text))
+            case .taskArtifactUpdate(let event):
+                if event.append == true {
+                    responseText += event.artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                } else {
+                    responseText = event.artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                }
+                if event.lastChunk == true {
+                    returnResponses.append(LLMResponse.complete(content: responseText))
+                    responseText = ""
+                }
+            case .taskStatusUpdate(let event):
+                if event.status.state == .completed, !responseText.isEmpty {
+                    returnResponses.append(LLMResponse.complete(content: responseText))
+                    responseText = ""
+                }
             }
-            return returnResponses
         }
-        return nil
+        return returnResponses
     }
     
     /// Get all available tools from A2A clients
