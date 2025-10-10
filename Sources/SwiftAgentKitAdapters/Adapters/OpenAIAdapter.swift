@@ -181,11 +181,20 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - AgentAdapter Methods
     
-    public func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
+    public func responseType(for params: MessageSendParams) -> AdapterResponseType {
+        return .task  // OpenAI adapter always uses task tracking
+    }
+    
+    public func handleMessageSend(_ params: MessageSendParams) async throws -> A2AMessage {
+        // Not used - OpenAI adapter always returns tasks
+        fatalError("OpenAI adapter always returns tasks")
+    }
+    
+    public func handleTaskSend(_ params: MessageSendParams, taskId: String, contextId: String, store: TaskStore) async throws {
         
         // Update to working state
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: TaskStatus(
                 state: .working,
                 timestamp: ISO8601DateFormatter().string(from: .init())
@@ -196,8 +205,9 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             // Extract text from message parts
             let prompt = extractTextFromParts(params.message.parts)
             
-            // Build conversation history if available
-            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task.history)
+            // Get task history from store
+            let task = await store.getTask(id: taskId)
+            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task?.history)
             
             // Call OpenAI API with conversation context
             let response = try await callOpenAI(prompt: prompt, conversationHistory: conversationHistory)
@@ -210,13 +220,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             
             // Update the task store with the artifact
             await store.updateTaskArtifacts(
-                id: task.id,
+                id: taskId,
                 artifacts: [responseArtifact]
             )
             
-            // Update task with completed status and add messages to history
+            // Update task with completed status
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: TaskStatus(
                     state: .completed,
                     timestamp: ISO8601DateFormatter().string(from: .init())
@@ -228,7 +238,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             
             // Update task with failed status
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: TaskStatus(
                     state: .failed,
                     timestamp: ISO8601DateFormatter().string(from: .init())
@@ -239,7 +249,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         }
     }
     
-    public func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    public func handleStream(_ params: MessageSendParams, taskId: String?, contextId: String?, store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        // OpenAI adapter always uses task tracking for streaming
+        guard let taskId = taskId, let contextId = contextId, let store = store else {
+            throw NSError(domain: "OpenAIAdapter", code: -1, userInfo: [NSLocalizedDescriptionKey: "OpenAI adapter requires task tracking for streaming"])
+        }
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
         
@@ -249,13 +263,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             timestamp: ISO8601DateFormatter().string(from: .init())
         )
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: workingStatus
         )
         
         let workingEvent = TaskStatusUpdateEvent(
-            taskId: task.id,
-            contextId: task.contextId,
+            taskId: taskId,
+            contextId: contextId,
             kind: "status-update",
             status: workingStatus,
             final: false
@@ -272,8 +286,9 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             // Extract text from message parts
             let prompt = extractTextFromParts(params.message.parts)
             
-            // Build conversation history if available
-            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task.history)
+            // Get task history from store
+            let task = await store.getTask(id: taskId)
+            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task?.history)
             
             // Stream from OpenAI API
             let stream = try await streamFromOpenAI(prompt: prompt, conversationHistory: conversationHistory)
@@ -296,11 +311,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 )
                 
                 partialArtifacts.append(artifact)
-                await store.updateTaskArtifacts(id: task.id, artifacts: partialArtifacts)
+                await store.updateTaskArtifacts(id: taskId, artifacts: partialArtifacts)
                 
                 let artifactEvent = TaskArtifactUpdateEvent(
-                    taskId: task.id,
-                    contextId: task.contextId,
+                    taskId: taskId,
+                    contextId: contextId,
                     kind: "artifact-update",
                     artifact: artifact,
                     append: true,
@@ -327,11 +342,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             )
             
             finalArtifact = artifact
-            await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+            await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
             
             let finalArtifactEvent = TaskArtifactUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "artifact-update",
                 artifact: artifact,
                 append: false,
@@ -352,13 +367,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: completedStatus
             )
             
             let completedEvent = TaskStatusUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "status-update",
                 status: completedStatus,
                 final: true
@@ -381,13 +396,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: failedStatus
             )
             
             let failedEvent = TaskStatusUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "status-update",
                 status: failedStatus,
                 final: true
@@ -526,7 +541,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - ToolAwareAdapter Methods
     
-    public func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore) async throws {
+    public func handleTaskSendWithTools(_ params: MessageSendParams, taskId: String, contextId: String, toolProviders: [ToolProvider], store: TaskStore) async throws {
         
         let availableToolCalls: [ToolDefinition] = await {
             var returnValue = [ToolDefinition]()
@@ -539,7 +554,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         
         // Update to working state
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: TaskStatus(
                 state: .working,
                 timestamp: ISO8601DateFormatter().string(from: .init())
@@ -550,8 +565,9 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             // Extract text from message parts
             let prompt = extractTextFromParts(params.message.parts)
             
-            // Build conversation history if available
-            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task.history)
+            // Get task history from store
+            let task = await store.getTask(id: taskId)
+            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task?.history)
             
             // Convert tool calls to OpenAI tool format
             let tools = availableToolCalls.map { tool in
@@ -594,13 +610,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             
             // Update the task artifacts
             await store.updateTaskArtifacts(
-                id: task.id,
+                id: taskId,
                 artifacts: [responseArtifact]
             )
             
-            // Update task with completed status and add messages to history
+            // Update task with completed status
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: TaskStatus(
                     state: .completed,
                     timestamp: ISO8601DateFormatter().string(from: .init())
@@ -612,7 +628,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             
             // Update task with failed status
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: TaskStatus(
                     state: .failed,
                     timestamp: ISO8601DateFormatter().string(from: .init())
@@ -623,7 +639,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         }
     }
     
-    public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    public func handleStreamWithTools(_ params: MessageSendParams, taskId: String?, contextId: String?, toolProviders: [ToolProvider], store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        // OpenAI adapter always uses task tracking for streaming with tools
+        guard let taskId = taskId, let contextId = contextId, let store = store else {
+            throw NSError(domain: "OpenAIAdapter", code: -1, userInfo: [NSLocalizedDescriptionKey: "OpenAI adapter requires task tracking for streaming with tools"])
+        }
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
         let availableToolCalls: [ToolDefinition] = await {
@@ -641,13 +661,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             timestamp: ISO8601DateFormatter().string(from: .init())
         )
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: workingStatus
         )
         
         let workingEvent = TaskStatusUpdateEvent(
-            taskId: task.id,
-            contextId: task.contextId,
+            taskId: taskId,
+            contextId: contextId,
             kind: "status-update",
             status: workingStatus,
             final: false
@@ -664,8 +684,9 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             // Extract text from message parts
             let prompt = extractTextFromParts(params.message.parts)
             
-            // Build conversation history if available
-            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task.history)
+            // Get task history from store
+            let task = await store.getTask(id: taskId)
+            let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task?.history)
             
             // Convert tool calls to OpenAI tool format
             let tools = availableToolCalls.map { tool in
@@ -698,11 +719,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 )
                 
                 partialArtifacts.append(artifact)
-                await store.updateTaskArtifacts(id: task.id, artifacts: partialArtifacts)
+                await store.updateTaskArtifacts(id: taskId, artifacts: partialArtifacts)
                 
                 let artifactEvent = TaskArtifactUpdateEvent(
-                    taskId: task.id,
-                    contextId: task.contextId,
+                    taskId: taskId,
+                    contextId: contextId,
                     kind: "artifact-update",
                     artifact: artifact,
                     append: true,
@@ -753,11 +774,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             )
             
             finalArtifact = artifact
-            await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+            await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
             
             let artifactEvent = TaskArtifactUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "artifact-update",
                 artifact: artifact,
                 append: false,
@@ -779,13 +800,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: completedStatus
             )
             
             let completedEvent = TaskStatusUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "status-update",
                 status: completedStatus,
                 final: true
@@ -809,13 +830,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: failedStatus
             )
             
             let failedEvent = TaskStatusUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "status-update",
                 status: failedStatus,
                 final: true

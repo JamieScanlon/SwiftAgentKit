@@ -172,16 +172,19 @@ func testLLMProtocolAdapter() async {
     await store.addTask(task: task)
     
     do {
-        try await adapter.handleSend(params, task: task, store: store)
-        print("✓ Message handling successful")
-        print("  - Task state: \(task.status.state)")
-        print("  - History count: \(task.history?.count ?? 0)")
+        try await adapter.handleTaskSend(params, taskId: task.id, contextId: task.contextId, store: store)
         
-        if let history = task.history, history.count >= 2 {
-            let response = history[1]
-            print("  - Response role: \(response.role)")
-            if case .text(let text) = response.parts.first {
-                print("  - Response content: \(text)")
+        if let updatedTask = await store.getTask(id: task.id) {
+            print("✓ Message handling successful")
+            print("  - Task state: \(updatedTask.status.state)")
+            print("  - History count: \(updatedTask.history?.count ?? 0)")
+            
+            if let history = updatedTask.history, history.count >= 2 {
+                let response = history[1]
+                print("  - Response role: \(response.role)")
+                if case .text(let text) = response.parts.first {
+                    print("  - Response content: \(text)")
+                }
             }
         }
     } catch {
@@ -193,7 +196,7 @@ func testLLMProtocolAdapter() async {
     var receivedEvents = 0
     
     do {
-        try await adapter.handleStream(params, task: task, store: store) { event in
+        try await adapter.handleStream(params, taskId: task.id, contextId: task.contextId, store: store) { event in
             receivedEvents += 1
             print("  - Received streaming event \(receivedEvents)")
         }

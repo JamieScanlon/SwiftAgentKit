@@ -20,18 +20,12 @@ struct ToolAwareExample {
         let toolManager = ToolManager()
         _ = toolManager.addProvider(customToolProvider)
         
-        // Create base adapters
+        // Create base adapter
         let openAIAdapter = OpenAIAdapter(apiKey: "your-openai-key")
-        let anthropicAdapter = AnthropicAdapter(apiKey: "your-anthropic-key")
         
-        // Create tool-aware adapters
+        // Create tool-aware adapter
         let toolAwareOpenAI = ToolProxyAdapter(
             baseAdapter: openAIAdapter,
-            toolManager: toolManager
-        )
-        
-        let toolAwareAnthropic = ToolProxyAdapter(
-            baseAdapter: anthropicAdapter,
             toolManager: toolManager
         )
         
@@ -63,8 +57,9 @@ struct ToolAwareExample {
         await taskStore.addTask(task: task1)
         
         do {
-            try await builderAdapter.handleSend(params1, task: task1, store: taskStore)
-            if let responseMessage = task1.status.message,
+            try await builderAdapter.handleTaskSend(params1, taskId: task1.id, contextId: task1.contextId, store: taskStore)
+            if let updatedTask = await taskStore.getTask(id: task1.id),
+               let responseMessage = updatedTask.status.message,
                let firstPart = responseMessage.parts.first,
                case .text(let text) = firstPart {
                 logger.info("Builder response: \(text)")
@@ -96,8 +91,9 @@ struct ToolAwareExample {
         await taskStore.addTask(task: task2)
         
         do {
-            try await toolAwareOpenAI.handleSend(params2,task: task2, store: taskStore)
-            if let responseMessage = task2.status.message,
+            try await toolAwareOpenAI.handleTaskSend(params2, taskId: task2.id, contextId: task2.contextId, store: taskStore)
+            if let updatedTask = await taskStore.getTask(id: task2.id),
+               let responseMessage = updatedTask.status.message,
                let firstPart = responseMessage.parts.first,
                case .text(let text) = firstPart {
                 logger.info("Direct adapter response: \(text)")
@@ -106,11 +102,11 @@ struct ToolAwareExample {
             logger.error("Direct adapter example failed: \(error)")
         }
         
-        // Example 3: Manual setup without builder
-        logger.info("Example 3: Manual setup without builder")
+        // Example 3: Streaming with tools
+        logger.info("Example 3: Streaming with tools")
         let message3 = A2AMessage(
             role: "user",
-            parts: [.text(text: "Execute the custom_function with input 'test input'")],
+            parts: [.text(text: "Stream a response about the weather in London")],
             messageId: UUID().uuidString,
             taskId: UUID().uuidString,
             contextId: UUID().uuidString
@@ -129,40 +125,7 @@ struct ToolAwareExample {
         await taskStore.addTask(task: task3)
         
         do {
-            try await toolAwareAnthropic.handleSend(params3, task: task3, store: taskStore)
-            if let responseMessage = task3.status.message,
-               let firstPart = responseMessage.parts.first,
-               case .text(let text) = firstPart {
-                logger.info("Manual setup response: \(text)")
-            }
-        } catch {
-            logger.error("Manual setup example failed: \(error)")
-        }
-        
-        // Example 4: Streaming with tools
-        logger.info("Example 4: Streaming with tools")
-        let message4 = A2AMessage(
-            role: "user",
-            parts: [.text(text: "Stream a response about the weather in London")],
-            messageId: UUID().uuidString,
-            taskId: UUID().uuidString,
-            contextId: UUID().uuidString
-        )
-        
-        let params4 = MessageSendParams(message: message4)
-        let task4 = A2ATask(
-            id: UUID().uuidString,
-            contextId: UUID().uuidString,
-            status: TaskStatus(
-                state: .submitted,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: [params4.message]
-        )
-        await taskStore.addTask(task: task4)
-        
-        do {
-            try await toolAwareOpenAI.handleStream(params4, task: task4, store: taskStore) { @Sendable event in
+            try await toolAwareOpenAI.handleStream(params3, taskId: task3.id, contextId: task3.contextId, store: taskStore) { @Sendable event in
                 logger.info("Stream event: \(type(of: event))")
             }
         } catch {

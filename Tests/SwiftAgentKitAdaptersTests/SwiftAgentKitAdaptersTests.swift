@@ -29,29 +29,6 @@ import MCP
         #expect(adapter.skills.count >= 3)
     }
     
-    @Test("AnthropicAdapter should have correct capabilities")
-    func testAnthropicAdapterCapabilities() throws {
-        let adapter = AnthropicAdapter(apiKey: "test-key")
-        
-        #expect(adapter.cardCapabilities.streaming == true)
-        #expect(adapter.cardCapabilities.pushNotifications == false)
-        #expect(adapter.cardCapabilities.stateTransitionHistory == true)
-        #expect(adapter.defaultInputModes == ["text/plain"])
-        #expect(adapter.defaultOutputModes == ["text/plain"])
-        #expect(adapter.skills.count >= 4)
-    }
-    
-    @Test("GeminiAdapter should have correct capabilities")
-    func testGeminiAdapterCapabilities() throws {
-        let adapter = GeminiAdapter(apiKey: "test-key")
-        
-        #expect(adapter.cardCapabilities.streaming == true)
-        #expect(adapter.cardCapabilities.pushNotifications == false)
-        #expect(adapter.cardCapabilities.stateTransitionHistory == true)
-        #expect(adapter.defaultInputModes == ["text/plain"])
-        #expect(adapter.defaultOutputModes == ["text/plain"])
-        #expect(adapter.skills.count >= 4)
-    }
     
     // MARK: - Skill Tests
     
@@ -65,26 +42,6 @@ import MCP
         #expect(textGenerationSkill?.tags.contains("openai") == true)
     }
     
-    @Test("AnthropicAdapter should have reasoning skill")
-    func testAnthropicAdapterReasoningSkill() throws {
-        let adapter = AnthropicAdapter(apiKey: "test-key")
-        let reasoningSkill = adapter.skills.first { $0.id == "reasoning" }
-        
-        #expect(reasoningSkill != nil)
-        #expect(reasoningSkill?.name == "Logical Reasoning")
-        #expect(reasoningSkill?.tags.contains("reasoning") == true)
-    }
-    
-    @Test("GeminiAdapter should have multimodal skill")
-    func testGeminiAdapterMultimodalSkill() throws {
-        let adapter = GeminiAdapter(apiKey: "test-key")
-        let multimodalSkill = adapter.skills.first { $0.id == "multimodal" }
-        
-        #expect(multimodalSkill != nil)
-        #expect(multimodalSkill?.name == "Multimodal Processing")
-        #expect(multimodalSkill?.tags.contains("multimodal") == true)
-        #expect(multimodalSkill?.inputModes?.contains("image/jpeg") == true)
-    }
     
     // MARK: - Configuration Tests
     
@@ -118,31 +75,6 @@ import MCP
         #expect(adapter.cardCapabilities.streaming == true)
     }
     
-    @Test("AnthropicAdapter configuration should work")
-    func testAnthropicAdapterConfiguration() throws {
-        let config = AnthropicAdapter.Configuration(
-            apiKey: "test-key",
-            model: "claude-3-opus-20240229",
-            maxTokens: 1000,
-            temperature: 0.3
-        )
-        let adapter = AnthropicAdapter(configuration: config)
-        
-        #expect(adapter.cardCapabilities.streaming == true)
-    }
-    
-    @Test("GeminiAdapter configuration should work")
-    func testGeminiAdapterConfiguration() throws {
-        let config = GeminiAdapter.Configuration(
-            apiKey: "test-key",
-            model: "gemini-1.5-pro",
-            maxTokens: 800,
-            temperature: 0.6
-        )
-        let adapter = GeminiAdapter(configuration: config)
-        
-        #expect(adapter.cardCapabilities.streaming == true)
-    }
     
     // MARK: - OpenAI Adapter Edge Cases and Error Handling
     
@@ -621,129 +553,6 @@ import MCP
     
     // MARK: - Streaming Tests
     
-    @Test("AnthropicAdapter should support streaming")
-    func testAnthropicAdapterStreaming() async throws {
-        let adapter = AnthropicAdapter(apiKey: "test-key")
-        
-        // Test that the adapter supports streaming
-        #expect(adapter.cardCapabilities.streaming == true)
-        
-        // Test that the streaming method can be called (will fail with invalid API key, but that's expected)
-        // This test verifies the method signature and basic structure
-        let message = A2AMessage(
-            role: "user",
-            parts: [.text(text: "Hello")],
-            messageId: "test-1",
-            taskId: "task-1",
-            contextId: "context-1"
-        )
-        
-        let params = MessageSendParams(message: message)
-        let store = TaskStore()
-        
-        // Prepare task in store
-        let task = A2ATask(
-            id: UUID().uuidString,
-            contextId: UUID().uuidString,
-            status: TaskStatus(state: .submitted)
-        )
-        await store.addTask(task: task)
-        
-        // This should not crash and should handle the error gracefully
-        do {
-            try await adapter.handleStream(params, task: task, store: store) { _ in }
-        } catch {
-            // Expected to fail with invalid API key, but the streaming infrastructure should work
-            #expect(error.localizedDescription.contains("API") || error.localizedDescription.contains("network"))
-        }
-    }
-
-    @Test("GeminiAdapter handleSend should return a valid task")
-    func testGeminiAdapterHandleSend() async throws {
-        let adapter = GeminiAdapter(apiKey: "test-key")
-        let store = TaskStore()
-        let message = A2AMessage(
-            role: "user",
-            parts: [.text(text: "Say hello!")],
-            messageId: UUID().uuidString,
-            taskId: UUID().uuidString,
-            contextId: UUID().uuidString
-        )
-        let params = MessageSendParams(message: message)
-        // Register task
-        let task = A2ATask(
-            id: UUID().uuidString,
-            contextId: UUID().uuidString,
-            status: TaskStatus(state: .submitted),
-            history: [message]
-        )
-        await store.addTask(task: task)
-        // Allow network/API errors; verify state and artifacts regardless
-        do { try await adapter.handleSend(params, task: task, store: store) } catch { }
-        let updatedTask = await store.getTask(id: task.id)
-        #expect(updatedTask?.status.state == .completed || updatedTask?.status.state == .failed)
-        #expect((updatedTask?.artifacts?.count ?? 0) >= 0)
-    }
-
-    @Test("GeminiAdapter handleStream should not crash and should call eventSink")
-    func testGeminiAdapterHandleStream() async throws {
-        let adapter = GeminiAdapter(apiKey: "test-key")
-        let store = TaskStore()
-        let message = A2AMessage(
-            role: "user",
-            parts: [.text(text: "Stream hello!")],
-            messageId: UUID().uuidString,
-            taskId: UUID().uuidString,
-            contextId: UUID().uuidString
-        )
-        let params = MessageSendParams(message: message)
-        var eventSinkCalled = false
-        // Register task
-        let task = A2ATask(
-            id: UUID().uuidString,
-            contextId: UUID().uuidString,
-            status: TaskStatus(state: .submitted)
-        )
-        await store.addTask(task: task)
-        do {
-            try await adapter.handleStream(params, task: task, store: store) { _ in
-                eventSinkCalled = true
-            }
-        } catch {
-            // Should not throw for mock/test key
-            #expect(false, "handleStream threw error: \(error)")
-        }
-        #expect(eventSinkCalled == true)
-    }
-
-    @Test("GeminiAdapter should handle multimodal input")
-    func testGeminiAdapterMultimodalInput() async throws {
-        let adapter = GeminiAdapter(apiKey: "test-key")
-        let store = TaskStore()
-        let imageData = "test".data(using: .utf8)!
-        let message = A2AMessage(
-            role: "user",
-            parts: [
-                .text(text: "Describe this image."),
-                .file(data: imageData, url: nil)
-            ],
-            messageId: UUID().uuidString,
-            taskId: UUID().uuidString,
-            contextId: UUID().uuidString
-        )
-        let params = MessageSendParams(message: message)
-        // Register task
-        let task = A2ATask(
-            id: UUID().uuidString,
-            contextId: UUID().uuidString,
-            status: TaskStatus(state: .submitted)
-        )
-        await store.addTask(task: task)
-        // Allow network/API errors; verify state updated
-        do { try await adapter.handleSend(params, task: task, store: store) } catch { }
-        let updatedTask = await store.getTask(id: task.id)
-        #expect(updatedTask?.status.state == .completed || updatedTask?.status.state == .failed)
-    }
     
     // MARK: - ToolDefinition Extension Tests
     

@@ -36,34 +36,29 @@ struct CustomNamedAdapter: AgentAdapter {
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
+    func responseType(for params: MessageSendParams) -> AdapterResponseType {
+        return .task
+    }
+    
+    func handleMessageSend(_ params: MessageSendParams) async throws -> A2AMessage {
+        fatalError("This adapter always returns tasks")
+    }
+    
+    func handleTaskSend(_ params: MessageSendParams, taskId: String, contextId: String, store: TaskStore) async throws {
         
         let artifact = Artifact(
             artifactId: UUID().uuidString,
             parts: [.text(text: "Hello from \(name)!")]
         )
         
-        await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+        await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
+        await store.updateTaskStatus(id: taskId, status: TaskStatus(state: .completed, timestamp: ISO8601DateFormatter().string(from: .init())))
     }
     
-    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        // Simple streaming implementation
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
-        
-        let task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .working,
-                message: nil,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
-        )
-        
-        await store.addTask(task: task)
-        
+    func handleStream(_ params: MessageSendParams, taskId: String?, contextId: String?, store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        guard let taskId = taskId, let contextId = contextId, let store = store else {
+            throw NSError(domain: "CustomNamedAdapter", code: -1, userInfo: [NSLocalizedDescriptionKey: "This adapter requires task tracking for streaming"])
+        }
         // Stream a simple response
         let responseMessage = A2AMessage(
             role: "assistant",
@@ -73,29 +68,24 @@ struct CustomNamedAdapter: AgentAdapter {
             contextId: contextId
         )
         
-        let updatedTask = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .completed,
-                message: responseMessage,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: []
+        let completedStatus = TaskStatus(
+            state: .completed,
+            message: responseMessage,
+            timestamp: ISO8601DateFormatter().string(from: .init())
         )
         
-        await store.updateTaskStatus(id: taskId, status: updatedTask.status)
+        await store.updateTaskStatus(id: taskId, status: completedStatus)
         
         // Send completion event
         let completionEvent = TaskStatusUpdateEvent(
             taskId: taskId,
             contextId: contextId,
             kind: "status-update",
-            status: updatedTask.status,
+            status: completedStatus,
             final: true
         )
         
-        eventSink(completionEvent)
+        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: MessageResult.taskStatusUpdate(completionEvent)))
     }
 }
 

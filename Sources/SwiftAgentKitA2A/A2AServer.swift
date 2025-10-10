@@ -146,30 +146,41 @@ public actor A2AServer {
         let params = rpcRequest.params
         let requestId = rpcRequest.id
         
-        // Create initial task
-        let taskId = UUID().uuidString
-        let contextId = UUID().uuidString
+        // Ask adapter what type of response it will return
+        let responseType = adapter.responseType(for: params)
         
-        let task = A2ATask(
-            id: taskId,
-            contextId: contextId,
-            status: TaskStatus(
-                state: .submitted,
-                timestamp: ISO8601DateFormatter().string(from: .init())
-            ),
-            history: [params.message]
-        )
-        
-        await taskStore.addTask(task: task)
-        
-        try await adapter.handleSend(params, task: task, store: taskStore)
-        
-        guard let updatedTask = await taskStore.getTask(id: taskId) else {
-            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after processing", status: .internalServerError)
+        switch responseType {
+        case .message:
+            // Handle as a simple message (no task created)
+            let message = try await adapter.handleMessageSend(params)
+            return try jsonRPCSuccessResponse(id: requestId, result: message)
+            
+        case .task:
+            // Create a task and handle with full tracking
+            let taskId = UUID().uuidString
+            let contextId = UUID().uuidString
+            
+            let task = A2ATask(
+                id: taskId,
+                contextId: contextId,
+                status: TaskStatus(
+                    state: .submitted,
+                    timestamp: ISO8601DateFormatter().string(from: .init())
+                ),
+                history: [params.message]
+            )
+            
+            await taskStore.addTask(task: task)
+            
+            // Let adapter process the task
+            try await adapter.handleTaskSend(params, taskId: taskId, contextId: contextId, store: taskStore)
+            
+            // Return the updated task
+            guard let updatedTask = await taskStore.getTask(id: taskId) else {
+                return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after processing", status: .internalServerError)
+            }
+            return try jsonRPCSuccessResponse(id: requestId, result: updatedTask)
         }
-        
-        // Encode the task and create JSON-RPC response
-        return try jsonRPCSuccessResponse(id: requestId, result: updatedTask)
     }
     
     private func handleMessageStream(_ req: Request) async throws -> Response {
@@ -225,35 +236,49 @@ public actor A2AServer {
             isExistingTask = true
         }
         
-        // Create task
+        // Determine response type (existing tasks are always task-based)
+        let responseType = isExistingTask ? AdapterResponseType.task : adapter.responseType(for: updatedParams)
         
-        let taskId = isExistingTask ? updatedParams.message.taskId ?? UUID().uuidString : UUID().uuidString
-        let contextId = updatedParams.message.contextId ?? UUID().uuidString
+        // Prepare task parameters based on response type
+        let taskId: String?
+        let contextId: String?
         
-        let task: A2ATask = await {
-            if isExistingTask {
-                return await taskStore.getTask(id: taskId)!
-            } else {
-                let aTask = A2ATask(
-                    id: taskId,
-                    contextId: contextId,
+        switch responseType {
+        case .message:
+            // Message-based streaming (no task tracking)
+            taskId = nil
+            contextId = nil
+            
+        case .task:
+            // Task-based streaming (with full tracking)
+            let resolvedTaskId = isExistingTask ? updatedParams.message.taskId ?? UUID().uuidString : UUID().uuidString
+            let resolvedContextId = updatedParams.message.contextId ?? UUID().uuidString
+            
+            taskId = resolvedTaskId
+            contextId = resolvedContextId
+            
+            // Create task if it's a new one
+            if !isExistingTask {
+                let task = A2ATask(
+                    id: resolvedTaskId,
+                    contextId: resolvedContextId,
                     status: TaskStatus(
                         state: .submitted,
                         timestamp: ISO8601DateFormatter().string(from: .init())
                     ),
                     history: [updatedParams.message]
                 )
-                await taskStore.addTask(task: aTask)
-                return aTask
+                await taskStore.addTask(task: task)
             }
-        }()
+            
+            // TODO: implement resubscribing to an existing task rather than restarting it which is what the current behavior is doing
+        }
         
-        // TODO: implement resubscribing to an existing task rather than restarting it which is what the current behavior is doing
-        
+        // Create streaming body (unified for both message and task responses)
         let bodyStream = AsyncStream<ByteBuffer> { cont in
             Task.detached {
                 do {
-                    try await adapter.handleStream(updatedParams, task: task, store: store) { ev in
+                    try await adapter.handleStream(updatedParams, taskId: taskId, contextId: contextId, store: taskId != nil ? store : nil) { ev in
                         if let data = try? self.encoder.encode(ev),
                             let jsonString = String(data: data, encoding:.utf8) {
                             var buf = ByteBufferAllocator().buffer(capacity: jsonString.count+8)

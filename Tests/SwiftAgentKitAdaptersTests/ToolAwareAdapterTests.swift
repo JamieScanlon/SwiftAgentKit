@@ -226,7 +226,15 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
+    func responseType(for params: MessageSendParams) -> AdapterResponseType {
+        return .task
+    }
+    
+    func handleMessageSend(_ params: MessageSendParams) async throws -> A2AMessage {
+        fatalError("Mock adapter always returns tasks")
+    }
+    
+    func handleTaskSend(_ params: MessageSendParams, taskId: String, contextId: String, store: TaskStore) async throws {
         // Mock implementation
         // Create response Artifact
         let responseArtifact = Artifact(
@@ -236,13 +244,13 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
         
         // Update the task store with the artifact
         await store.updateTaskArtifacts(
-            id: task.id,
+            id: taskId,
             artifacts: [responseArtifact]
         )
         
-        // Update task with completed status and add messages to history
+        // Update task with completed status
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: TaskStatus(
                 state: .completed,
                 timestamp: ISO8601DateFormatter().string(from: .init())
@@ -250,8 +258,11 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
         )
     }
     
-    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        // Mock implementation
+    func handleStream(_ params: MessageSendParams, taskId: String?, contextId: String?, store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Mock implementation - requires task tracking
+        guard let taskId = taskId, let contextId = contextId, let store = store else {
+            throw NSError(domain: "MockAdapter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Mock adapter requires task tracking"])
+        }
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
         
@@ -261,13 +272,13 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
             timestamp: ISO8601DateFormatter().string(from: .init())
         )
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: completedStatus
         )
         
         let completedEvent = TaskStatusUpdateEvent(
-            taskId: task.id,
-            contextId: task.contextId,
+            taskId: taskId,
+            contextId: contextId,
             kind: "status-update",
             status: completedStatus,
             final: true
@@ -276,13 +287,13 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
         let completedResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
             id: requestId,
-            result: completedEvent
+            result: MessageResult.taskStatusUpdate(completedEvent)
         )
         
         eventSink(completedResponse)
     }
     
-    func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore) async throws {
+    func handleTaskSendWithTools(_ params: MessageSendParams, taskId: String, contextId: String, toolProviders: [ToolProvider], store: TaskStore) async throws {
         // Mock implementation
         // Create response Artifact
         let responseArtifact = Artifact(
@@ -292,13 +303,13 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
         
         // Update the task artifacts
         await store.updateTaskArtifacts(
-            id: task.id,
+            id: taskId,
             artifacts: [responseArtifact]
         )
         
-        // Update task with completed status and add messages to history
+        // Update task with completed status
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: TaskStatus(
                 state: .completed,
                 timestamp: ISO8601DateFormatter().string(from: .init())
@@ -306,7 +317,11 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
         )
     }
     
-    func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    func handleStreamWithTools(_ params: MessageSendParams, taskId: String?, contextId: String?, toolProviders: [ToolProvider], store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Mock implementation - requires task tracking
+        guard let taskId = taskId, let contextId = contextId, let store = store else {
+            throw NSError(domain: "MockAdapter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Mock adapter requires task tracking for tools"])
+        }
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
         
@@ -316,13 +331,13 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
             timestamp: ISO8601DateFormatter().string(from: .init())
         )
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: completedStatus
         )
         
         let completedEvent = TaskStatusUpdateEvent(
-            taskId: task.id,
-            contextId: task.contextId,
+            taskId: taskId,
+            contextId: contextId,
             kind: "status-update",
             status: completedStatus,
             final: true
@@ -331,7 +346,7 @@ private struct MockToolAwareAdapter: ToolAwareAdapter {
         let completedResponse = SendStreamingMessageSuccessResponse(
             jsonrpc: "2.0",
             id: requestId,
-            result: completedEvent
+            result: MessageResult.taskStatusUpdate(completedEvent)
         )
         
         eventSink(completedResponse)

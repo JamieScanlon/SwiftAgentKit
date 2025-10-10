@@ -72,7 +72,7 @@ struct OpenAIAdapterExample {
         
         do {
             // Test non-streaming
-            try await openAIAdapter.handleSend(params, task: task, store: taskStore)
+            try await openAIAdapter.handleTaskSend(params, taskId: taskID, contextId: task.contextId, store: taskStore)
             
             task = await taskStore.getTask(id: taskID)!
             // The response message can now contain multiple parts:
@@ -97,7 +97,7 @@ struct OpenAIAdapterExample {
             
             // Test streaming
             logger.info("Testing streaming...")
-            try await openAIAdapter.handleStream(params, task: task, store: taskStore) { @Sendable event in
+            try await openAIAdapter.handleStream(params, taskId: taskID, contextId: task.contextId, store: taskStore) { @Sendable event in
                 logger.info("Stream event received: \(type(of: event))")
             }
             

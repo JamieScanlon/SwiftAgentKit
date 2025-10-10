@@ -13,19 +13,24 @@ import SwiftAgentKitA2A
 /// This protocol is used with the `ToolProxyAdapter` and provides tool-using versions of the send methods
 /// Objects that implemplement this protocol are responsible for executing the tool calls within these medhods
 public protocol ToolAwareAdapter: AgentAdapter {
-    /// Handle a message with available tools.
+    /// Handle a task send with available tools.
     /// - Parameters:
     ///   - params: The message parameters
-    ///   - toolProvider: A `ToolProvider` used for listing available tools and executing them
+    ///   - taskId: The ID of the task
+    ///   - contextId: The context ID for this interaction
+    ///   - toolProviders: `ToolProvider` objects used for listing available tools and executing them
     ///   - store: The task store
-    /// - Returns: An A2A task representing the response
-    func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore) async throws
+    func handleTaskSendWithTools(_ params: MessageSendParams, taskId: String, contextId: String, toolProviders: [ToolProvider], store: TaskStore) async throws
     
     /// Handle streaming with available tools
     /// - Parameters:
     ///   - params: The message parameters
-    ///   - toolProvider: A `ToolProvider` used for listing available tools and executing them
-    ///   - store: The task store
+    ///   - taskId: The ID of the task (should be unwrapped - tool methods require tracking)
+    ///   - contextId: The context ID for this interaction
+    ///   - toolProviders: `ToolProvider` objects used for listing available tools and executing them
+    ///   - store: The task store (should be unwrapped - tool methods require tracking)
     ///   - eventSink: Callback for streaming events
-    func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws
+    ///
+    /// Note: Tool-aware methods typically require task tracking, so implementers should unwrap optionals
+    func handleStreamWithTools(_ params: MessageSendParams, taskId: String?, contextId: String?, toolProviders: [ToolProvider], store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws
 }

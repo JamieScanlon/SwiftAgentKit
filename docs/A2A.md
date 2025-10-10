@@ -129,114 +129,184 @@ Task {
 }
 ```
 
-## Example: Creating an A2A Server
+## Message vs Task Responses
+
+According to the A2A spec, an agent can respond with either a simple **Message** or a tracked **Task**. Your adapter implementation decides which to use:
+
+### When to Use Message Responses
+
+Return `.message(A2AMessage)` for:
+- **Quick, synchronous responses** that complete immediately
+- **Simple conversations** that don't need progress tracking
+- **Lightweight interactions** where task overhead isn't needed
+
+### When to Use Task Responses
+
+Return `.task` for:
+- **Long-running operations** that take time to complete
+- **Operations with progress updates** that benefit from status tracking
+- **Work that might be queried later** via `tasks/get`
+- **Operations with multiple artifacts** that build up over time
+
+## Example: Creating an A2A Server with Message Responses
 
 ```swift
 import SwiftAgentKitA2A
 
-// Implement the AgentAdapter protocol
-struct MyAgentAdapter: AgentAdapter {
-    var agentName: String {
-        "My Custom Agent"
-    }
-    
-    var agentDescription: String {
-        "A custom A2A-compliant agent that provides text generation capabilities."
-    }
-    
+// Simple adapter that returns messages for quick responses
+struct QuickResponseAdapter: AgentAdapter {
+    var agentName: String { "Quick Response Agent" }
+    var agentDescription: String { "Provides instant responses to simple queries" }
     var cardCapabilities: AgentCard.AgentCapabilities {
-        .init(streaming: true, pushNotifications: false)
+        .init(streaming: false, pushNotifications: false)
     }
-    
     var skills: [AgentCard.AgentSkill] {
-        [
-            .init(
-                id: "text-generation",
-                name: "Text Generation",
-                description: "Generates text based on prompts",
-                tags: ["text", "generation"]
-            )
-        ]
+        [.init(id: "qa", name: "Q&A", description: "Quick answers", tags: ["text"])]
     }
-    
     var defaultInputModes: [String] { ["text/plain"] }
     var defaultOutputModes: [String] { ["text/plain"] }
     
-    // New API: update the provided task in the TaskStore
-    func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
-        // Mark working
-        await store.updateTaskStatus(
-            id: task.id,
-            status: TaskStatus(state: .working)
-        )
+    // Tell the server this adapter returns messages
+    func responseType(for params: MessageSendParams) -> AdapterResponseType {
+        return .message
+    }
+    
+    // Handle message responses (called when responseType returns .message)
+    func handleMessageSend(_ params: MessageSendParams) async throws -> A2AMessage {
+        // Process the request quickly
+        let responseText = "Here's a quick response to: \(params.message.parts)"
         
-        // Simulate processing
-        try await Task.sleep(for: .seconds(1))
-        
-        // Produce an artifact as the result
-        let artifact = Artifact(
-            artifactId: UUID().uuidString,
-            parts: [.text(text: "I processed your request: \(params.message.parts)")]
-        )
-        await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
-        
-        // Mark completed
-        await store.updateTaskStatus(
-            id: task.id,
-            status: TaskStatus(state: .completed)
+        // Return a simple message (no task tracking)
+        return A2AMessage(
+            role: "assistant",
+            parts: [.text(text: responseText)],
+            messageId: UUID().uuidString
         )
     }
     
-    // New API: stream status and artifact updates; do not return a value
-    func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
-        // Working status
-        let working = TaskStatus(state: .working)
-        await store.updateTaskStatus(id: task.id, status: working)
+    // Not used for message-only adapters
+    func handleTaskSend(_ params: MessageSendParams, taskId: String, contextId: String, store: TaskStore) async throws {
+        // Not called - this adapter always returns messages
+    }
+    
+    func handleStream(_ params: MessageSendParams, taskId: String?, contextId: String?, store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Simple message streaming (no task tracking needed)
+        let responseText = "Streaming quick response!"
+        let message = A2AMessage(
+            role: "assistant",
+            parts: [.text(text: responseText)],
+            messageId: UUID().uuidString
+        )
+        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: MessageResult.message(message)))
+    }
+}
+```
+
+## Example: Creating an A2A Server with Task Responses
+
+```swift
+import SwiftAgentKitA2A
+
+// Complex adapter that returns tasks for tracked operations
+struct LongRunningAdapter: AgentAdapter {
+    var agentName: String { "Long Running Agent" }
+    var agentDescription: String { "Handles complex, long-running operations" }
+    var cardCapabilities: AgentCard.AgentCapabilities {
+        .init(streaming: true, pushNotifications: false)
+    }
+    var skills: [AgentCard.AgentSkill] {
+        [.init(id: "analysis", name: "Analysis", description: "Deep analysis", tags: ["analysis"])]
+    }
+    var defaultInputModes: [String] { ["text/plain"] }
+    var defaultOutputModes: [String] { ["text/plain"] }
+    
+    // Tell the server this adapter returns tasks
+    func responseType(for params: MessageSendParams) -> AdapterResponseType {
+        return .task
+    }
+    
+    // Not used for task-only adapters
+    func handleMessageSend(_ params: MessageSendParams) async throws -> A2AMessage {
+        // Not called - this adapter always returns tasks
+        fatalError("This adapter always returns tasks")
+    }
+    
+    // Handle task responses (called when responseType returns .task)
+    func handleTaskSend(_ params: MessageSendParams, taskId: String, contextId: String, store: TaskStore) async throws {
+        // Mark as working
+        await store.updateTaskStatus(
+            id: taskId,
+            status: TaskStatus(state: .working, timestamp: ISO8601DateFormatter().string(from: Date()))
+        )
+        
+        // Simulate long-running work
+        try await Task.sleep(for: .seconds(2))
+        
+        // Create artifacts
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.text(text: "Analysis complete: processed \(params.message.parts)")]
+        )
+        await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
+        
+        // Mark completed
+        await store.updateTaskStatus(
+            id: taskId,
+            status: TaskStatus(state: .completed, timestamp: ISO8601DateFormatter().string(from: Date()))
+        )
+    }
+    
+    func handleStream(_ params: MessageSendParams, taskId: String?, contextId: String?, store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        // Task-based streaming requires all parameters
+        guard let taskId = taskId, let contextId = contextId, let store = store else {
+            throw NSError(domain: "LongRunningAdapter", code: -1, userInfo: [NSLocalizedDescriptionKey: "Task streaming requires taskId, contextId, and store"])
+        }
+        
+        // Send working status
+        let working = TaskStatus(state: .working, timestamp: ISO8601DateFormatter().string(from: Date()))
+        await store.updateTaskStatus(id: taskId, status: working)
         let workingEvent = TaskStatusUpdateEvent(
-            taskId: task.id,
-            contextId: task.contextId,
-            kind: "status-update",
+            taskId: taskId,
+            contextId: contextId,
             status: working,
             final: false
         )
-        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: requestId, result: workingEvent))
+        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: MessageResult.taskStatusUpdate(workingEvent)))
         
-        // Stream a few artifact chunks
+        // Stream progress updates
         for i in 1...3 {
             try await Task.sleep(for: .seconds(1))
             let artifact = Artifact(
                 artifactId: UUID().uuidString,
-                parts: [.text(text: "Chunk #\(i)")],
-                name: "example-artifact"
+                parts: [.text(text: "Progress update \(i)/3")],
+                name: "progress-\(i)"
             )
-            await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+            await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
             let artifactEvent = TaskArtifactUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
-                kind: "artifact-update",
+                taskId: taskId,
+                contextId: contextId,
                 artifact: artifact,
                 append: true,
                 lastChunk: i == 3
             )
-            eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: requestId, result: artifactEvent))
+            eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: MessageResult.taskArtifactUpdate(artifactEvent)))
         }
         
-        // Completed status
-        let completed = TaskStatus(state: .completed)
-        await store.updateTaskStatus(id: task.id, status: completed)
+        // Send completion
+        let completed = TaskStatus(state: .completed, timestamp: ISO8601DateFormatter().string(from: Date()))
+        await store.updateTaskStatus(id: taskId, status: completed)
         let completedEvent = TaskStatusUpdateEvent(
-            taskId: task.id,
-            contextId: task.contextId,
-            kind: "status-update",
+            taskId: taskId,
+            contextId: contextId,
             status: completed,
             final: true
         )
-        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: requestId, result: completedEvent))
+        eventSink(SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: MessageResult.taskStatusUpdate(completedEvent)))
     }
 }
 
 // Create and start the server
-let adapter = MyAgentAdapter()
+let adapter = LongRunningAdapter() // or QuickResponseAdapter()
 let server = A2AServer(port: 4245, adapter: adapter)
 
 Task {

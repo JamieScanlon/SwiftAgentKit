@@ -187,7 +187,7 @@ struct TestLLM: LLMProtocol {
         await store.addTask(task: task)
         
         // Send the message
-        try await adapter.handleSend(params, task: task, store: store)
+        try await adapter.handleTaskSend(params, taskId: task.id, contextId: task.contextId, store: store)
         
         // Verify task state and artifacts
         if let updatedTask = await store.getTask(id: task.id) {
@@ -234,7 +234,7 @@ struct TestLLM: LLMProtocol {
         await store.addTask(task: task)
         
         // Stream the message
-        try await adapter.handleStream(params, task: task, store: store) { event in
+        try await adapter.handleStream(params, taskId: task.id, contextId: task.contextId, store: store) { event in
             receivedEvents.append(event)
         }
         
@@ -269,7 +269,7 @@ struct TestLLM: LLMProtocol {
             status: TaskStatus(state: .submitted)
         )
         await store.addTask(task: task1)
-        try await adapter.handleSend(params1, task: task1, store: store)
+        try await adapter.handleTaskSend(params1, taskId: task1.id, contextId: task1.contextId, store: store)
         
         // Second message (should include history)
         let message2 = A2AMessage(
@@ -287,7 +287,7 @@ struct TestLLM: LLMProtocol {
             history: [message1]
         )
         await store.addTask(task: task2)
-        try await adapter.handleSend(params2, task: task2, store: store)
+        try await adapter.handleTaskSend(params2, taskId: task2.id, contextId: task2.contextId, store: store)
         
         let updatedTask1 = await store.getTask(id: task1.id)
         let updatedTask2 = await store.getTask(id: task2.id)
@@ -323,7 +323,7 @@ struct TestLLM: LLMProtocol {
         )
         await store.addTask(task: task)
         
-        let _ = try await adapter.handleSend(params, task: task, store: store)
+        let _ = try await adapter.handleTaskSend(params, taskId: task.id, contextId: task.contextId, store: store)
         
         if let updatedTask = await store.getTask(id: task.id) {
             #expect(updatedTask.status.state == .completed)
@@ -365,7 +365,7 @@ struct TestLLM: LLMProtocol {
         await store.addTask(task: task)
         
         do {
-            try await adapter.handleSend(params, task: task, store: store)
+            try await adapter.handleTaskSend(params, taskId: task.id, contextId: task.contextId, store: store)
             #expect(false, "Expected handleSend to throw")
         } catch {
             // Expected
@@ -405,7 +405,7 @@ struct TestLLM: LLMProtocol {
                 status: TaskStatus(state: .submitted)
             )
             await store.addTask(task: task)
-            try await adapter.handleSend(params, task: task, store: store)
+            try await adapter.handleTaskSend(params, taskId: task.id, contextId: task.contextId, store: store)
             let updatedTask = await store.getTask(id: task.id)
             #expect(updatedTask?.status.state == .completed)
         }

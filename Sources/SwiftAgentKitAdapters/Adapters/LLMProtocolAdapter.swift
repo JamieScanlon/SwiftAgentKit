@@ -26,6 +26,9 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         public let systemPrompt: String?
         public let additionalParameters: JSON?
         
+        // MARK: - Agentic Loop Configuration
+        public let maxAgenticIterations: Int
+        
         // MARK: - Agent Configuration
         public let agentName: String
         public let agentDescription: String
@@ -41,6 +44,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             topP: Double? = nil,
             systemPrompt: String? = nil,
             additionalParameters: JSON? = nil,
+            maxAgenticIterations: Int = 10,
             agentName: String? = nil,
             agentDescription: String? = nil,
             cardCapabilities: AgentCard.AgentCapabilities? = nil,
@@ -54,6 +58,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             self.topP = topP
             self.systemPrompt = systemPrompt
             self.additionalParameters = additionalParameters
+            self.maxAgenticIterations = maxAgenticIterations
             
             // Set agent properties with defaults if not provided
             self.agentName = agentName ?? "LLM Protocol Agent"
@@ -111,6 +116,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         topP: Double? = nil,
         systemPrompt: String? = nil,
         additionalParameters: JSON? = nil,
+        maxAgenticIterations: Int = 10,
         agentName: String? = nil,
         agentDescription: String? = nil,
         cardCapabilities: AgentCard.AgentCapabilities? = nil,
@@ -125,6 +131,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             topP: topP,
             systemPrompt: systemPrompt,
             additionalParameters: additionalParameters,
+            maxAgenticIterations: maxAgenticIterations,
             agentName: agentName,
             agentDescription: agentDescription,
             cardCapabilities: cardCapabilities,
@@ -161,11 +168,20 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         config.defaultOutputModes
     }
     
-    public func handleSend(_ params: MessageSendParams, task: A2ATask, store: TaskStore) async throws {
+    public func responseType(for params: MessageSendParams) -> AdapterResponseType {
+        return .task  // LLMProtocolAdapter always uses task tracking
+    }
+    
+    public func handleMessageSend(_ params: MessageSendParams) async throws -> A2AMessage {
+        // Not used - LLMProtocolAdapter always returns tasks
+        fatalError("LLMProtocolAdapter always returns tasks")
+    }
+    
+    public func handleTaskSend(_ params: MessageSendParams, taskId: String, contextId: String, store: TaskStore) async throws {
         
         // Update to working state
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: TaskStatus(
                 state: .working,
                 timestamp: ISO8601DateFormatter().string(from: .init())
@@ -173,8 +189,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         )
         
         do {
+            // Get task history from store
+            let task = await store.getTask(id: taskId)
+            
             // Convert A2A message to SwiftAgentKit Message
-            let messages = try convertA2AMessageToMessages(params.message, taskHistory: task.history)
+            let messages = try convertA2AMessageToMessages(params.message, taskHistory: task?.history)
             
             // Create LLM request configuration
             let llmConfig = LLMRequestConfig(
@@ -197,13 +216,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             
             // Update the task store with the artifact
             await store.updateTaskArtifacts(
-                id: task.id,
+                id: taskId,
                 artifacts: [responseArtifact]
             )
             
-            // Update task with completed status and add messages to history
+            // Update task with completed status
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: TaskStatus(
                     state: .completed,
                     timestamp: ISO8601DateFormatter().string(from: .init())
@@ -215,7 +234,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             
             // Update task with failed status
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: TaskStatus(
                     state: .failed,
                     timestamp: ISO8601DateFormatter().string(from: .init())
@@ -226,7 +245,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         }
     }
     
-    public func handleStream(_ params: MessageSendParams, task: A2ATask, store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    public func handleStream(_ params: MessageSendParams, taskId: String?, contextId: String?, store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        // LLMProtocol adapter always uses task tracking for streaming
+        guard let taskId = taskId, let contextId = contextId, let store = store else {
+            throw NSError(domain: "LLMProtocolAdapter", code: -1, userInfo: [NSLocalizedDescriptionKey: "LLMProtocol adapter requires task tracking for streaming"])
+        }
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
         
@@ -236,13 +259,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             timestamp: ISO8601DateFormatter().string(from: .init())
         )
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: workingStatus
         )
         
         let workingEvent = TaskStatusUpdateEvent(
-            taskId: task.id,
-            contextId: task.contextId,
+            taskId: taskId,
+            contextId: contextId,
             kind: "status-update",
             status: workingStatus,
             final: false
@@ -256,8 +279,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         eventSink(workingResponse)
         
         do {
+            // Get task history from store
+            let task = await store.getTask(id: taskId)
+            
             // Convert A2A message to SwiftAgentKit Message
-            let messages = try convertA2AMessageToMessages(params.message, taskHistory: task.history)
+            let messages = try convertA2AMessageToMessages(params.message, taskHistory: task?.history)
             
             // Create LLM request configuration for streaming
             let llmConfig = LLMRequestConfig(
@@ -273,7 +299,6 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let stream = llm.stream(messages, config: llmConfig)
             var fullContent = ""
             var partialArtifacts: [Artifact] = []
-            var finalArtifact: Artifact?
             
             for try await result in stream {
                 switch result {
@@ -291,11 +316,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     )
                     
                     partialArtifacts.append(artifact)
-                    await store.updateTaskArtifacts(id: task.id, artifacts: partialArtifacts)
+                    await store.updateTaskArtifacts(id: taskId, artifacts: partialArtifacts)
                     
                     let artifactEvent = TaskArtifactUpdateEvent(
-                        taskId: task.id,
-                        contextId: task.contextId,
+                        taskId: taskId,
+                        contextId: contextId,
                         kind: "artifact-update",
                         artifact: artifact,
                         append: true,
@@ -326,12 +351,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                         extensions: []
                     )
                     
-                    finalArtifact = artifact
-                    await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
+                    await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
                     
                     let artifactEvent = TaskArtifactUpdateEvent(
-                        taskId: task.id,
-                        contextId: task.contextId,
+                        taskId: taskId,
+                        contextId: contextId,
                         kind: "artifact-update",
                         artifact: artifact,
                         append: false,
@@ -355,13 +379,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: completedStatus
             )
             
             let completedEvent = TaskStatusUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "status-update",
                 status: completedStatus,
                 final: true
@@ -384,13 +408,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: failedStatus
             )
             
             let failedEvent = TaskStatusUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "status-update",
                 status: failedStatus,
                 final: true
@@ -410,11 +434,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     
     // MARK: - ToolAwareAgentAdapter Methods
     
-    public func handleSendWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore) async throws {
+    public func handleTaskSendWithTools(_ params: MessageSendParams, taskId: String, contextId: String, toolProviders: [ToolProvider], store: TaskStore) async throws {
         
         // Update to working state
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: TaskStatus(
                 state: .working,
                 timestamp: ISO8601DateFormatter().string(from: .init())
@@ -422,8 +446,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         )
         
         do {
+            // Get task history from store
+            let task = await store.getTask(id: taskId)
+            
             // Convert A2A message to SwiftAgentKit Message
-            let messages = try convertA2AMessageToMessages(params.message, taskHistory: task.history)
+            var messages = try convertA2AMessageToMessages(params.message, taskHistory: task?.history)
             let availableToolCalls: [ToolDefinition] = await {
                 var returnValue = [ToolDefinition]()
                 for provider in toolProviders {
@@ -443,46 +470,91 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 additionalParameters: config.additionalParameters
             )
             
-            // Call the LLM
-            let initialresponse = try await llm.send(messages, config: llmConfig)
+            // Agentic loop: continue calling LLM until we get a response without tool calls
+            var iteration = 0
+            var finalResponse: String = ""
             
-            // Look at the text response for any tool calls not parsed automatically
-            var llmResponse = LLMResponse.llmResponse(from: initialresponse.content, availableTools: availableToolCalls)
-            // Add the Tool calls the LLM identified automatically
-            llmResponse = llmResponse.appending(toolCalls: initialresponse.toolCalls)
-            
-            // Build message parts from response content and tool calls
-            // Add the non tool call content
-            var responseParts: [A2AMessagePart] = []
-            if !llmResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                responseParts.append(.text(text: llmResponse.content))
-            }
-            
-            // Execute the tool calls and add the tool content
-            for toolCall in llmResponse.toolCalls {
-                for provider in toolProviders {
-                    let result = try await provider.executeTool(toolCall)
-                    if result.success {
-                        responseParts.append(.text(text: result.content))
+            while iteration < config.maxAgenticIterations {
+                iteration += 1
+                logger.info("Agentic iteration \(iteration)/\(config.maxAgenticIterations)")
+                
+                // Call the LLM
+                let response = try await llm.send(messages, config: llmConfig)
+                
+                // Look at the text response for any tool calls not parsed automatically
+                var llmResponse = LLMResponse.llmResponse(from: response.content, availableTools: availableToolCalls)
+                // Add the Tool calls the LLM identified automatically
+                llmResponse = llmResponse.appending(toolCalls: response.toolCalls)
+                
+                // Add assistant's response to conversation
+                messages.append(Message(
+                    id: UUID(),
+                    role: .assistant,
+                    content: llmResponse.content
+                ))
+                
+                // If no tool calls, we have the final answer
+                if llmResponse.toolCalls.isEmpty {
+                    finalResponse = llmResponse.content
+                    logger.info("Final response received (no tool calls)")
+                    break
+                }
+                
+                // Execute tool calls and add results to conversation
+                logger.info("Executing \(llmResponse.toolCalls.count) tool call(s)")
+                var toolResults: [String] = []
+                
+                for toolCall in llmResponse.toolCalls {
+                    for provider in toolProviders {
+                        let result = try await provider.executeTool(toolCall)
+                        if result.success {
+                            toolResults.append("Tool: \(toolCall.name)\nResult: \(result.content)")
+                            
+                            // Add tool result as a tool message
+                            messages.append(Message(
+                                id: UUID(),
+                                role: .tool,
+                                content: "Tool: \(toolCall.name)\nResult: \(result.content)"
+                            ))
+                        } else {
+                            let errorMessage = "Tool: \(toolCall.name)\nError: \(result.content)"
+                            toolResults.append(errorMessage)
+                            messages.append(Message(
+                                id: UUID(),
+                                role: .tool,
+                                content: errorMessage
+                            ))
+                        }
                     }
                 }
             }
             
-            // Create response Artifact
+            // Check if we hit max iterations
+            if iteration >= config.maxAgenticIterations && finalResponse.isEmpty {
+                logger.warning("Max agentic iterations reached without final response")
+                // Use the last message as the final response
+                if let lastMessage = messages.last, lastMessage.role == .assistant {
+                    finalResponse = lastMessage.content
+                } else {
+                    finalResponse = "Maximum iterations reached. Unable to complete the task."
+                }
+            }
+            
+            // Create response Artifact with final answer
             let responseArtifact = Artifact(
                 artifactId: UUID().uuidString,
-                parts: responseParts
+                parts: [.text(text: finalResponse)]
             )
             
             // Update the task artifacts
             await store.updateTaskArtifacts(
-                id: task.id,
+                id: taskId,
                 artifacts: [responseArtifact]
             )
             
-            // Update task with completed status and add messages to history
+            // Update task with completed status
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: TaskStatus(
                     state: .completed,
                     timestamp: ISO8601DateFormatter().string(from: .init())
@@ -494,7 +566,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             
             // Update task with failed status
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: TaskStatus(
                     state: .failed,
                     timestamp: ISO8601DateFormatter().string(from: .init())
@@ -505,7 +577,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         }
     }
     
-    public func handleStreamWithTools(_ params: MessageSendParams, task: A2ATask, toolProviders: [ToolProvider], store: TaskStore, eventSink: @escaping (Encodable) -> Void) async throws {
+    public func handleStreamWithTools(_ params: MessageSendParams, taskId: String?, contextId: String?, toolProviders: [ToolProvider], store: TaskStore?, eventSink: @escaping (Encodable) -> Void) async throws {
+        // LLMProtocol adapter always uses task tracking for streaming with tools
+        guard let taskId = taskId, let contextId = contextId, let store = store else {
+            throw NSError(domain: "LLMProtocolAdapter", code: -1, userInfo: [NSLocalizedDescriptionKey: "LLMProtocol adapter requires task tracking for streaming with tools"])
+        }
         
         let requestId = (params.metadata?.literalValue as? [String: Any])?["requestId"] as? Int ?? 1
         let availableToolCalls: [ToolDefinition] = await {
@@ -523,13 +599,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             timestamp: ISO8601DateFormatter().string(from: .init())
         )
         await store.updateTaskStatus(
-            id: task.id,
+            id: taskId,
             status: workingStatus
         )
         
         let workingEvent = TaskStatusUpdateEvent(
-            taskId: task.id,
-            contextId: task.contextId,
+            taskId: taskId,
+            contextId: contextId,
             kind: "status-update",
             status: workingStatus,
             final: false
@@ -543,8 +619,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         eventSink(workingResponse)
         
         do {
+            // Get task history from store
+            let task = await store.getTask(id: taskId)
+            
             // Convert A2A message to SwiftAgentKit Message
-            let messages = try convertA2AMessageToMessages(params.message, taskHistory: task.history)
+            var messages = try convertA2AMessageToMessages(params.message, taskHistory: task?.history)
             
             // Create LLM request configuration for streaming WITH tools
             let llmConfig = LLMRequestConfig(
@@ -556,105 +635,171 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 additionalParameters: config.additionalParameters
             )
             
-            // Stream from the LLM
-            let stream = llm.stream(messages, config: llmConfig)
-            var fullContent = ""
-            var partialArtifacts: [Artifact] = []
-            var finalArtifact: Artifact?
+            // Agentic loop: continue calling LLM until we get a response without tool calls
+            var iteration = 0
+            var finalResponse: String = ""
             
-            for try await result in stream {
-                switch result {
-                case .stream(let response):
-                    fullContent += response.content
-                    
-                    let artifact = Artifact(
-                        artifactId: UUID().uuidString,
-                        parts: [.text(text: response.content)],
-                        name: "partial-llm-response",
-                        description: "Parial streaming response from LLM",
-                        metadata: nil,
-                        extensions: []
-                    )
-                    
-                    partialArtifacts.append(artifact)
-                    await store.updateTaskArtifacts(id: task.id, artifacts: partialArtifacts)
-                    
-                    let artifactEvent = TaskArtifactUpdateEvent(
-                        taskId: task.id,
-                        contextId: task.contextId,
-                        kind: "artifact-update",
-                        artifact: artifact,
-                        append: true,
-                        lastChunk: false,
-                        metadata: nil
-                    )
-                    
-                    let streamingEvent = SendStreamingMessageSuccessResponse(
-                        jsonrpc: "2.0",
-                        id: requestId,
-                        result: artifactEvent
-                    )
-                    
-                    eventSink(streamingEvent)
-                    
-                case .complete(let response):
-                    // the response.content sould contain the full response
-                    fullContent = response.content
-                    
-                    // Look at the text response for any tool calls not parsed automatically
-                    var llmResponse = LLMResponse.llmResponse(from: response.content, availableTools: availableToolCalls)
-                    // Add the Tool calls the LLM identified automatically
-                    llmResponse = llmResponse.appending(toolCalls: response.toolCalls)
-                    
-                    // Build message parts from response content and tool calls
-                    // Add the non tool call content
-                    var responseParts: [A2AMessagePart] = []
-                    if !llmResponse.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        responseParts.append(.text(text: llmResponse.content))
+            while iteration < config.maxAgenticIterations {
+                iteration += 1
+                logger.info("Agentic iteration (streaming) \(iteration)/\(config.maxAgenticIterations)")
+                
+                // Stream from the LLM
+                let stream = llm.stream(messages, config: llmConfig)
+                var fullContent = ""
+                var streamedToolCalls: [ToolCall] = []
+                
+                for try await result in stream {
+                    switch result {
+                    case .stream(let response):
+                        fullContent += response.content
+                        
+                        // Stream partial content to client
+                        let artifact = Artifact(
+                            artifactId: UUID().uuidString,
+                            parts: [.text(text: response.content)],
+                            name: "partial-llm-response",
+                            description: "Partial streaming response from LLM",
+                            metadata: nil,
+                            extensions: []
+                        )
+                        
+                        let artifactEvent = TaskArtifactUpdateEvent(
+                            taskId: taskId,
+                            contextId: contextId,
+                            kind: "artifact-update",
+                            artifact: artifact,
+                            append: true,
+                            lastChunk: false,
+                            metadata: nil
+                        )
+                        
+                        let streamingEvent = SendStreamingMessageSuccessResponse(
+                            jsonrpc: "2.0",
+                            id: requestId,
+                            result: artifactEvent
+                        )
+                        
+                        eventSink(streamingEvent)
+                        
+                    case .complete(let response):
+                        // The response.content should contain the full response
+                        fullContent = response.content
+                        streamedToolCalls = response.toolCalls
                     }
-                    
-                    // Execute the tool calls and add the tool content
-                    for toolCall in llmResponse.toolCalls {
-                        for provider in toolProviders {
-                            let result = try await provider.executeTool(toolCall)
-                            if result.success {
-                                responseParts.append(.text(text: result.content))
-                            }
+                }
+                
+                // Look at the text response for any tool calls not parsed automatically
+                var llmResponse = LLMResponse.llmResponse(from: fullContent, availableTools: availableToolCalls)
+                // Add the Tool calls the LLM identified automatically
+                llmResponse = llmResponse.appending(toolCalls: streamedToolCalls)
+                
+                // Add assistant's response to conversation
+                messages.append(Message(
+                    id: UUID(),
+                    role: .assistant,
+                    content: llmResponse.content
+                ))
+                
+                // If no tool calls, we have the final answer
+                if llmResponse.toolCalls.isEmpty {
+                    finalResponse = llmResponse.content
+                    logger.info("Final response received (no tool calls)")
+                    break
+                }
+                
+                // Execute tool calls and add results to conversation
+                logger.info("Executing \(llmResponse.toolCalls.count) tool call(s)")
+                
+                // Stream tool execution status
+                let toolStatusArtifact = Artifact(
+                    artifactId: UUID().uuidString,
+                    parts: [.text(text: "\n\n[Executing \(llmResponse.toolCalls.count) tool(s)...]\n\n")],
+                    name: "tool-status",
+                    description: "Tool execution status",
+                    metadata: nil,
+                    extensions: []
+                )
+                
+                let toolStatusEvent = TaskArtifactUpdateEvent(
+                    taskId: taskId,
+                    contextId: contextId,
+                    kind: "artifact-update",
+                    artifact: toolStatusArtifact,
+                    append: true,
+                    lastChunk: false,
+                    metadata: nil
+                )
+                
+                let toolStatusResponse = SendStreamingMessageSuccessResponse(
+                    jsonrpc: "2.0",
+                    id: requestId,
+                    result: toolStatusEvent
+                )
+                
+                eventSink(toolStatusResponse)
+                
+                for toolCall in llmResponse.toolCalls {
+                    for provider in toolProviders {
+                        let result = try await provider.executeTool(toolCall)
+                        if result.success {
+                            // Add tool result as a tool message
+                            messages.append(Message(
+                                id: UUID(),
+                                role: .tool,
+                                content: "Tool: \(toolCall.name)\nResult: \(result.content)"
+                            ))
+                        } else {
+                            let errorMessage = "Tool: \(toolCall.name)\nError: \(result.content)"
+                            messages.append(Message(
+                                id: UUID(),
+                                role: .tool,
+                                content: errorMessage
+                            ))
                         }
                     }
-                    
-                    // Create artifact update event for final response
-                    let artifact = Artifact(
-                        artifactId: UUID().uuidString,
-                        parts: responseParts,
-                        name: "final-llm-response",
-                        description: "Final streaming response from LLM",
-                        metadata: nil,
-                        extensions: []
-                    )
-                    
-                    finalArtifact = artifact
-                    await store.updateTaskArtifacts(id: task.id, artifacts: [artifact])
-                    
-                    let artifactEvent = TaskArtifactUpdateEvent(
-                        taskId: task.id,
-                        contextId: task.contextId,
-                        kind: "artifact-update",
-                        artifact: artifact,
-                        append: false,
-                        lastChunk: true,
-                        metadata: nil
-                    )
-                    
-                    let streamingEvent = SendStreamingMessageSuccessResponse(
-                        jsonrpc: "2.0",
-                        id: requestId,
-                        result: artifactEvent
-                    )
-                    
-                    eventSink(streamingEvent)
                 }
             }
+            
+            // Check if we hit max iterations
+            if iteration >= config.maxAgenticIterations && finalResponse.isEmpty {
+                logger.warning("Max agentic iterations reached without final response")
+                // Use the last message as the final response
+                if let lastMessage = messages.last, lastMessage.role == .assistant {
+                    finalResponse = lastMessage.content
+                } else {
+                    finalResponse = "Maximum iterations reached. Unable to complete the task."
+                }
+            }
+            
+            // Create artifact update event for final response
+            let finalArtifact = Artifact(
+                artifactId: UUID().uuidString,
+                parts: [.text(text: finalResponse)],
+                name: "final-llm-response",
+                description: "Final streaming response from LLM",
+                metadata: nil,
+                extensions: []
+            )
+            
+            await store.updateTaskArtifacts(id: taskId, artifacts: [finalArtifact])
+            
+            let artifactEvent = TaskArtifactUpdateEvent(
+                taskId: taskId,
+                contextId: contextId,
+                kind: "artifact-update",
+                artifact: finalArtifact,
+                append: false,
+                lastChunk: true,
+                metadata: nil
+            )
+            
+            let streamingEvent = SendStreamingMessageSuccessResponse(
+                jsonrpc: "2.0",
+                id: requestId,
+                result: artifactEvent
+            )
+            
+            eventSink(streamingEvent)
             
             // Update task with completed status
             let completedStatus = TaskStatus(
@@ -662,13 +807,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: completedStatus
             )
             
             let completedEvent = TaskStatusUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "status-update",
                 status: completedStatus,
                 final: true
@@ -692,13 +837,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 timestamp: ISO8601DateFormatter().string(from: .init())
             )
             await store.updateTaskStatus(
-                id: task.id,
+                id: taskId,
                 status: failedStatus
             )
             
             let failedEvent = TaskStatusUpdateEvent(
-                taskId: task.id,
-                contextId: task.contextId,
+                taskId: taskId,
+                contextId: contextId,
                 kind: "status-update",
                 status: failedStatus,
                 final: true
