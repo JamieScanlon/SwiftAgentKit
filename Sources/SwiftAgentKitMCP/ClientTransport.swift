@@ -49,18 +49,29 @@ actor ClientTransport: Transport {
         logger.info("Transport disconnected")
     }
     
-    /// Sends data, chunking if necessary
+    /// Sends data, chunking only if necessary for large messages
     func send(_ data: Data) async throws {
         guard isConnected else {
             throw MCPError.transportError(Errno(rawValue: ENOTCONN))
         }
         
-        // Chunk the message
-        let frames = await chunker.chunkMessage(data)
+        // Only chunk if message is large enough to need it
+        // For compatibility with non-chunking servers, send small messages directly
+        let maxDirectSize = MessageChunker.maxChunkSize - 100 // Leave room for overhead
         
-        // Send each frame
-        for frame in frames {
-            try inPipe.fileHandleForWriting.write(contentsOf: frame)
+        if data.count <= maxDirectSize {
+            // Send directly without chunking overhead
+            var messageWithNewline = data
+            if data.last != UInt8(ascii: "\n") {
+                messageWithNewline.append(UInt8(ascii: "\n"))
+            }
+            try inPipe.fileHandleForWriting.write(contentsOf: messageWithNewline)
+        } else {
+            // Message is large, use chunking
+            let frames = await chunker.chunkMessage(data)
+            for frame in frames {
+                try inPipe.fileHandleForWriting.write(contentsOf: frame)
+            }
         }
     }
     

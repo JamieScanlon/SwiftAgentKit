@@ -336,6 +336,55 @@ struct ClientTransportTests {
         await transport.disconnect()
     }
     
+    @Test("Large messages can be sent without errors")
+    func testLargeMessagesSendSuccessfully() async throws {
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        
+        let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe)
+        try await transport.connect()
+        
+        // Create a large message that exceeds the direct send threshold
+        let largeContent = String(repeating: "A", count: 65000)
+        let largeMessage = """
+        {"jsonrpc":"2.0","method":"large_test","id":1,"params":{"data":"\(largeContent)"}}
+        """
+        
+        // Should not throw an error when sending large message
+        if let data = largeMessage.data(using: .utf8) {
+            try await transport.send(data)
+        }
+        
+        // If we got here without throwing, the test passes
+        #expect(true)
+        
+        await transport.disconnect()
+    }
+    
+    @Test("Small messages can be sent without errors")
+    func testSmallMessagesSendSuccessfully() async throws {
+        let inPipe = Pipe()
+        let outPipe = Pipe()
+        
+        let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe)
+        try await transport.connect()
+        
+        // Create a small message
+        let smallMessage = """
+        {"jsonrpc":"2.0","method":"test","id":1,"params":{"data":"small"}}
+        """
+        
+        // Should not throw an error when sending small message
+        if let data = smallMessage.data(using: .utf8) {
+            try await transport.send(data)
+        }
+        
+        // If we got here without throwing, the test passes
+        #expect(true)
+        
+        await transport.disconnect()
+    }
+    
     @Test("Chunking with interleaved log messages")
     func testChunkingWithInterleavedLogs() async throws {
         let inPipe = Pipe()
