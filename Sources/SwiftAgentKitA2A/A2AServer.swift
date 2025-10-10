@@ -168,18 +168,8 @@ public actor A2AServer {
             return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after processing", status: .internalServerError)
         }
         
-        // Wrap response in JSON-RPC envelope
-        let rpcResponse = [
-            "jsonrpc": "2.0",
-            "id": requestId,
-            "result": updatedTask
-        ] as [String : Any]
-        
-        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
-        let response = Response(status: .ok)
-        response.body = .init(data: data)
-        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
-        return response
+        // Encode the task and create JSON-RPC response
+        return try jsonRPCSuccessResponse(id: requestId, result: updatedTask)
     }
     
     private func handleMessageStream(_ req: Request) async throws -> Response {
@@ -316,18 +306,8 @@ public actor A2AServer {
             task.history = hist.suffix(historyLength)
         }
         
-        // Wrap response in JSON-RPC envelope
-        let rpcResponse = [
-            "jsonrpc": "2.0",
-            "id": requestId,
-            "result": task
-        ] as [String : Any]
-        
-        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
-        let response = Response(status: .ok)
-        response.body = .init(data: data)
-        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
-        return response
+        // Encode the task and create JSON-RPC response
+        return try jsonRPCSuccessResponse(id: requestId, result: task)
     }
     
     private func handleTaskCancel(_ req: Request) async throws -> Response {
@@ -360,18 +340,8 @@ public actor A2AServer {
             return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after update", status: .notFound)
         }
         
-        // Wrap response in JSON-RPC envelope
-        let rpcResponse = [
-            "jsonrpc": "2.0",
-            "id": requestId,
-            "result": updatedTask
-        ] as [String : Any]
-        
-        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
-        let response = Response(status: .ok)
-        response.body = .init(data: data)
-        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
-        return response
+        // Encode the task and create JSON-RPC response
+        return try jsonRPCSuccessResponse(id: requestId, result: updatedTask)
     }
     
     private func handlePushConfigSet(_ req: Request) async throws -> Response {
@@ -385,18 +355,8 @@ public actor A2AServer {
         let config = rpcRequest.params
         let requestId = rpcRequest.id
         
-        // Wrap response in JSON-RPC envelope
-        let rpcResponse = [
-            "jsonrpc": "2.0",
-            "id": requestId,
-            "result": config
-        ] as [String : Any]
-        
-        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
-        let response = Response(status: .ok)
-        response.body = .init(data: data)
-        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
-        return response
+        // Encode the config and create JSON-RPC response
+        return try jsonRPCSuccessResponse(id: requestId, result: config)
     }
     
     private func handlePushConfigGet(_ req: Request) async throws -> Response {
@@ -420,18 +380,8 @@ public actor A2AServer {
             )
         )
         
-        // Wrap response in JSON-RPC envelope
-        let rpcResponse = [
-            "jsonrpc": "2.0",
-            "id": requestId,
-            "result": dummy
-        ] as [String : Any]
-        
-        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
-        let response = Response(status: .ok)
-        response.body = .init(data: data)
-        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
-        return response
+        // Encode the config and create JSON-RPC response
+        return try jsonRPCSuccessResponse(id: requestId, result: dummy)
     }
     
     private func handleAuthenticatedExtendedCard(_ req: Request) async throws -> Response {
@@ -452,18 +402,8 @@ public actor A2AServer {
             }
         }
         
-        // Wrap response in JSON-RPC envelope
-        let rpcResponse = [
-            "jsonrpc": "2.0",
-            "id": requestId,
-            "result": agentCard
-        ] as [String : Any]
-        
-        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
-        let response = Response(status: .ok)
-        response.body = .init(data: data)
-        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
-        return response
+        // Encode the agent card and create JSON-RPC response
+        return try jsonRPCSuccessResponse(id: requestId, result: agentCard)
     }
     
     /// On resubscribe upt to two events are sent immediately:
@@ -543,7 +483,7 @@ public actor A2AServer {
     }
 }
 
-// MARK: - JSON-RPC Error Response Helper
+// MARK: - JSON-RPC Response Helpers
 
 extension A2AServer {
     /// Helper to create a JSON-RPC 2.0 error response
@@ -552,5 +492,29 @@ extension A2AServer {
         let errorResp = JSONRPCErrorResponse(jsonrpc: "2.0", id: id, error: error)
         let data = (try? encoder.encode(errorResp)) ?? Data()
         return Response(status: status, body: .init(data: data))
+    }
+    
+    /// Helper to create a JSON-RPC 2.0 success response with a properly encoded result
+    fileprivate func jsonRPCSuccessResponse<T: Encodable>(id: Int, result: T) throws -> Response {
+        // First encode the result to JSON data
+        let resultData = try encoder.encode(result)
+        
+        // Decode it to a JSON object (dictionary or array)
+        let resultObject = try JSONSerialization.jsonObject(with: resultData)
+        
+        // Create the RPC response envelope
+        let rpcResponse: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": resultObject
+        ]
+        
+        // Serialize the final response
+        let data = try JSONSerialization.data(withJSONObject: rpcResponse)
+        
+        let response = Response(status: .ok)
+        response.body = .init(data: data)
+        response.headers.replaceOrAdd(name: .contentType, value: "application/json")
+        return response
     }
 }
