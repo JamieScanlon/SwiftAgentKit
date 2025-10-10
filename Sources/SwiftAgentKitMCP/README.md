@@ -54,30 +54,26 @@ try await Task.sleep(nanoseconds: UInt64.max)
 
 The MCPServer supports different transport types for various deployment scenarios:
 
-#### Stdio Transport (Default)
+#### Stdio Transport (Default - Adaptive)
 ```swift
-// Default stdio transport - most common for MCP servers
+// Stdio transport - automatically handles both small and large messages
 let server = MCPServer(name: "my-tool-server", version: "1.0.0")
 // or explicitly:
 let server = MCPServer(name: "my-tool-server", version: "1.0.0", transportType: .stdio)
 ```
 
-#### Chunked Stdio Transport (Recommended for Large Messages)
-```swift
-// Chunked stdio transport - handles messages larger than 64KB
-// Recommended for servers that may send/receive large data
-let server = MCPServer(
-    name: "my-tool-server",
-    version: "1.0.0",
-    transportType: .chunkedStdio
-)
-```
+**Adaptive behavior:**
+- ✅ **Small messages** (<60KB): Sent as plain JSON-RPC for compatibility
+- ✅ **Large messages** (≥60KB): Automatically chunked to avoid pipe limits
+- ✅ **Mixed receive**: Handles both plain and chunked messages transparently
+- ✅ **No negotiation needed**: Both sides adapt automatically
+- ✅ **No configuration needed**: Just use `.stdio` and it adapts automatically
 
-**When to use chunked stdio:**
-- ✅ Messages may exceed 64KB (macOS pipe buffer limit)
-- ✅ Transferring large tool results or file contents
-- ✅ Working with large datasets
-- ✅ Need transparent handling of large messages
+The stdio transport now intelligently handles messages of any size without requiring you to specify chunking upfront. It automatically:
+- Sends small messages directly for maximum compatibility
+- Chunks large messages to work around the 64KB macOS pipe limit
+- Receives both plain JSON-RPC and chunked frames from peers
+- Works transparently - no capability negotiation required
 
 See [MessageChunking.md](../../docs/MessageChunking.md) for detailed documentation.
 
@@ -365,9 +361,10 @@ On macOS, pipe buffers have a 64KB limit. For applications that need to send or 
 - Tool responses with large data can't be transmitted
 
 **Solution:**
-- Use `transportType: .chunkedStdio` for the server
-- Client-side `ClientTransport` automatically supports chunking
-- Messages are transparently split into ~60KB frames
+- The default `.stdio` transport now handles this automatically
+- Both server and client adaptively chunk large messages
+- Messages are transparently split into ~60KB frames when needed
+- Small messages sent as plain JSON-RPC for compatibility
 - Frames are reassembled on the receiving end
 
 **How it works:**
@@ -378,25 +375,30 @@ On macOS, pipe buffers have a 64KB limit. For applications that need to send or 
 
 **Example:**
 ```swift
-// Server with chunking
+// Server with automatic adaptive chunking
 let server = MCPServer(
     name: "large-data-server",
-    version: "1.0.0",
-    transportType: .chunkedStdio  // Enable chunking
+    version: "1.0.0"
+    // No special configuration needed - stdio is adaptive by default!
 )
 
 await server.registerTool(toolDefinition: toolDef) { arguments in
-    // Can return data > 64KB without issues
+    // Can return data of any size without issues
     let largeData = generateLargeReport()  // e.g., 200KB
     return .success(largeData)
 }
 
-// Client automatically handles chunking
+// Client automatically handles both plain and chunked messages
 let client = MCPClient(name: "client")
 try await client.connect(inPipe: inPipe, outPipe: outPipe)
 let result = try await client.callTool("generate_report")
-// Works seamlessly even with 200KB response!
+// Works seamlessly with messages of any size!
 ```
+
+The transport automatically:
+- Detects message size and chunks if needed
+- Handles both plain JSON-RPC and chunked frames on receive
+- Works transparently with any MCP-compatible client/server
 
 For complete documentation, see [docs/MessageChunking.md](../../docs/MessageChunking.md).
 

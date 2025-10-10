@@ -1,5 +1,5 @@
 //
-//  ChunkedStdioTransport.swift
+//  AdaptiveStdioTransport.swift
 //  SwiftAgentKit
 //
 //  Created by Marvin Scanlon
@@ -10,8 +10,14 @@ import Logging
 import MCP
 import System
 
-/// A stdio transport that supports chunking large messages to work around pipe size limits
-public actor ChunkedStdioTransport: Transport {
+/// An adaptive stdio transport that automatically handles both plain JSON-RPC and chunked messages
+/// 
+/// This transport provides transparent support for:
+/// - Small messages: Sent as plain JSON-RPC for compatibility
+/// - Large messages (>60KB): Automatically chunked to avoid macOS 64KB pipe limit
+/// - Mixed receive: Handles both plain and chunked messages from peers
+/// - Capability negotiation: Advertises chunking support via MCP experimental capabilities
+public actor AdaptiveStdioTransport: Transport {
     public nonisolated let logger: Logger
     private let chunker: MessageChunker
     private var stdioTransport: MCP.StdioTransport
@@ -22,7 +28,7 @@ public actor ChunkedStdioTransport: Transport {
     private var messageContinuation: AsyncThrowingStream<Data, Swift.Error>.Continuation?
     
     public init(logger: Logger? = nil) {
-        self.logger = logger ?? Logger(label: "mcp.transport.chunked-stdio")
+        self.logger = logger ?? Logger(label: "mcp.transport.adaptive-stdio")
         self.chunker = MessageChunker(logger: self.logger)
         self.stdioTransport = MCP.StdioTransport()
     }
@@ -54,7 +60,7 @@ public actor ChunkedStdioTransport: Transport {
         messageContinuation?.finish()
         await stdioTransport.disconnect()
         await chunker.clearBuffers()
-        logger.info("Chunked stdio transport disconnected")
+        logger.info("Adaptive stdio transport disconnected")
     }
     
     /// Sends data, chunking only if necessary for large messages

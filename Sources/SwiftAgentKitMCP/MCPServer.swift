@@ -13,8 +13,7 @@ import EasyJSON
 import Network
 /// Available transport types for MCP server
 public enum TransportType {
-    case stdio
-    case chunkedStdio // Use this for local stdio with chunking support to handle large messages
+    case stdio // Automatically handles both chunked and non-chunked messages
     case httpClient(endpoint: URL, streaming: Bool = true, sseInitializationTimeout: TimeInterval = 10)
     case network(connection: NWConnection)
     
@@ -22,9 +21,8 @@ public enum TransportType {
     func createTransport() -> any MCP.Transport {
         switch self {
         case .stdio:
-            return MCP.StdioTransport()
-        case .chunkedStdio:
-            return ChunkedStdioTransport()
+            // Use adaptive stdio transport that handles both chunked and non-chunked
+            return AdaptiveStdioTransport()
         case .httpClient(let endpoint, let streaming, let timeout):
             return MCP.HTTPClientTransport(
                 endpoint: endpoint,
@@ -116,6 +114,8 @@ public actor MCPServer {
         self.transport = transport
         
         // Create MCP server with capabilities
+        // Note: Chunking support is transparent and automatic - no capability negotiation needed
+        // Both server and client adaptively handle chunked and non-chunked messages
         let capabilities = MCP.Server.Capabilities(
             prompts: nil,
             resources: nil,

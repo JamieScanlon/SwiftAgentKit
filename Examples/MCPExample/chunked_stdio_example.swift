@@ -17,13 +17,14 @@ public func runChunkedStdioExample() async throws {
     let logger = Logger(label: "chunked-stdio-example")
     logger.info("Starting Chunked Stdio Transport Example")
     
-    // MARK: - Setup MCP Server with Chunked Stdio Transport
+    // MARK: - Setup MCP Server with Adaptive Stdio Transport
     
-    logger.info("Creating MCP server with chunked stdio transport...")
+    logger.info("Creating MCP server with adaptive stdio transport...")
     let server = MCPServer(
-        name: "chunked-example-server",
-        version: "1.0.0",
-        transportType: .chunkedStdio  // Use chunked stdio to handle large messages
+        name: "adaptive-example-server",
+        version: "1.0.0"
+        // No need to specify transport type - .stdio is adaptive by default!
+        // It automatically handles both small and large messages
     )
     
     // Register a tool that returns a large response
@@ -67,32 +68,34 @@ public func runChunkedStdioExample() async throws {
     }
     
     logger.info("Registered tool: generate_large_response")
-    logger.info("Tool can generate responses larger than the 64KB pipe limit")
+    logger.info("Tool can generate responses of any size - chunking is automatic!")
     
     // Note: To actually start the server, you would call:
     // try await server.start()
     // 
-    // The server would then communicate via stdio using chunked frames
-    // to handle messages larger than 64KB
+    // The server automatically:
+    // - Sends small messages as plain JSON-RPC for compatibility
+    // - Chunks large messages (>60KB) to avoid pipe limits
+    // - Receives both plain and chunked messages from clients
     
-    logger.info("✓ Server configured with chunked stdio transport")
+    logger.info("✓ Server configured with adaptive stdio transport")
     
     // MARK: - Client Side
     
     logger.info("\nClient Side Configuration:")
-    logger.info("When connecting to a server with chunked stdio, the ClientTransport")
-    logger.info("automatically handles chunking and reassembly of large messages.")
+    logger.info("The client automatically handles both plain and chunked messages.")
+    logger.info("No special configuration needed!")
     logger.info("")
     logger.info("Example client code:")
     logger.info("""
-    let client = MCPClient(name: "chunked-client")
+    let client = MCPClient(name: "my-client")
     let inPipe = Pipe()
     let outPipe = Pipe()
     
-    // Connect to the server
+    // Connect to the server - automatically adapts to message sizes
     try await client.connect(inPipe: inPipe, outPipe: outPipe)
     
-    // Call a tool that returns a large response
+    // Call a tool that returns a large response - works transparently!
     let result = try await client.callTool(
         "generate_large_response",
         arguments: ["size_kb": .number(100)]  // Request 100KB response
@@ -102,17 +105,19 @@ public func runChunkedStdioExample() async throws {
     // MARK: - Technical Details
     
     logger.info("\nTechnical Details:")
-    logger.info("1. Messages are automatically chunked when they exceed ~60KB")
-    logger.info("2. Each chunk is framed with: messageId:chunkIndex:totalChunks:data")
-    logger.info("3. Chunks are reassembled on the receiving end transparently")
-    logger.info("4. Frame format is newline-delimited for compatibility")
+    logger.info("1. Small messages (<60KB) sent as plain JSON-RPC for compatibility")
+    logger.info("2. Large messages (≥60KB) automatically chunked into ~60KB frames")
+    logger.info("3. Each chunk is framed with: messageId:chunkIndex:totalChunks:data")
+    logger.info("4. Chunks are reassembled on the receiving end transparently")
+    logger.info("5. Receiving side handles both plain and chunked messages")
     logger.info("")
     logger.info("Benefits:")
     logger.info("- Handles messages of any size (not limited to 64KB)")
     logger.info("- Transparent to the application layer")
-    logger.info("- Compatible with JSON-RPC and MCP protocols")
+    logger.info("- Compatible with all MCP clients/servers")
     logger.info("- Works around macOS pipe buffer limitations")
+    logger.info("- No configuration or capability negotiation needed")
     
-    logger.info("\n✓ Chunked Stdio Example Complete")
+    logger.info("\n✓ Adaptive Stdio Example Complete")
 }
 
