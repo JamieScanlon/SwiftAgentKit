@@ -490,7 +490,9 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 messages.append(Message(
                     id: UUID(),
                     role: .assistant,
-                    content: llmResponse.content
+                    content: llmResponse.content,
+                    timestamp: Date(),
+                    toolCalls: llmResponse.toolCalls.map({$0.name})
                 ))
                 
                 // If no tool calls, we have the final answer
@@ -508,21 +510,26 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     for provider in toolProviders {
                         let result = try await provider.executeTool(toolCall)
                         if result.success {
-                            toolResults.append("Tool: \(toolCall.name)\nResult: \(result.content)")
+                            let toolResultText = "Successfully Executed Tool: \(toolCall.name)\n-- Start Tool Result ---\n\(result.content)\n-- End Tool Result ---\n\nYou can now continue with the next step in the conversation."
+                            toolResults.append(toolResultText)
                             
                             // Add tool result as a tool message
                             messages.append(Message(
                                 id: UUID(),
                                 role: .tool,
-                                content: "Tool: \(toolCall.name)\nResult: \(result.content)"
+                                content: toolResultText,
+                                timestamp: Date(),
+                                toolCalls: []
                             ))
                         } else {
-                            let errorMessage = "Tool: \(toolCall.name)\nError: \(result.content)"
+                            let errorMessage = "Error Executing Tool: \(toolCall.name)\nError: \(result.content)"
                             toolResults.append(errorMessage)
                             messages.append(Message(
                                 id: UUID(),
                                 role: .tool,
-                                content: errorMessage
+                                content: errorMessage,
+                                timestamp: Date(),
+                                toolCalls: []
                             ))
                         }
                     }
@@ -697,7 +704,9 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 messages.append(Message(
                     id: UUID(),
                     role: .assistant,
-                    content: llmResponse.content
+                    content: llmResponse.content,
+                    timestamp: Date(),
+                    toolCalls: llmResponse.toolCalls.map({$0.name})
                 ))
                 
                 // If no tool calls, we have the final answer
@@ -746,14 +755,18 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                             messages.append(Message(
                                 id: UUID(),
                                 role: .tool,
-                                content: "Tool: \(toolCall.name)\nResult: \(result.content)"
+                                content: "Successfully Executed Tool: \(toolCall.name)\n-- Start Tool Result ---\n\(result.content)\n-- End Tool Result ---\n\nYou can now continue with the next step in the conversation.",
+                                timestamp: Date(),
+                                toolCalls: []
                             ))
                         } else {
-                            let errorMessage = "Tool: \(toolCall.name)\nError: \(result.content)"
+                            let errorMessage = "Error Executing Tool: \(toolCall.name)\nError: \(result.content)"
                             messages.append(Message(
                                 id: UUID(),
                                 role: .tool,
-                                content: errorMessage
+                                content: errorMessage,
+                                timestamp: Date(),
+                                toolCalls: []
                             ))
                         }
                     }
@@ -871,7 +884,9 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             messages.append(Message(
                 id: UUID(),
                 role: .system,
-                content: systemPrompt
+                content: systemPrompt,
+                timestamp: Date(),
+                toolCalls: []
             ))
         }
         
@@ -894,7 +909,9 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         messages.append(Message(
             id: UUID(),
             role: role,
-            content: content
+            content: content,
+            timestamp: Date(),
+            toolCalls: []
         ))
         
         return messages
