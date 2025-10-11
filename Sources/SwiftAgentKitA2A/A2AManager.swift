@@ -55,7 +55,7 @@ public actor A2AManager {
               case .string(let instructions) = argsDict["instructions"] else { return nil }
         
         let a2aMessage = A2AMessage(role: "user", parts: [.text(text: instructions)], messageId: UUID().uuidString)
-        let params: MessageSendParams = .init(message: a2aMessage)
+        let params: MessageSendParams = .init(message: a2aMessage, metadata: try? .init(["toolCallId": toolCall.id]))
         let contents = try await client.streamMessage(params: params)
         var returnResponses: [LLMResponse] = []
         var responseText: String = ""

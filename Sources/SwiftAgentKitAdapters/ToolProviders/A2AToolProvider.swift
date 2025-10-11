@@ -58,7 +58,7 @@ public struct A2AToolProvider: ToolProvider {
                 parts: [.text(text: instructions)],
                 messageId: UUID().uuidString
             )
-            let params = MessageSendParams(message: a2aMessage)
+            let params = MessageSendParams(message: a2aMessage, metadata: try? .init(["toolCallId": toolCall.id]))
             
             do {
                 let result = try await client.sendMessage(params: params)
