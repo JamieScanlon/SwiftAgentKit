@@ -135,8 +135,9 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
         self.role = role
         self.content = content
         self.timestamp = timestamp
-        self.toolCalls = toolCalls
         self.images = images
+        self.toolCalls = toolCalls
+        self.toolCallId = toolCallId
         self.responseFormat = responseFormat
     }
     
