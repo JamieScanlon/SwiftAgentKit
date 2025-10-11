@@ -968,13 +968,15 @@ struct CustomTestToolProvider: ToolProvider {
             return ToolResult(
                 success: true,
                 content: "Test tool executed successfully with input: \(toolCall.arguments["input"] as? String ?? "none")",
-                metadata: .object(["source": .string("test_tool")])
+                metadata: .object(["source": .string("test_tool")]),
+                toolCallId: toolCall.id
             )
         }
         
         return ToolResult(
             success: false,
             content: "",
+            toolCallId: toolCall.id,
             error: "Unknown tool: \(toolCall.name)"
         )
     }

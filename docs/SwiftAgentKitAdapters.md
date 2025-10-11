@@ -242,13 +242,15 @@ struct CustomToolProvider: ToolProvider {
             return ToolResult(
                 success: true,
                 content: "Custom function executed successfully",
-                metadata: .object(["source": .string("custom_function")])
+                metadata: .object(["source": .string("custom_function")]),
+                toolCallId: toolCall.id
             )
         }
         
         return ToolResult(
             success: false,
             content: "",
+            toolCallId: toolCall.id,
             error: "Unknown tool: \(toolCall.name)"
         )
     }

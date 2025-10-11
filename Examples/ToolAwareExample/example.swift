@@ -170,7 +170,8 @@ struct CustomToolProvider: ToolProvider {
             return ToolResult(
                 success: true,
                 content: "Custom function executed successfully with input: \(input)",
-                metadata: .object(["source": .string("custom_function")])
+                metadata: .object(["source": .string("custom_function")]),
+                toolCallId: toolCall.id
             )
             
         case "weather_tool":
@@ -198,13 +199,15 @@ struct CustomToolProvider: ToolProvider {
                     "source": .string("weather_tool"),
                     "location": .string(location),
                     "units": .string(units)
-                ])
+                ]),
+                toolCallId: toolCall.id
             )
             
         default:
             return ToolResult(
                 success: false,
                 content: "",
+                toolCallId: toolCall.id,
                 error: "Unknown tool: \(toolCall.name)"
             )
         }

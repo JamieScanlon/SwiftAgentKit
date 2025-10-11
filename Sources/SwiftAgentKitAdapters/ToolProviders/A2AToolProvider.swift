@@ -70,7 +70,8 @@ public struct A2AToolProvider: ToolProvider {
                     return ToolResult(
                         success: true,
                         content: content,
-                        metadata: .object(["source": .string("a2a_agent")])
+                        metadata: .object(["source": .string("a2a_agent")]),
+                        toolCallId: toolCall.id
                     )
                 case .task(let task):
                     if let message = task.status.message {
@@ -80,7 +81,8 @@ public struct A2AToolProvider: ToolProvider {
                         return ToolResult(
                             success: true,
                             content: content,
-                            metadata: .object(["source": .string("a2a_agent")])
+                            metadata: .object(["source": .string("a2a_agent")]),
+                            toolCallId: toolCall.id
                         )
                     }
                 default:
@@ -95,6 +97,7 @@ public struct A2AToolProvider: ToolProvider {
         return ToolResult(
             success: false,
             content: "",
+            toolCallId: toolCall.id,
             error: "A2A agent not found or failed"
         )
     }

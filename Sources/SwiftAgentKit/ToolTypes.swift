@@ -6,12 +6,14 @@ public struct ToolResult: Sendable {
     public let success: Bool
     public let content: String
     public let metadata: JSON
+    public let toolCallId: String?
     public let error: String?
     
-    public init(success: Bool, content: String, metadata: JSON = .object([:]), error: String? = nil) {
+    public init(success: Bool, content: String, metadata: JSON = .object([:]), toolCallId: String?, error: String? = nil) {
         self.success = success
         self.content = content
         self.metadata = metadata
+        self.toolCallId = toolCallId
         self.error = error
     }
 }
@@ -112,6 +114,7 @@ public struct ToolManager: Sendable {
         return ToolResult(
             success: false,
             content: "",
+            toolCallId: toolCall.id,
             error: "Tool '\(toolCall.name)' not found in any provider"
         )
     }

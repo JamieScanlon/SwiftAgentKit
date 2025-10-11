@@ -48,7 +48,8 @@ public struct MCPToolProvider: ToolProvider {
                     return ToolResult(
                         success: true,
                         content: content,
-                        metadata: .object(["source": .string("mcp_tool")])
+                        metadata: .object(["source": .string("mcp_tool")]),
+                        toolCallId: toolCall.id
                     )
                 }
             } catch {
@@ -60,6 +61,7 @@ public struct MCPToolProvider: ToolProvider {
         return ToolResult(
             success: false,
             content: "",
+            toolCallId: toolCall.id,
             error: "MCP tool not found or failed"
         )
     }
