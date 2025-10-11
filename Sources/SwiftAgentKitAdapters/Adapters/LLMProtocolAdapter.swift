@@ -492,7 +492,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     role: .assistant,
                     content: llmResponse.content,
                     timestamp: Date(),
-                    toolCalls: llmResponse.toolCalls.map({$0.name})
+                    toolCalls: llmResponse.toolCalls.map({$0.name}),
+                    toolCallId: nil
                 ))
                 
                 // If no tool calls, we have the final answer
@@ -519,7 +520,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                                 role: .tool,
                                 content: toolResultText,
                                 timestamp: Date(),
-                                toolCalls: []
+                                toolCalls: [],
+                                toolCallId: toolCall.id
                             ))
                         } else {
                             let errorMessage = "Error Executing Tool: \(toolCall.name)\nError: \(result.content)"
@@ -529,7 +531,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                                 role: .tool,
                                 content: errorMessage,
                                 timestamp: Date(),
-                                toolCalls: []
+                                toolCalls: [],
+                                toolCallId: toolCall.id
                             ))
                         }
                     }
@@ -706,7 +709,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     role: .assistant,
                     content: llmResponse.content,
                     timestamp: Date(),
-                    toolCalls: llmResponse.toolCalls.map({$0.name})
+                    toolCalls: llmResponse.toolCalls.map({$0.name}),
+                    toolCallId: nil
                 ))
                 
                 // If no tool calls, we have the final answer
@@ -757,7 +761,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                                 role: .tool,
                                 content: "Successfully Executed Tool: \(toolCall.name)\n-- Start Tool Result ---\n\(result.content)\n-- End Tool Result ---\n\nYou can now continue with the next step in the conversation.",
                                 timestamp: Date(),
-                                toolCalls: []
+                                toolCalls: [],
+                                toolCallId: toolCall.id
                             ))
                         } else {
                             let errorMessage = "Error Executing Tool: \(toolCall.name)\nError: \(result.content)"
@@ -766,7 +771,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                                 role: .tool,
                                 content: errorMessage,
                                 timestamp: Date(),
-                                toolCalls: []
+                                toolCalls: [],
+                                toolCallId: toolCall.id
                             ))
                         }
                     }
@@ -886,7 +892,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 role: .system,
                 content: systemPrompt,
                 timestamp: Date(),
-                toolCalls: []
+                toolCalls: [],
+                toolCallId: nil
             ))
         }
         
@@ -895,10 +902,12 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             for historyMessage in history {
                 let role = convertA2ARoleToMessageRole(historyMessage.role)
                 let content = extractTextFromParts(historyMessage.parts)
+                let toolCallId = (historyMessage.metadata?.literalValue as? [String: Any])?["toolCallId"] as? String
                 messages.append(Message(
                     id: UUID(),
                     role: role,
-                    content: content
+                    content: content,
+                    toolCallId: toolCallId
                 ))
             }
         }
