@@ -9,7 +9,7 @@ public enum MessageRole: String, Codable, Sendable {
 }
 
 // TODO: Support images, audio, resources
-public struct Message: Identifiable, Codable, Equatable, Sendable {
+public struct Message: Identifiable, Codable, Sendable {
     
     public struct Image: Codable, Equatable, Sendable {
         /// `name` must be unique
@@ -125,12 +125,12 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
     public var timestamp: Date = Date()
     public var images: [Image] = []
     /// a list of tools in JSON that the model wants to use
-    public var toolCalls: [String] = []
+    public var toolCalls: [ToolCall] = []
     /// When this message is a response to a tool call, this id represents the id of the original tool call
     public var toolCallId: String?
     public var responseFormat: String?
     
-    public init(id: UUID, role: MessageRole, content: String, timestamp: Date = Date(), images: [Image] = [], toolCalls: [String] = [], toolCallId: String? = nil, responseFormat: String? = nil) {
+    public init(id: UUID, role: MessageRole, content: String, timestamp: Date = Date(), images: [Image] = [], toolCalls: [ToolCall] = [], toolCallId: String? = nil, responseFormat: String? = nil) {
         self.id = id
         self.role = role
         self.content = content
@@ -143,12 +143,21 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
     
     public func toJSON(includeImageData: Bool = false, includeThumbData: Bool = true) -> [String: Sendable] {
         let formatter = ISO8601DateFormatter()
+        let jsonToolCalls: [Sendable] = toolCalls.map({
+            let json = $0.toJSON().literalValue as! [String: Any]
+            let name = json["name"] as? String ?? ""
+            let arguments: Sendable = json["arguments"] as? [String: Sendable] ?? [:]
+            let instructions = json["instructions"] as? String ?? ""
+            let id = json["id"] as? String ?? ""
+            let returnJSON: Sendable = ["name": name, "arguments": arguments, "instructions": instructions, "id": id]
+            return returnJSON
+        })
         return [
             "id": id.uuidString,
             "role": role.rawValue,
             "content": content,
             "timestamp": formatter.string(from: timestamp),
-            "toolCalls": toolCalls,
+            "toolCalls": jsonToolCalls,
             "toolCallId": toolCallId,
             "images": images.map{ $0.toJSON(includeImageData: includeImageData, includeThumbData: includeThumbData) },
             "responseFormat": responseFormat ?? "",
@@ -162,7 +171,7 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
         dict["role"] = .string(role.rawValue)
         dict["content"] = .string(content)
         dict["timestamp"] = .string(formatter.string(from: timestamp))
-        dict["toolCalls"] = .array(toolCalls.map { .string($0) })
+        dict["toolCalls"] = .array(toolCalls.map { $0.toJSON() })
         if let toolCallId { dict["toolCallId"] = .string(toolCallId) }
         dict["images"] = .array(images.map { $0.toEasyJSON(includeImageData: includeImageData, includeThumbData: includeThumbData) })
         dict["responseFormat"] = .string(responseFormat ?? "")
@@ -191,9 +200,11 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
             return returnValue
         }()
         
-        let toolCalls: [String] = {
-            if let toolCallsArray = json["toolCalls"] as? [String] {
-                return toolCallsArray
+        let toolCalls: [ToolCall] = {
+            if let toolCallsArray = json["toolCalls"] as? [[String: Sendable]] {
+                return toolCallsArray.map({
+                    return ToolCall(name: $0["name"] as? String ?? "", arguments: try! .init($0["arguments"] as? [String: Sendable] ?? [:]), instructions: $0["instructions"] as? String, id: $0["id"] as? String)
+                })
             } else {
                 return []
             }
@@ -232,13 +243,36 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
             return returnValue
         }()
         
-        let toolCalls: [String] = {
+        let toolCalls: [ToolCall] = {
             if case .array(let toolCallsArray) = dict["toolCalls"] {
                 return toolCallsArray.compactMap { jsonValue in
-                    if case .string(let str) = jsonValue {
-                        return str
+                    if case .object(let jsonObj) = jsonValue {
+                        let name: String = {
+                            if case .string(let string) = jsonObj["name"] {
+                                return string
+                            } else {
+                                return ""
+                            }
+                        }()
+                        let arguemnts = jsonObj["arguments"] ?? JSON.object([:])
+                        let instructions: String? = {
+                            if case .string(let string) = jsonObj["instructions"] {
+                                return string
+                            } else {
+                                return nil
+                            }
+                        }()
+                        let id: String? = {
+                            if case .string(let string) = jsonObj["id"] {
+                                return string
+                            } else {
+                                return nil
+                            }
+                        }()
+                        return ToolCall(name: name, arguments: arguemnts, instructions: instructions, id: id)
+                    } else {
+                        return nil
                     }
-                    return nil
                 }
             } else {
                 return []

@@ -8,7 +8,7 @@
 import Foundation
 import EasyJSON
 
-public struct ToolCall: Sendable {
+public struct ToolCall: Sendable, Codable {
     public let name: String
     public let arguments: JSON
     public let instructions: String?
@@ -18,6 +18,13 @@ public struct ToolCall: Sendable {
         self.arguments = arguments
         self.instructions = instructions
         self.id = id
+    }
+    
+    public func toJSON() -> JSON {
+        let jsonName = JSON.string(name)
+        let jsonInstructions = JSON.string(instructions ?? "")
+        let jsonID = JSON.string(id ?? "")
+        return JSON.object(["name": jsonName, "arguments": arguments, "instructions": jsonInstructions, "id": jsonID])
     }
     
     /// Processes a string to extract tool calls in various formats.

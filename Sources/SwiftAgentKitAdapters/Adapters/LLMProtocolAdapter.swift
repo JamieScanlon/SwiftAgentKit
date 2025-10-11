@@ -492,7 +492,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     role: .assistant,
                     content: llmResponse.content,
                     timestamp: Date(),
-                    toolCalls: llmResponse.toolCalls.map({$0.name}),
+                    toolCalls: llmResponse.toolCalls,
                     toolCallId: nil
                 ))
                 
@@ -709,7 +709,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     role: .assistant,
                     content: llmResponse.content,
                     timestamp: Date(),
-                    toolCalls: llmResponse.toolCalls.map({$0.name}),
+                    toolCalls: llmResponse.toolCalls,
                     toolCallId: nil
                 ))
                 
