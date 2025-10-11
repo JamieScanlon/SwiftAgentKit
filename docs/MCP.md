@@ -120,7 +120,8 @@ Task {
     let toolCall = ToolCall(
         name: "example_tool",
         arguments: ["input": "Hello from MCPManager"],
-        instructions: "Process this input"
+        instructions: "Process this input",
+        id: UUID().uuidString
     )
     
     // Execute the tool call

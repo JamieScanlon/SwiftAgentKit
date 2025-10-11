@@ -64,7 +64,7 @@ import EasyJSON
         #expect(streamChunk.isStreamingChunk == true)
         
         // Test response with tool calls
-        let toolCall = ToolCall(name: "calculator", arguments: try! JSON(["expression": "2+2"]))
+        let toolCall = ToolCall(name: "calculator", arguments: try! JSON(["expression": "2+2"]), id: UUID().uuidString)
         let toolResponse = LLMResponse.withToolCalls(
             content: "I'll calculate that for you",
             toolCalls: [toolCall]

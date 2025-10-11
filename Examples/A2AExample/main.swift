@@ -62,7 +62,8 @@ func a2aManagerExample() async {
             arguments: try! JSON([
                 "instructions": "Hello! Can you help me with a task? Please provide a brief response."
             ]),
-            instructions: "Send a greeting and request for help to the A2A agent"
+            instructions: "Send a greeting and request for help to the A2A agent",
+            id: UUID().uuidString
         )
         
         logger.info("Making agent call: \(toolCall.name)")
@@ -114,7 +115,8 @@ func a2aManagerWithRealConfigExample() async {
             arguments: try! JSON([
                 "instructions": "Write a short story about a robot learning to paint"
             ]),
-            instructions: "Generate creative text based on the provided prompt"
+            instructions: "Generate creative text based on the provided prompt",
+            id: UUID().uuidString
         )
         
         logger.info("Making agent call to: \(toolCall.name)")
@@ -153,7 +155,7 @@ func a2aManagerErrorHandlingExample() async {
     }
     
     // Example 2: Try to make an agent call before initialization
-    let toolCall = ToolCall(name: "test_agent", arguments: .object([:])) 
+    let toolCall = ToolCall(name: "test_agent", arguments: .object([:]), id: UUID().uuidString)
     
     do {
         logger.info("Attempting agent call before initialization...")
@@ -211,17 +213,20 @@ func a2aManagerMultipleAgentsExample() async {
             ToolCall(
                 name: "text_generation",
                 arguments: try! JSON(["instructions": "Hello, how are you?"]),
-                instructions: "Generate a friendly response"
+                instructions: "Generate a friendly response",
+                id: UUID().uuidString
             ),
             ToolCall(
                 name: "image_analysis",
                 arguments: try! JSON(["instructions": "Analyze this image: https://example.com/image.jpg"]),
-                instructions: "Analyze the content of this image"
+                instructions: "Analyze the content of this image",
+                id: UUID().uuidString
             ),
             ToolCall(
                 name: "data_processing",
                 arguments: try! JSON(["instructions": "Process this data: sample data in JSON format"]),
-                instructions: "Process the provided data"
+                instructions: "Process the provided data",
+                id: UUID().uuidString
             )
         ]
         
@@ -270,7 +275,8 @@ func a2aManagerStreamingExample() async {
             arguments: try! JSON([
                 "instructions": "Write a detailed story about space exploration with multiple chapters"
             ]),
-            instructions: "Generate a long-form story that will be streamed back"
+            instructions: "Generate a long-form story that will be streamed back",
+            id: UUID().uuidString
         )
         
         logger.info("Making streaming agent call: \(toolCall.name)")

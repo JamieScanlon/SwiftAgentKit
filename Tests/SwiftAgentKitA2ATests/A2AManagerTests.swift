@@ -69,11 +69,11 @@ struct A2AManagerTests {
     }
     
     /// Creates a test tool call
-    func createToolCall(name: String, instructions: String) -> ToolCall {
+    func createToolCall(name: String, instructions: String, id: String? = nil) -> ToolCall {
         let arguments: JSON = .object([
             "instructions": .string(instructions)
         ])
-        return ToolCall(name: name, arguments: arguments)
+        return ToolCall(name: name, arguments: arguments, id: id)
     }
     
     // MARK: - agentCall() Tests
@@ -98,7 +98,7 @@ struct A2AManagerTests {
         await mockClient2.setMessageToReturn([.message(testMessage)])
         
         // Create tool call targeting TestAgent2
-        let _ = createToolCall(name: "TestAgent2", instructions: "Do something")
+        let _ = createToolCall(name: "TestAgent2", instructions: "Do something", id: UUID().uuidString)
         
         // When - Call would need actual A2AManager integration
         // This test documents the expected behavior
@@ -118,7 +118,7 @@ struct A2AManagerTests {
         try await manager.initialize(clients: [])
         
         // Create a tool call for a non-existent agent
-        let toolCall = createToolCall(name: "NonExistentAgent", instructions: "Do something")
+        let toolCall = createToolCall(name: "NonExistentAgent", instructions: "Do something", id: UUID().uuidString)
         
         // When
         let result = try await manager.agentCall(toolCall)
@@ -136,7 +136,8 @@ struct A2AManagerTests {
         // Create a tool call with missing instructions
         let toolCall = ToolCall(
             name: "TestAgent",
-            arguments: .object([:])  // Missing "instructions" key
+            arguments: .object([:]),  // Missing "instructions" key
+            id: UUID().uuidString
         )
         
         // When
@@ -155,7 +156,8 @@ struct A2AManagerTests {
         // Create a tool call with non-string instructions
         let toolCall = ToolCall(
             name: "TestAgent",
-            arguments: .object(["instructions": .integer(123)])
+            arguments: .object(["instructions": .integer(123)]),
+            id: UUID().uuidString
         )
         
         // When
@@ -174,7 +176,8 @@ struct A2AManagerTests {
         // Create a tool call with array arguments instead of object
         let toolCall = ToolCall(
             name: "TestAgent",
-            arguments: .array([.string("test")])
+            arguments: .array([.string("test")]),
+            id: UUID().uuidString
         )
         
         // When
@@ -397,7 +400,7 @@ struct A2AManagerTests {
     @Test("ToolCall should have correct name for routing")
     func testToolCallNameForRouting() async throws {
         // Given
-        let toolCall = createToolCall(name: "MyAgent", instructions: "Test task")
+        let toolCall = createToolCall(name: "MyAgent", instructions: "Test task", id: UUID().uuidString)
         
         // Then
         #expect(toolCall.name == "MyAgent")
@@ -414,9 +417,9 @@ struct A2AManagerTests {
     @Test("Multiple tool calls should route to different clients")
     func testMultipleToolCallsRouteToDifferentClients() async throws {
         // Given - Different tool calls for different agents
-        let toolCall1 = createToolCall(name: "Agent1", instructions: "Task 1")
-        let toolCall2 = createToolCall(name: "Agent2", instructions: "Task 2")
-        let toolCall3 = createToolCall(name: "Agent3", instructions: "Task 3")
+        let toolCall1 = createToolCall(name: "Agent1", instructions: "Task 1", id: UUID().uuidString)
+        let toolCall2 = createToolCall(name: "Agent2", instructions: "Task 2", id: UUID().uuidString)
+        let toolCall3 = createToolCall(name: "Agent3", instructions: "Task 3", id: UUID().uuidString)
         
         // Then - Each should route to its respective agent
         #expect(toolCall1.name == "Agent1")
@@ -432,9 +435,9 @@ struct A2AManagerTests {
     @Test("agentCall should handle agent card with same name in different cases")
     func testAgentCallCaseSensitiveMatching() async throws {
         // Given - Agent names differing only in case
-        let toolCallLower = createToolCall(name: "testagent", instructions: "Task")
-        let toolCallUpper = createToolCall(name: "TestAgent", instructions: "Task")
-        let toolCallMixed = createToolCall(name: "testAgent", instructions: "Task")
+        let toolCallLower = createToolCall(name: "testagent", instructions: "Task", id: UUID().uuidString)
+        let toolCallUpper = createToolCall(name: "TestAgent", instructions: "Task", id: UUID().uuidString)
+        let toolCallMixed = createToolCall(name: "testAgent", instructions: "Task", id: UUID().uuidString)
         
         // Then - Names should be treated as different (case-sensitive)
         #expect(toolCallLower.name != toolCallUpper.name)
@@ -450,7 +453,7 @@ struct A2AManagerTests {
         newlines\t\ttabs\\backslashes and emojis 🚀
         """
         
-        let toolCall = createToolCall(name: "TestAgent", instructions: specialInstructions)
+        let toolCall = createToolCall(name: "TestAgent", instructions: specialInstructions, id: UUID().uuidString)
         
         // Verify the instructions are preserved
         if case .object(let dict) = toolCall.arguments,
@@ -465,7 +468,7 @@ struct A2AManagerTests {
     func testAgentCallWithLongInstructions() async throws {
         // Given - Very long instructions
         let longInstructions = String(repeating: "A very long instruction. ", count: 1000)
-        let toolCall = createToolCall(name: "TestAgent", instructions: longInstructions)
+        let toolCall = createToolCall(name: "TestAgent", instructions: longInstructions, id: UUID().uuidString)
         
         // Verify instructions are preserved
         if case .object(let dict) = toolCall.arguments,

@@ -55,7 +55,8 @@ Task {
         arguments: [
             "instructions": "Write a short story about a robot learning to paint"
         ],
-        instructions: "Generate creative text based on the provided prompt"
+        instructions: "Generate creative text based on the provided prompt",
+        id: UUID().uuidString
     )
     
     // Execute the agent call

@@ -12,10 +12,12 @@ public struct ToolCall: Sendable {
     public let name: String
     public let arguments: JSON
     public let instructions: String?
-    public init(name: String, arguments: JSON = .object([:]), instructions: String? = nil) {
+    public let id: String?
+    public init(name: String, arguments: JSON = .object([:]), instructions: String? = nil, id: String? = nil) {
         self.name = name
         self.arguments = arguments
         self.instructions = instructions
+        self.id = id
     }
     
     /// Processes a string to extract tool calls in various formats.
@@ -487,13 +489,13 @@ public struct ToolCall: Sendable {
             arguments = parseToolCallArgumentsFromString(argsString)
         }
         
-        return ToolCall(name: functionName, arguments: arguments)
+        return ToolCall(name: functionName, arguments: arguments, id: UUID().uuidString)
     }
     
     /// Parses tool call data from JSON format to ToolCall object
     public static func parseToolCallFromData(_ data: Data) -> ToolCall? {
         guard let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let _ = dict["id"] as? String,
+              let id = dict["id"] as? String,
               let type = dict["type"] as? String,
               type == "function",
               let functionDict = dict["function"] as? [String: Any],
@@ -513,7 +515,7 @@ public struct ToolCall: Sendable {
             return nil
         }
         
-        return ToolCall(name: name, arguments: arguments)
+        return ToolCall(name: name, arguments: arguments, id: id)
     }
     
     private static func parseToolcallFromJsonString(_ jsonString: String) -> ToolCall? {
@@ -560,7 +562,7 @@ public struct ToolCall: Sendable {
                 arguments = .object(jsonDict)
             }
             
-            return ToolCall(name: name, arguments: arguments)
+            return ToolCall(name: name, arguments: arguments, id: dict["id"] as? String)
         } catch {
             return nil
         }

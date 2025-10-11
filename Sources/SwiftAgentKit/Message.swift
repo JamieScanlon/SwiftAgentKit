@@ -126,6 +126,8 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
     public var images: [Image] = []
     /// a list of tools in JSON that the model wants to use
     public var toolCalls: [String] = []
+    /// When this message is a response to a tool call, this id represents the id of the original tool call
+    public var toolCallId: String?
     public var responseFormat: String?
     
     public init(id: UUID, role: MessageRole, content: String, timestamp: Date = Date(), images: [Image] = [], toolCalls: [String] = [], responseFormat: String? = nil) {

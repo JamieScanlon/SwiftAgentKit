@@ -1065,7 +1065,7 @@ extension ChatQuery.ChatCompletionMessageParam.AssistantMessageParam.ToolCallPar
         } else {
             args = .object([:])
         }
-        return ToolCall(name: self.function.name, arguments: args)
+        return ToolCall(name: self.function.name, arguments: args, id: self.id)
     }
 }
 
@@ -1082,7 +1082,7 @@ extension ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall {
             } else {
                 args = .object([:])
             }
-            return ToolCall(name: name, arguments: args)
+            return ToolCall(name: name, arguments: args, id: self.id)
         }
         return nil
     }

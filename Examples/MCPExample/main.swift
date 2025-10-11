@@ -281,7 +281,8 @@ func mcpManagerWithNewArchitectureExample() async {
         let toolCall = ToolCall(
             name: "example_tool",
             arguments: try! JSON(["input": "Hello from new architecture!"]),
-            instructions: "Process this input"
+            instructions: "Process this input",
+            id: UUID().uuidString
         )
         
         if let messages = try await mcpManager.toolCall(toolCall) {
