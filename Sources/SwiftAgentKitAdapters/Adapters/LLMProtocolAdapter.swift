@@ -193,7 +193,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let task = await store.getTask(id: taskId)
             
             // Convert A2A message to SwiftAgentKit Message
-            let messages = try convertA2AMessageToMessages(params.message, taskHistory: task?.history)
+            let messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history)
             
             // Create LLM request configuration
             let llmConfig = LLMRequestConfig(
@@ -283,7 +283,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let task = await store.getTask(id: taskId)
             
             // Convert A2A message to SwiftAgentKit Message
-            let messages = try convertA2AMessageToMessages(params.message, taskHistory: task?.history)
+            let messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history)
             
             // Create LLM request configuration for streaming
             let llmConfig = LLMRequestConfig(
@@ -450,7 +450,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let task = await store.getTask(id: taskId)
             
             // Convert A2A message to SwiftAgentKit Message
-            var messages = try convertA2AMessageToMessages(params.message, taskHistory: task?.history)
+            var messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history)
             let availableToolCalls: [ToolDefinition] = await {
                 var returnValue = [ToolDefinition]()
                 for provider in toolProviders {
@@ -630,7 +630,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let task = await store.getTask(id: taskId)
             
             // Convert A2A message to SwiftAgentKit Message
-            var messages = try convertA2AMessageToMessages(params.message, taskHistory: task?.history)
+            var messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history)
             
             // Create LLM request configuration for streaming WITH tools
             let llmConfig = LLMRequestConfig(
@@ -876,7 +876,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     
     // MARK: - Helper Methods
     
-    private func convertA2AMessageToMessages(_ a2aMessage: A2AMessage, taskHistory: [A2AMessage]?) throws -> [Message] {
+    private func convertA2AMessageToMessages(_ a2aMessage: A2AMessage, metadata: JSON?, taskHistory: [A2AMessage]?) throws -> [Message] {
         var messages: [Message] = []
         
         // Add system prompt if configured
@@ -906,12 +906,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         // Add current message
         let role = convertA2ARoleToMessageRole(a2aMessage.role)
         let content = extractTextFromParts(a2aMessage.parts)
+        let toolCallId = (metadata?.literalValue as? [String: Any])?["toolCallId"] as? String
         messages.append(Message(
             id: UUID(),
             role: role,
             content: content,
             timestamp: Date(),
-            toolCalls: []
+            toolCalls: [],
+            toolCallId: toolCallId
         ))
         
         return messages

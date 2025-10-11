@@ -202,15 +202,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         )
         
         do {
-            // Extract text from message parts
-            let prompt = extractTextFromParts(params.message.parts)
             
             // Get task history from store
             let task = await store.getTask(id: taskId)
             let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task?.history)
             
             // Call OpenAI API with conversation context
-            let response = try await callOpenAI(prompt: prompt, conversationHistory: conversationHistory)
+            let response = try await callOpenAI(a2aMessage: params.message, metadata: params.metadata, conversationHistory: conversationHistory)
             
             // Create response Artifact
             let responseArtifact = Artifact(
@@ -283,15 +281,13 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         eventSink(workingResponse)
         
         do {
-            // Extract text from message parts
-            let prompt = extractTextFromParts(params.message.parts)
             
             // Get task history from store
             let task = await store.getTask(id: taskId)
             let conversationHistory = buildConversationHistory(from: params.message.parts, taskHistory: task?.history)
             
             // Stream from OpenAI API
-            let stream = try await streamFromOpenAI(prompt: prompt, conversationHistory: conversationHistory)
+            let stream = try await streamFromOpenAI(a2aMessage: params.message, metadata: params.metadata, conversationHistory: conversationHistory)
             
             var accumulatedText = ""
             var partialArtifacts: [Artifact] = []
@@ -424,17 +420,6 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - Private Methods
     
-
-    
-    private func extractTextFromParts(_ parts: [A2AMessagePart]) -> String {
-        return parts.compactMap { part in
-            if case .text(let text) = part {
-                return text
-            }
-            return nil
-        }.joined(separator: " ")
-    }
-    
     private func buildConversationHistory(from messageParts: [A2AMessagePart], taskHistory: [A2AMessage]?) -> [ChatQuery.ChatCompletionMessageParam] {
         var history: [ChatQuery.ChatCompletionMessageParam] = []
         
@@ -452,7 +437,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         return history
     }
     
-    private func callOpenAI(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = []) async throws -> String {
+    private func callOpenAI(a2aMessage: A2AMessage, metadata: JSON?, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = []) async throws -> String {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
         
@@ -467,8 +452,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         messages.append(contentsOf: conversationHistory)
         
         // Add current user message
-        if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
-            messages.append(userMessage)
+        let role = convertA2ARoleToMessageRole(a2aMessage.role)
+        let content = extractTextFromParts(a2aMessage.parts)
+        let toolCallId = (metadata?.literalValue as? [String: Any])?["toolCallId"] as? String
+        if let currentMessage = ChatQuery.ChatCompletionMessageParam(role: role, content: content, toolCallId: toolCallId) {
+            messages.append(currentMessage)
         }
         
         let query = ChatQuery(
@@ -493,7 +481,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
 
     
-    private func streamFromOpenAI(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = []) async throws -> AsyncThrowingStream<String, Error> {
+    private func streamFromOpenAI(a2aMessage: A2AMessage, metadata: JSON?, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = []) async throws -> AsyncThrowingStream<String, Error> {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
         
@@ -507,9 +495,12 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         // Add conversation history
         messages.append(contentsOf: conversationHistory)
         
-        // Add current user message
-        if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
-            messages.append(userMessage)
+        // Add current message
+        let role = convertA2ARoleToMessageRole(a2aMessage.role)
+        let content = extractTextFromParts(a2aMessage.parts)
+        let toolCallId = (metadata?.literalValue as? [String: Any])?["toolCallId"] as? String
+        if let currentMessage = ChatQuery.ChatCompletionMessageParam(role: role, content: content, toolCallId: toolCallId) {
+            messages.append(currentMessage)
         }
         
         let query = ChatQuery(
@@ -562,8 +553,6 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         )
         
         do {
-            // Extract text from message parts
-            let prompt = extractTextFromParts(params.message.parts)
             
             // Get task history from store
             let task = await store.getTask(id: taskId)
@@ -577,7 +566,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             }
             
             // Call OpenAI API with tools
-            let response = try await callOpenAIWithTools(prompt: prompt, conversationHistory: conversationHistory, tools: tools)
+            let response = try await callOpenAIWithTools(a2aMessage: params.message, metadata: params.metadata, conversationHistory: conversationHistory, tools: tools)
             
             // Look at the text response for any tool calls not parsed automatically
             var llmResponse = LLMResponse.llmResponse(from: response.message.content ?? "", availableTools: availableToolCalls)
@@ -856,7 +845,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - Private Helper Methods for Tools
     
-    private func callOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> ChatResult.Choice {
+    private func callOpenAIWithTools(a2aMessage: A2AMessage, metadata: JSON?, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> ChatResult.Choice {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
         
@@ -870,8 +859,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         // Add conversation history
         messages.append(contentsOf: conversationHistory)
         
-        // Add current user message
-        if let userMessage = ChatQuery.ChatCompletionMessageParam(role: .user, content: prompt) {
+        // Add current message
+        let role = convertA2ARoleToMessageRole(a2aMessage.role)
+        let content = extractTextFromParts(a2aMessage.parts)
+        let toolCallId = (metadata?.literalValue as? [String: Any])?["toolCallId"] as? String
+        if let userMessage = ChatQuery.ChatCompletionMessageParam(role: role, content: content, toolCallId: toolCallId) {
             messages.append(userMessage)
         }
         
@@ -894,6 +886,34 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         }
         
         return firstChoice
+    }
+    
+    private func convertA2ARoleToMessageRole(_ a2aRole: String) -> ChatQuery.ChatCompletionMessageParam.Role {
+        switch a2aRole.lowercased() {
+        case "user":
+            return .user
+        case "assistant":
+            return .assistant
+        case "system":
+            return .system
+        case "tool":
+            return .tool
+        default:
+            return .user
+        }
+    }
+    
+    private func extractTextFromParts(_ parts: [A2AMessagePart]) -> String {
+        return parts.compactMap { part in
+            switch part {
+            case .text(let text):
+                return text
+            case .file, .data:
+                // For now, we'll skip non-text parts
+                // In the future, this could be enhanced to handle files and data
+                return nil
+            }
+        }.joined(separator: "\n")
     }
     
     // MARK: - Helper Methods for Response Processing

@@ -130,7 +130,7 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
     public var toolCallId: String?
     public var responseFormat: String?
     
-    public init(id: UUID, role: MessageRole, content: String, timestamp: Date = Date(), images: [Image] = [], toolCalls: [String] = [], responseFormat: String? = nil) {
+    public init(id: UUID, role: MessageRole, content: String, timestamp: Date = Date(), images: [Image] = [], toolCalls: [String] = [], toolCallId: String? = nil, responseFormat: String? = nil) {
         self.id = id
         self.role = role
         self.content = content
@@ -148,6 +148,7 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
             "content": content,
             "timestamp": formatter.string(from: timestamp),
             "toolCalls": toolCalls,
+            "toolCallId": toolCallId,
             "images": images.map{ $0.toJSON(includeImageData: includeImageData, includeThumbData: includeThumbData) },
             "responseFormat": responseFormat ?? "",
         ]
@@ -161,6 +162,7 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
         dict["content"] = .string(content)
         dict["timestamp"] = .string(formatter.string(from: timestamp))
         dict["toolCalls"] = .array(toolCalls.map { .string($0) })
+        if let toolCallId { dict["toolCallId"] = .string(toolCallId) }
         dict["images"] = .array(images.map { $0.toEasyJSON(includeImageData: includeImageData, includeThumbData: includeThumbData) })
         dict["responseFormat"] = .string(responseFormat ?? "")
         return .object(dict)
@@ -196,9 +198,10 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
             }
         }()
         
+        let toolCallId = json["toolCallId"] as? String
         let responseFormat = json["responseFormat"] as? String
         
-        return Message(id: id, role: role, content: content, timestamp: timestamp, images: images, toolCalls: toolCalls, responseFormat: responseFormat)
+        return Message(id: id, role: role, content: content, timestamp: timestamp, images: images, toolCalls: toolCalls, toolCallId: toolCallId, responseFormat: responseFormat)
     }
     
     public static func fromEasyJSON(_ json: JSON) -> Message? {
@@ -241,6 +244,13 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
             }
         }()
         
+        let toolCallId: String? = {
+            if case .string(let format) = dict["toolCallId"], !format.isEmpty {
+                return format
+            }
+            return nil
+        }()
+        
         let responseFormat: String? = {
             if case .string(let format) = dict["responseFormat"], !format.isEmpty {
                 return format
@@ -248,6 +258,6 @@ public struct Message: Identifiable, Codable, Equatable, Sendable {
             return nil
         }()
         
-        return Message(id: id, role: role, content: content, timestamp: timestamp, images: images, toolCalls: toolCalls, responseFormat: responseFormat)
+        return Message(id: id, role: role, content: content, timestamp: timestamp, images: images, toolCalls: toolCalls, toolCallId: toolCallId, responseFormat: responseFormat)
     }
 }
