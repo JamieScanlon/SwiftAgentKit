@@ -3,6 +3,14 @@ import SwiftAgentKit
 import Logging
 import EasyJSON
 
+private func configureExampleLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.llmprotocol"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("LLMProtocol")))
+    )
+}
+
 // Example implementation of LLMProtocol for demonstration
 struct MockLLM: LLMProtocol {
     let model: String
@@ -57,17 +65,19 @@ struct MockLLM: LLMProtocol {
 
 // Example usage function
 func demonstrateLLMProtocol() async {
-    // Set up logging
-    LoggingSystem.bootstrap { label in
-        var handler = StreamLogHandler.standardOutput(label: label)
-        handler.logLevel = .info
-        return handler
-    }
+    configureExampleLogging()
     
-    let logger = Logger(label: "LLMProtocolExample")
+    let logger = SwiftAgentKitLogging.logger(
+        for: .examples("LLMProtocolExample")
+    )
     
     // Create a mock LLM
-    let mockLLM = MockLLM(model: "mock-gpt-4", logger: logger)
+    let mockLLM = MockLLM(
+        model: "mock-gpt-4",
+        logger: SwiftAgentKitLogging.logger(
+            for: .examples("LLMProtocolExample.MockLLM")
+        )
+    )
     
     // Create a test message
     let message = Message(

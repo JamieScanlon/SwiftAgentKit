@@ -12,33 +12,36 @@ import Logging
 public actor BearerTokenAuthProvider: AuthenticationProvider {
     
     public let scheme: AuthenticationScheme = .bearer
-    private let logger = Logger(label: "BearerTokenAuthProvider")
+    private let logger: Logger
     
     private var token: String
     private let tokenRefreshHandler: (() async throws -> String)?
     private var tokenExpiresAt: Date?
     
-    /// Initialize with a static token
-    /// - Parameter token: The bearer token to use
-    public init(token: String) {
-        self.token = token
-        self.tokenRefreshHandler = nil
-        self.tokenExpiresAt = nil
-    }
-    
-    /// Initialize with a token and refresh capability
-    /// - Parameters:
-    ///   - token: Initial bearer token
-    ///   - expiresAt: When the token expires (optional)
-    ///   - refreshHandler: Closure to refresh the token when needed
     public init(
         token: String,
         expiresAt: Date? = nil,
-        refreshHandler: (() async throws -> String)?
+        refreshHandler: (() async throws -> String)? = nil,
+        logger: Logger? = nil
     ) {
         self.token = token
         self.tokenExpiresAt = expiresAt
         self.tokenRefreshHandler = refreshHandler
+        if let logger {
+            self.logger = logger
+        } else {
+            let metadata = SwiftAgentKitLogging.metadata(
+                ("refreshable", .string(refreshHandler != nil ? "true" : "false"))
+            )
+            self.logger = SwiftAgentKitLogging.logger(
+                for: .authentication("BearerTokenAuthProvider"),
+                metadata: metadata
+            )
+        }
+    }
+    
+    public init(token: String) {
+        self.init(token: token, expiresAt: nil, refreshHandler: nil, logger: nil)
     }
     
     public func authenticationHeaders() async throws -> [String: String] {
@@ -51,7 +54,10 @@ public actor BearerTokenAuthProvider: AuthenticationProvider {
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info("Handling authentication challenge with status code: \(challenge.statusCode)")
+        logger.info(
+            "Handling bearer authentication challenge",
+            metadata: ["status": .stringConvertible(challenge.statusCode)]
+        )
         
         guard challenge.statusCode == 401 else {
             throw AuthenticationError.authenticationFailed("Unexpected status code: \(challenge.statusCode)")
@@ -100,7 +106,10 @@ public actor BearerTokenAuthProvider: AuthenticationProvider {
             self.token = newToken
             logger.info("Successfully refreshed bearer token")
         } catch {
-            logger.error("Failed to refresh token: \(error)")
+            logger.error(
+                "Failed to refresh token",
+                metadata: ["error": .string(String(describing: error))]
+            )
             throw AuthenticationError.authenticationFailed("Token refresh failed: \(error.localizedDescription)")
         }
     }

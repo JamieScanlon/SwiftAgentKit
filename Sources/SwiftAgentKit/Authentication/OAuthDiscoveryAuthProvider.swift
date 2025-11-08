@@ -14,7 +14,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     
     public nonisolated let scheme: AuthenticationScheme = .oauth
     
-    private let logger = Logger(label: "OAuthDiscoveryAuthProvider")
+    private let logger: Logger
     private let discoveryManager: OAuthDiscoveryManager
     private let resourceServerURL: URL
     private let resourceType: String?
@@ -55,32 +55,19 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         preConfiguredAuthServerURL: URL? = nil,
         resourceURI: String? = nil
     ) throws {
-        self.resourceServerURL = resourceServerURL
-        self.clientId = clientId
-        self.clientSecret = clientSecret
-        self.scope = scope
-        self.redirectURI = redirectURI
-        self.resourceType = resourceType
-        self.preConfiguredAuthServerURL = preConfiguredAuthServerURL
-        
-        // Use provided resourceURI or derive from resourceServerURL
-        let targetResourceURI = resourceURI ?? resourceServerURL.absoluteString
-        self.resourceURI = try ResourceIndicatorUtilities.canonicalizeResourceURI(targetResourceURI)
-        
-        self.discoveryManager = OAuthDiscoveryManager()
+        try self.init(
+            resourceServerURL: resourceServerURL,
+            clientId: clientId,
+            clientSecret: clientSecret,
+            scope: scope,
+            redirectURI: redirectURI,
+            resourceType: resourceType,
+            preConfiguredAuthServerURL: preConfiguredAuthServerURL,
+            discoveryManager: OAuthDiscoveryManager(),
+            resourceURI: resourceURI
+        )
     }
     
-    /// Initialize OAuth Discovery authentication provider with discovery manager
-    /// - Parameters:
-    ///   - resourceServerURL: URL of the MCP server (Resource Server)
-    ///   - clientId: OAuth client ID
-    ///   - clientSecret: OAuth client secret (optional for public clients)
-    ///   - scope: OAuth scope (optional)
-    ///   - redirectURI: OAuth redirect URI
-    ///   - resourceType: Type of resource (e.g., "mcp" for MCP servers)
-    ///   - preConfiguredAuthServerURL: Pre-configured authorization server URL (optional)
-    ///   - discoveryManager: Custom discovery manager (optional)
-    ///   - resourceURI: Resource URI for RFC 8707 Resource Indicators (optional, will use resourceServerURL if not provided)
     public init(
         resourceServerURL: URL,
         clientId: String,
@@ -104,6 +91,15 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // Use provided resourceURI or derive from resourceServerURL
         let targetResourceURI = resourceURI ?? resourceServerURL.absoluteString
         self.resourceURI = try ResourceIndicatorUtilities.canonicalizeResourceURI(targetResourceURI)
+        
+        let metadata: Logger.Metadata = [
+            "resourceServer": .string(resourceServerURL.absoluteString),
+            "clientId": .string(clientId)
+        ]
+        self.logger = SwiftAgentKitLogging.logger(
+            for: .authentication("OAuthDiscoveryAuthProvider"),
+            metadata: metadata
+        )
     }
     
     // MARK: - AuthenticationProvider Protocol

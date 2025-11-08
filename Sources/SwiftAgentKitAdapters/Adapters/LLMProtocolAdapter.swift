@@ -101,11 +101,17 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     
     public init(
         llm: LLMProtocol,
-        configuration: Configuration
+        configuration: Configuration,
+        logger: Logger? = nil
     ) {
         self.llm = llm
         self.config = configuration
-        self.logger = Logger(label: "LLMProtocolAdapter")
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .adapters("LLMProtocolAdapter"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("model", .string(configuration.model))
+            )
+        )
     }
     
     public init(
@@ -122,7 +128,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         cardCapabilities: AgentCard.AgentCapabilities? = nil,
         skills: [AgentCard.AgentSkill]? = nil,
         defaultInputModes: [String]? = nil,
-        defaultOutputModes: [String]? = nil
+        defaultOutputModes: [String]? = nil,
+        logger: Logger? = nil
     ) {
         let config = Configuration(
             model: model ?? llm.getModelName(),
@@ -139,7 +146,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             defaultInputModes: defaultInputModes,
             defaultOutputModes: defaultOutputModes
         )
-        self.init(llm: llm, configuration: config)
+        self.init(llm: llm, configuration: config, logger: logger)
     }
     
     // MARK: - AgentAdapter Implementation
@@ -230,7 +237,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
             
         } catch {
-            logger.error("LLM call failed: \(error)")
+            logger.error(
+                "LLM call failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             
             // Update task with failed status
             await store.updateTaskStatus(
@@ -400,7 +414,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             eventSink(completedResponse)
             
         } catch {
-            logger.error("LLM streaming failed: \(error)")
+            logger.error(
+                "LLM streaming failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             
             // Update task with failed status
             let failedStatus = TaskStatus(
@@ -476,7 +497,15 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             
             while iteration < config.maxAgenticIterations {
                 iteration += 1
-                logger.info("Agentic iteration \(iteration)/\(config.maxAgenticIterations)")
+                logger.debug(
+                    "Agentic iteration started",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("taskId", .string(taskId)),
+                        ("contextId", .string(contextId)),
+                        ("iteration", .stringConvertible(iteration)),
+                        ("maxIterations", .stringConvertible(config.maxAgenticIterations))
+                    )
+                )
                 
                 // Call the LLM
                 let response = try await llm.send(messages, config: llmConfig)
@@ -499,12 +528,27 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 // If no tool calls, we have the final answer
                 if llmResponse.toolCalls.isEmpty {
                     finalResponse = llmResponse.content
-                    logger.info("Final response received (no tool calls)")
+                    logger.info(
+                        "Final response received without tool calls",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("taskId", .string(taskId)),
+                            ("contextId", .string(contextId)),
+                            ("iteration", .stringConvertible(iteration))
+                        )
+                    )
                     break
                 }
                 
                 // Execute tool calls and add results to conversation
-                logger.info("Executing \(llmResponse.toolCalls.count) tool call(s)")
+                logger.info(
+                    "Executing tool calls",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("taskId", .string(taskId)),
+                        ("contextId", .string(contextId)),
+                        ("toolCallCount", .stringConvertible(llmResponse.toolCalls.count)),
+                        ("toolCalls", .array(llmResponse.toolCalls.map { .string($0.name) }))
+                    )
+                )
                 var toolResults: [String] = []
                 
                 for toolCall in llmResponse.toolCalls {
@@ -541,7 +585,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             
             // Check if we hit max iterations
             if iteration >= config.maxAgenticIterations && finalResponse.isEmpty {
-                logger.warning("Max agentic iterations reached without final response")
+                logger.warning(
+                    "Max agentic iterations reached without final response",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("taskId", .string(taskId)),
+                        ("contextId", .string(contextId)),
+                        ("maxIterations", .stringConvertible(config.maxAgenticIterations))
+                    )
+                )
                 // Use the last message as the final response
                 if let lastMessage = messages.last, lastMessage.role == .assistant {
                     finalResponse = lastMessage.content
@@ -572,7 +623,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
             
         } catch {
-            logger.error("LLM call (tools) failed: \(error)")
+            logger.error(
+                "LLM call with tools failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             
             // Update task with failed status
             await store.updateTaskStatus(
@@ -651,7 +709,15 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             
             while iteration < config.maxAgenticIterations {
                 iteration += 1
-                logger.info("Agentic iteration (streaming) \(iteration)/\(config.maxAgenticIterations)")
+                logger.debug(
+                    "Agentic iteration (streaming) started",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("taskId", .string(taskId)),
+                        ("contextId", .string(contextId)),
+                        ("iteration", .stringConvertible(iteration)),
+                        ("maxIterations", .stringConvertible(config.maxAgenticIterations))
+                    )
+                )
                 
                 // Stream from the LLM
                 let stream = llm.stream(messages, config: llmConfig)
@@ -716,12 +782,27 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 // If no tool calls, we have the final answer
                 if llmResponse.toolCalls.isEmpty {
                     finalResponse = llmResponse.content
-                    logger.info("Final response received (no tool calls)")
+                    logger.info(
+                        "Final streaming response received without tool calls",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("taskId", .string(taskId)),
+                            ("contextId", .string(contextId)),
+                            ("iteration", .stringConvertible(iteration))
+                        )
+                    )
                     break
                 }
                 
                 // Execute tool calls and add results to conversation
-                logger.info("Executing \(llmResponse.toolCalls.count) tool call(s)")
+                logger.info(
+                    "Executing tool calls during streaming",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("taskId", .string(taskId)),
+                        ("contextId", .string(contextId)),
+                        ("toolCallCount", .stringConvertible(llmResponse.toolCalls.count)),
+                        ("toolCalls", .array(llmResponse.toolCalls.map { .string($0.name) }))
+                    )
+                )
                 
                 // Stream tool execution status
                 let toolStatusArtifact = Artifact(
@@ -781,7 +862,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             
             // Check if we hit max iterations
             if iteration >= config.maxAgenticIterations && finalResponse.isEmpty {
-                logger.warning("Max agentic iterations reached without final response")
+                logger.warning(
+                    "Max agentic iterations reached without final streaming response",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("taskId", .string(taskId)),
+                        ("contextId", .string(contextId)),
+                        ("maxIterations", .stringConvertible(config.maxAgenticIterations))
+                    )
+                )
                 // Use the last message as the final response
                 if let lastMessage = messages.last, lastMessage.role == .assistant {
                     finalResponse = lastMessage.content
@@ -847,7 +935,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             eventSink(completedResponse)
             
         } catch {
-            logger.error("LLM streaming (tools) failed: \(error)")
+            logger.error(
+                "LLM streaming with tools failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             
             // Update task with failed status
             

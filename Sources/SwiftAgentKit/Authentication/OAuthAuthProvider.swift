@@ -75,7 +75,7 @@ public struct OAuthConfig: Sendable {
 public actor OAuthAuthProvider: AuthenticationProvider {
     
     public let scheme: AuthenticationScheme = .oauth
-    private let logger = Logger(label: "OAuthAuthProvider")
+    private let logger: Logger
     
     private var tokens: OAuthTokens
     private let config: OAuthConfig
@@ -89,11 +89,28 @@ public actor OAuthAuthProvider: AuthenticationProvider {
     public init(
         tokens: OAuthTokens,
         config: OAuthConfig,
-        urlSession: URLSession = .shared
+        urlSession: URLSession,
+        logger: Logger?
     ) {
         self.tokens = tokens
         self.config = config
         self.urlSession = urlSession
+        let metadata: Logger.Metadata = [
+            "tokenEndpoint": .string(config.tokenEndpoint.absoluteString),
+            "clientId": .string(config.clientId)
+        ]
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .authentication("OAuthAuthProvider"),
+            metadata: metadata
+        )
+    }
+    
+    public init(
+        tokens: OAuthTokens,
+        config: OAuthConfig,
+        urlSession: URLSession = .shared
+    ) {
+        self.init(tokens: tokens, config: config, urlSession: urlSession, logger: nil)
     }
     
     public func authenticationHeaders() async throws -> [String: String] {
@@ -106,7 +123,10 @@ public actor OAuthAuthProvider: AuthenticationProvider {
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info("Handling OAuth authentication challenge with status code: \(challenge.statusCode)")
+        logger.info(
+            "Handling OAuth authentication challenge",
+            metadata: SwiftAgentKitLogging.metadata(("status", .stringConvertible(challenge.statusCode)))
+        )
         
         guard challenge.statusCode == 401 else {
             throw AuthenticationError.authenticationFailed("Unexpected status code: \(challenge.statusCode)")
@@ -184,7 +204,10 @@ public actor OAuthAuthProvider: AuthenticationProvider {
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = config.resourceURI {
             bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
-            logger.info("Added resource parameter to token refresh request: \(resourceURI)")
+            logger.info(
+                "Added resource parameter to token refresh request",
+                metadata: SwiftAgentKitLogging.metadata(("resourceURI", .string(resourceURI)))
+            )
         }
         
         // Add client authentication
@@ -209,7 +232,13 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             
             guard 200...299 ~= httpResponse.statusCode else {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
-                logger.error("OAuth token refresh failed with status \(httpResponse.statusCode): \(errorMessage)")
+                logger.error(
+                    "OAuth token refresh failed",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("status", .stringConvertible(httpResponse.statusCode)),
+                        ("payload", .string(errorMessage))
+                    )
+                )
                 throw AuthenticationError.authenticationFailed("Token refresh failed: \(errorMessage)")
             }
             
@@ -220,7 +249,10 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             logger.info("Successfully refreshed OAuth access token")
             
         } catch {
-            logger.error("Failed to refresh OAuth token: \(error)")
+            logger.error(
+                "Failed to refresh OAuth token",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             if error is AuthenticationError {
                 throw error
             } else {

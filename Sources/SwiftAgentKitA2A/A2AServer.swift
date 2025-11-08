@@ -8,6 +8,8 @@
 import Foundation
 import Vapor
 import EasyJSON
+import Logging
+import SwiftAgentKit
 
 // Alias protocol-defined types for convenience
 typealias AgentCapabilities = AgentCard.AgentCapabilities
@@ -20,12 +22,14 @@ extension AgentCard: Content {}
 /// A2A Server (Remote Agent): An agent or agentic system that exposes an A2A-compliant HTTP endpoint, processing tasks and providing responses.
 public actor A2AServer {
     
+    private let logger: Logger
+    
     /**
      * Initializes a new APILayer instance.
      *
      * - Parameter port: The port number that the server will listen on. Defaults to `4245` standing for A2AS(erver).
      */
-    public init(port: Int = 4245, adapter: AgentAdapter) {
+    public init(port: Int = 4245, adapter: AgentAdapter, logger: Logger? = nil) {
         self.port = port
         self.adapter = adapter
         // derive AgentCard from adapter metadata
@@ -42,9 +46,17 @@ public actor A2AServer {
         )
         
         self.encoder.dateEncodingStrategy = .iso8601
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .a2a("A2AServer"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("port", .stringConvertible(port)),
+                ("agentName", .string(adapter.agentName))
+            )
+        )
     }
     
     public func start() async throws {
+        logger.info("Starting A2A server")
         
         // Create a new Vapor application using the modern async API
         let env = try Environment.detect()
@@ -70,11 +82,13 @@ public actor A2AServer {
         
         // Start the server and wait for it to be ready
         try await app.execute()
+        logger.info("A2A server started")
     }
     
     func stop() {
         app?.shutdown()
         app = nil
+        logger.info("A2A server stopped")
     }
     
     // MARK: - Private
@@ -132,7 +146,9 @@ public actor A2AServer {
     }
     
     private func handleMessageSend(_ req: Request) async throws -> Response {
+        logger.debug("Handling message/send request")
         guard isAuthorized(req) else {
+            logger.warning("Unauthorized message/send request")
             return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
         }
         
@@ -153,6 +169,7 @@ public actor A2AServer {
         case .message:
             // Handle as a simple message (no task created)
             let message = try await adapter.handleMessageSend(params)
+            logger.debug("Returning message response")
             return try jsonRPCSuccessResponse(id: requestId, result: message)
             
         case .task:
@@ -179,6 +196,10 @@ public actor A2AServer {
             guard let updatedTask = await taskStore.getTask(id: taskId) else {
                 return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after processing", status: .internalServerError)
             }
+            logger.debug(
+                "Returning task response",
+                metadata: SwiftAgentKitLogging.metadata(("taskId", .string(taskId)))
+            )
             return try jsonRPCSuccessResponse(id: requestId, result: updatedTask)
         }
     }
@@ -190,6 +211,7 @@ public actor A2AServer {
         }
         guard isAuthorized(req) else {
             let httpResponseStatus: HTTPResponseStatus = .unauthorized
+            logger.warning("Unauthorized message/stream request")
             return jsonRPCErrorResponse(code: Int(httpResponseStatus.code), message: "Unauthorized", status: httpResponseStatus)
         }
         // Decode JSON-RPC request envelope to capture request id and params
@@ -227,10 +249,18 @@ public actor A2AServer {
         var isExistingTask = false
         if let taskId = updatedParams.message.taskId {
             guard let foundTask = await taskStore.getTask(id: taskId) else {
+                logger.warning(
+                    "Task not found during resubscribe",
+                    metadata: SwiftAgentKitLogging.metadata(("taskId", .string(taskId)))
+                )
                 return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .badRequest)
             }
             // cannot be completed, canceled, rejected, or failed
             guard foundTask.status.state != .completed && foundTask.status.state != .failed && foundTask.status.state != .canceled && foundTask.status.state != .rejected else {
+                logger.warning(
+                    "Attempted to restart terminal task",
+                    metadata: SwiftAgentKitLogging.metadata(("taskId", .string(taskId)))
+                )
                 return jsonRPCErrorResponse(id: requestId, code: ErrorCode.invalidRequest.rawValue, message: "A task which has reached a terminal state (completed, canceled, rejected, or failed) can't be restarted", status: .badRequest)
             }
             isExistingTask = true

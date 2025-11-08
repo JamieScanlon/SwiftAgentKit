@@ -3,10 +3,17 @@ import Logging
 
 public struct StreamClient {
     private let requestBuilder: RequestBuilder
-    private let logger = Logger(label: "StreamClient")
+    private let logger: Logger
+    
+    public init(requestBuilder: RequestBuilder, logger: Logger?) {
+        self.requestBuilder = requestBuilder
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .networking("StreamClient")
+        )
+    }
     
     public init(requestBuilder: RequestBuilder) {
-        self.requestBuilder = requestBuilder
+        self.init(requestBuilder: requestBuilder, logger: nil)
     }
     
     public func streamRequest(_ endpoint: String,

@@ -15,13 +15,24 @@ import SwiftAgentKit
 public actor A2AClient {
     
     public var agentCard: AgentCard?
-    private let logger = Logger(label: "A2AClient")
+    private let logger: Logger
     
     // MARK: Lifecylce
     
-    init(server: A2AConfig.A2AConfigServer, bootCall: A2AConfig.ServerBootCall? = nil) {
+    init(
+        server: A2AConfig.A2AConfigServer,
+        bootCall: A2AConfig.ServerBootCall? = nil,
+        logger: Logger? = nil
+    ) {
         self.server = server
         self.bootCall = bootCall
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .a2a("A2AClient"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("serverName", .string(server.name)),
+                ("serverURL", .string(server.url.absoluteString))
+            )
+        )
         
         self.encoder.dateEncodingStrategy = .iso8601
         self.decoder.dateDecodingStrategy = .iso8601
@@ -43,13 +54,22 @@ public actor A2AClient {
             Task.detached {
                 outPipe.fileHandleForReading.readabilityHandler = { pipeHandle in
                     let data = pipeHandle.availableData
-                    self.logger.debug("Boot process output: \(String(data: data, encoding: .utf8) ?? "")")
+                    self.logger.debug(
+                        "Boot process output",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("output", .string(String(data: data, encoding: .utf8) ?? "")))
+                    )
                 }
             }
         }
         
         apiManager = RestAPIManager(baseURL: server.url)
-        logger.info("A2A Server \(server.name) at \(server.url)")
+        logger.info(
+            "Initializing A2A client",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("baseURL", .string(server.url.absoluteString))
+            )
+        )
         
         if shouldWait {
             var secondsToWait = 30
@@ -57,7 +77,12 @@ public actor A2AClient {
                 do {
                     agentCard = try await getAgentCard()
                 } catch {
-                    logger.debug("Waiting for A2A server to come up... \(secondsToWait)")
+                    logger.debug(
+                        "Waiting for A2A server to become available",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("remainingSeconds", .stringConvertible(secondsToWait))
+                        )
+                    )
                 }
                 secondsToWait -= 1
                 try? await Task.sleep(for: .seconds(1))
@@ -67,8 +92,11 @@ public actor A2AClient {
         }
         
         guard agentCard != nil else {
+            logger.error("Failed to initialize A2A client; agent card not available")
             throw A2AClientError.failedToInitialize
         }
+        
+        logger.info("A2A client initialized successfully")
     }
     
     // MARK: Methods

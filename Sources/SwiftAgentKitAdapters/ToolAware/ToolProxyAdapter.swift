@@ -14,14 +14,22 @@ import SwiftAgentKitA2A
 public struct ToolProxyAdapter: AgentAdapter {
     private let baseAdapter: AgentAdapter
     private let toolManager: ToolManager?
-    private let logger = Logger(label: "ToolAwareAdapter")
+    private let logger: Logger
     
     public init(
         baseAdapter: AgentAdapter,
-        toolManager: ToolManager? = nil
+        toolManager: ToolManager? = nil,
+        logger: Logger? = nil
     ) {
         self.baseAdapter = baseAdapter
         self.toolManager = toolManager
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .adapters("ToolProxyAdapter"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("baseAdapterType", .string(String(describing: type(of: baseAdapter)))),
+                ("hasToolManager", .string(toolManager == nil ? "false" : "true"))
+            )
+        )
     }
     
     // MARK: - AgentAdapter Implementation
@@ -50,7 +58,7 @@ public struct ToolProxyAdapter: AgentAdapter {
     }
     
     public func handleMessageSend(_ params: MessageSendParams) async throws -> A2AMessage {
-        guard let toolManager = toolManager else {
+        guard toolManager != nil else {
             // No tools available, use base adapter
             return try await baseAdapter.handleMessageSend(params)
         }
@@ -67,21 +75,41 @@ public struct ToolProxyAdapter: AgentAdapter {
             return try await baseAdapter.handleTaskSend(params, taskId: taskId, contextId: contextId, store: store)
         }
         
-        logger.info("Processing message with tool support")
+        logger.info(
+            "Processing task with tool support",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("taskId", .string(taskId)),
+                ("contextId", .string(contextId))
+            )
+        )
         
         // Check if base adapter supports tool-aware methods
         if let toolAwareAdapter = baseAdapter as? ToolAwareAdapter {
             
             // Get available tools for context
             let availableTools = await toolManager.allToolsAsync()
-            logger.info("Available tools: \(availableTools.map(\.name))")
+            let availableToolNames = availableTools.map(\.name)
+            logger.debug(
+                "Resolved available tools for task",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("toolCount", .stringConvertible(availableTools.count)),
+                    ("tools", .array(availableToolNames.map { .string($0) }))
+                )
+            )
             
             // Process with base adapter using tool-aware method
             try await toolAwareAdapter.handleTaskSendWithTools(params, taskId: taskId, contextId: contextId, toolProviders: toolManager.providers, store: store)
             
         } else {
             // Non-tool-aware adapter, just use the plain message without tool functionality
-            logger.info("Base adapter does not support tool-aware methods, using plain message")
+            logger.info(
+                "Base adapter does not support tool-aware methods; delegating",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId))
+                )
+            )
             return try await baseAdapter.handleTaskSend(params, taskId: taskId, contextId: contextId, store: store)
         }
     }
@@ -93,11 +121,25 @@ public struct ToolProxyAdapter: AgentAdapter {
             return
         }
         
-        logger.info("Processing streaming message with tool support")
+        logger.info(
+            "Processing streaming message with tool support",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("taskId", .string(taskId ?? "unknown")),
+                ("contextId", .string(contextId ?? "unknown"))
+            )
+        )
         
         // Get available tools for context
         let availableTools = await toolManager.allToolsAsync()
-        logger.info("Available tools: \(availableTools.map(\.name))")
+        let availableToolNames = availableTools.map(\.name)
+        logger.debug(
+            "Resolved available tools for streaming",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("taskId", .string(taskId ?? "unknown")),
+                ("toolCount", .stringConvertible(availableTools.count)),
+                ("tools", .array(availableToolNames.map { .string($0) }))
+            )
+        )
         
         // Check if base adapter supports tool-aware methods
         if let toolAwareAdapter = baseAdapter as? ToolAwareAdapter {
@@ -110,7 +152,13 @@ public struct ToolProxyAdapter: AgentAdapter {
             try await toolAwareAdapter.handleStreamWithTools(params, taskId: taskId, contextId: contextId, toolProviders: toolManager.providers, store: store, eventSink: eventSink)
         } else {
             // Non-tool-aware adapter, just use the plain message without tool functionality
-            logger.info("Base adapter does not support tool-aware methods, using plain message")
+            logger.info(
+                "Base adapter does not support tool-aware methods; delegating",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId ?? "unknown")),
+                    ("contextId", .string(contextId ?? "unknown"))
+                )
+            )
             try await baseAdapter.handleStream(params, taskId: taskId, contextId: contextId, store: store, eventSink: eventSink)
         }
     }

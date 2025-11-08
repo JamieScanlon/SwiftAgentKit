@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import EasyJSON
 
 public enum MessageRole: String, Codable, Sendable {
@@ -33,7 +34,10 @@ public struct Message: Identifiable, Codable, Sendable {
             if let aName = from["name"] as? String {
                 self.name = aName
             } else {
-                print("WARNING: Image name not provided, generating UUID")
+                SwiftAgentKitLogging.logger(
+                    for: .core("Message.Image"),
+                    metadata: SwiftAgentKitLogging.metadata(("reason", .string("dictionary-missing-name")))
+                ).warning("Image name not provided; generating UUID")
                 self.name = UUID().uuidString
             }
             self.path = from["path"] as? String
@@ -51,7 +55,10 @@ public struct Message: Identifiable, Codable, Sendable {
         
         public init(from json: JSON) {
             guard case .object(let dict) = json else {
-                print("WARNING: Invalid JSON format, generating UUID")
+                SwiftAgentKitLogging.logger(
+                    for: .core("Message.Image"),
+                    metadata: SwiftAgentKitLogging.metadata(("reason", .string("invalid-json")))
+                ).warning("Invalid JSON format; generating UUID")
                 self.name = UUID().uuidString
                 self.path = nil
                 self.imageData = nil
@@ -62,7 +69,10 @@ public struct Message: Identifiable, Codable, Sendable {
             if case .string(let aName) = dict["name"] {
                 self.name = aName
             } else {
-                print("WARNING: Image name not provided, generating UUID")
+                SwiftAgentKitLogging.logger(
+                    for: .core("Message.Image"),
+                    metadata: SwiftAgentKitLogging.metadata(("reason", .string("json-missing-name")))
+                ).warning("Image name not provided; generating UUID")
                 self.name = UUID().uuidString
             }
             

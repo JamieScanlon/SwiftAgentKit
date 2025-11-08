@@ -74,7 +74,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     // MARK: - Properties
     
     private let config: Configuration
-    private let logger = Logger(label: "OpenAIAdapter")
+    private let logger: Logger
     private let openAI: OpenAI
     
     // MARK: - AgentAdapter Implementation
@@ -132,8 +132,15 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - Initialization
     
-    public init(configuration: Configuration) {
+    public init(configuration: Configuration, logger: Logger? = nil) {
         self.config = configuration
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .adapters("OpenAIAdapter"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("model", .string(configuration.model)),
+                ("baseURL", .string(configuration.baseURL.absoluteString))
+            )
+        )
         
         // Extract host, port, and scheme from baseURL
         let host = configuration.baseURL.host ?? "api.openai.com"
@@ -165,7 +172,8 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         organizationIdentifier: String? = nil,
         timeoutInterval: TimeInterval = 300.0,
         customHeaders: [String: String] = [:],
-        parsingOptions: ParsingOptions = []
+        parsingOptions: ParsingOptions = [],
+        logger: Logger? = nil
     ) {
         self.init(configuration: Configuration(
             apiKey: apiKey, 
@@ -176,7 +184,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             timeoutInterval: timeoutInterval,
             customHeaders: customHeaders,
             parsingOptions: parsingOptions
-        ))
+        ), logger: logger)
     }
     
     // MARK: - AgentAdapter Methods
@@ -232,7 +240,15 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             )
             
         } catch {
-            logger.error("OpenAI API call failed: \(error)")
+            logger.error(
+                "OpenAI API call failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId)),
+                    ("model", .string(config.model)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             
             // Update task with failed status
             await store.updateTaskStatus(
@@ -291,7 +307,6 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             
             var accumulatedText = ""
             var partialArtifacts: [Artifact] = []
-            var finalArtifact: Artifact?
             
             for try await chunk in stream {
                 accumulatedText += chunk
@@ -337,7 +352,6 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 extensions: []
             )
             
-            finalArtifact = artifact
             await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
             
             let finalArtifactEvent = TaskArtifactUpdateEvent(
@@ -384,7 +398,15 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             eventSink(completedResponse)
             
         } catch {
-            logger.error("OpenAI streaming failed: \(error)")
+            logger.error(
+                "OpenAI streaming failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId)),
+                    ("model", .string(config.model)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             
             // Update task with failed status
             let failedStatus = TaskStatus(
@@ -613,7 +635,15 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             )
             
         } catch {
-            logger.error("OpenAI API call with tools failed: \(error)")
+            logger.error(
+                "OpenAI API call with tools failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId)),
+                    ("model", .string(config.model)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             
             // Update task with failed status
             await store.updateTaskStatus(
@@ -690,7 +720,6 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             var accumulatedText = ""
             var accumulatedTools: [ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall] = []
             var partialArtifacts: [Artifact] = []
-            var finalArtifact: Artifact?
             
             for try await chunk in stream {
                 let text = chunk.content ?? ""
@@ -762,7 +791,6 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 extensions: []
             )
             
-            finalArtifact = artifact
             await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
             
             let artifactEvent = TaskArtifactUpdateEvent(
@@ -810,7 +838,15 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             eventSink(completedResponse)
             
         } catch {
-            logger.error("OpenAI streaming with tools failed: \(error)")
+            logger.error(
+                "OpenAI streaming with tools failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("taskId", .string(taskId)),
+                    ("contextId", .string(contextId)),
+                    ("model", .string(config.model)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             
             // Update task with failed status
             

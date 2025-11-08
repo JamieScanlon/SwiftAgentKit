@@ -4,10 +4,19 @@ import SwiftAgentKit
 import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
 
+private func configureLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.toolaware"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("ToolAware")))
+    )
+}
+
 @main
 struct ToolAwareExample {
     static func main() async throws {
-        let logger = Logger(label: "ToolAwareExample")
+        configureLogging()
+        let logger = SwiftAgentKitLogging.logger(for: .examples("ToolAwareExample"))
         logger.info("Starting Tool-Aware Adapter Example")
         
         // Create a task store

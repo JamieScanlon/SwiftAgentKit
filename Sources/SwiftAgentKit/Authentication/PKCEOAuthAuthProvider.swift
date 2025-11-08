@@ -79,7 +79,7 @@ public struct PKCEOAuthConfig: Sendable {
 public actor PKCEOAuthAuthProvider: AuthenticationProvider {
     
     public let scheme: AuthenticationScheme = .oauth
-    private let logger = Logger(label: "PKCEOAuthAuthProvider")
+    private let logger: Logger
     
     private let config: PKCEOAuthConfig
     private let urlSession: URLSession
@@ -95,12 +95,39 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
     ///   - metadataClient: Custom metadata discovery client (optional)
     public init(
         config: PKCEOAuthConfig,
-        urlSession: URLSession = .shared,
-        metadataClient: OAuthServerMetadataClient? = nil
+        urlSession: URLSession,
+        metadataClient: OAuthServerMetadataClient?,
+        logger: Logger?
     ) {
         self.config = config
         self.urlSession = urlSession
-        self.metadataClient = metadataClient ?? OAuthServerMetadataClient(urlSession: urlSession)
+        let providerLogger = logger ?? SwiftAgentKitLogging.logger(
+            for: .authentication("PKCEOAuthAuthProvider"),
+            metadata: [
+                "issuerURL": .string(config.issuerURL.absoluteString),
+                "clientId": .string(config.clientId)
+            ]
+        )
+        self.logger = providerLogger
+        if let metadataClient {
+            self.metadataClient = metadataClient
+        } else {
+            self.metadataClient = OAuthServerMetadataClient(
+                urlSession: urlSession,
+                logger: SwiftAgentKitLogging.logger(
+                    for: .authentication("OAuthServerMetadataClient"),
+                    metadata: ["issuerURL": .string(config.issuerURL.absoluteString)]
+                )
+            )
+        }
+    }
+    
+    public init(
+        config: PKCEOAuthConfig,
+        urlSession: URLSession = .shared,
+        metadataClient: OAuthServerMetadataClient? = nil
+    ) {
+        self.init(config: config, urlSession: urlSession, metadataClient: metadataClient, logger: nil)
     }
     
     public func authenticationHeaders() async throws -> [String: String] {
@@ -113,7 +140,10 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info("Handling PKCE OAuth authentication challenge with status code: \(challenge.statusCode)")
+        logger.info(
+            "Handling PKCE OAuth authentication challenge",
+            metadata: ["status": .stringConvertible(challenge.statusCode)]
+        )
         
         guard challenge.statusCode == 401 else {
             throw AuthenticationError.authenticationFailed("Unexpected status code: \(challenge.statusCode)")
@@ -183,14 +213,20 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = config.resourceURI {
             components?.queryItems?.append(URLQueryItem(name: "resource", value: resourceURI))
-            logger.info("Added resource parameter to authorization request: \(resourceURI)")
+            logger.info(
+                "Added resource parameter to authorization request",
+                metadata: ["resourceURI": .string(resourceURI)]
+            )
         }
         
         guard let authorizationURL = components?.url else {
             throw AuthenticationError.authenticationFailed("Failed to build authorization URL")
         }
         
-        logger.info("Authorization URL generated: \(authorizationURL)")
+        logger.info(
+            "Authorization URL generated",
+            metadata: ["authorizationURL": .string(authorizationURL.absoluteString)]
+        )
         return authorizationURL
     }
     
@@ -221,7 +257,10 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = config.resourceURI {
             bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
-            logger.info("Added resource parameter to token request: \(resourceURI)")
+            logger.info(
+                "Added resource parameter to token request",
+                metadata: ["resourceURI": .string(resourceURI)]
+            )
         }
         
         // Add client authentication
@@ -246,7 +285,13 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
             
             guard 200...299 ~= httpResponse.statusCode else {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
-                logger.error("PKCE OAuth token exchange failed with status \(httpResponse.statusCode): \(errorMessage)")
+                logger.error(
+                    "PKCE OAuth token exchange failed",
+                    metadata: [
+                        "status": .stringConvertible(httpResponse.statusCode),
+                        "payload": .string(errorMessage)
+                    ]
+                )
                 throw AuthenticationError.authenticationFailed("Token exchange failed: \(errorMessage)")
             }
             
@@ -257,7 +302,10 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
             logger.info("Successfully completed PKCE OAuth authorization flow")
             
         } catch {
-            logger.error("Failed to complete PKCE OAuth authorization flow: \(error)")
+            logger.error(
+                "Failed to complete PKCE OAuth authorization flow",
+                metadata: ["error": .string(String(describing: error))]
+            )
             if error is AuthenticationError {
                 throw error
             } else {
@@ -377,7 +425,10 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = config.resourceURI {
             bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
-            logger.info("Added resource parameter to token refresh request: \(resourceURI)")
+            logger.info(
+                "Added resource parameter to token refresh request",
+                metadata: ["resourceURI": .string(resourceURI)]
+            )
         }
         
         // Add client authentication
@@ -402,7 +453,13 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
             
             guard 200...299 ~= httpResponse.statusCode else {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
-                logger.error("PKCE OAuth token refresh failed with status \(httpResponse.statusCode): \(errorMessage)")
+                logger.error(
+                    "PKCE OAuth token refresh failed",
+                    metadata: [
+                        "status": .stringConvertible(httpResponse.statusCode),
+                        "payload": .string(errorMessage)
+                    ]
+                )
                 throw AuthenticationError.authenticationFailed("Token refresh failed: \(errorMessage)")
             }
             
@@ -413,7 +470,10 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
             logger.info("Successfully refreshed PKCE OAuth access token")
             
         } catch {
-            logger.error("Failed to refresh PKCE OAuth token: \(error)")
+            logger.error(
+                "Failed to refresh PKCE OAuth token",
+                metadata: ["error": .string(String(describing: error))]
+            )
             if error is AuthenticationError {
                 throw error
             } else {

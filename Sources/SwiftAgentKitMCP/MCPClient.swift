@@ -54,7 +54,7 @@ public actor MCPClient {
     public private(set) var tools: [ToolDefinition] = []
     public private(set) var resources: [Resource] = []
     public private(set) var prompts: [Prompt] = []
-    private let logger = Logger(label: "MCPClient")
+    private let logger: Logger
     private let messageFilterConfig: MessageFilter.Configuration
     
     public init(
@@ -63,7 +63,8 @@ public actor MCPClient {
         isStrict: Bool = false,
         connectionTimeout: TimeInterval = 30.0,
         clientID: String = "swiftagentkit-mcp-client",
-        messageFilterConfig: MessageFilter.Configuration = .default
+        messageFilterConfig: MessageFilter.Configuration = .default,
+        logger: Logger? = nil
     ) {
         self.name = name
         self.version = version
@@ -71,6 +72,14 @@ public actor MCPClient {
         self.connectionTimeout = connectionTimeout
         self.clientID = clientID
         self.messageFilterConfig = messageFilterConfig
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("MCPClient"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("client", .string(name)),
+                ("version", .string(version)),
+                ("strict", .string(isStrict ? "true" : "false"))
+            )
+        )
         // Client will be created when connecting to transport
     }
     
@@ -113,7 +122,10 @@ public actor MCPClient {
             // Get capabilities after connection
             self.capabilities = await newClient.capabilities
             state = .connected
-            logger.info("MCP client '\(name)' connected successfully")
+            logger.info(
+                "MCP client connected successfully",
+                metadata: SwiftAgentKitLogging.metadata(("client", .string(name)))
+            )
         } catch {
             // Preserve OAuthManualFlowRequired errors for manual OAuth flow handling
             if let oauthFlowError = error as? OAuthManualFlowRequired {
@@ -180,7 +192,13 @@ public actor MCPClient {
               let scheme = serverURL.scheme,
               !scheme.isEmpty,
               serverURL.host != nil else {
-            logger.error("Invalid server URL in RemoteServerConfig: \(config.url)")
+            logger.error(
+                "Invalid server URL in RemoteServerConfig",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("server", .string(config.name)),
+                    ("url", .string(config.url))
+                )
+            )
             throw MCPClientError.connectionFailed("Invalid server URL: \(config.url)")
         }
         
@@ -193,9 +211,21 @@ public actor MCPClient {
                     config: authConfig,
                     serverURL: config.url
                 )
-                logger.info("Created authentication provider for type: \(authType)")
+                logger.info(
+                    "Created authentication provider",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(config.name)),
+                        ("authType", .string(authType))
+                    )
+                )
             } catch {
-                logger.error("Failed to create authentication provider: \(error)")
+                logger.error(
+                    "Failed to create authentication provider",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(config.name)),
+                        ("error", .string(String(describing: error)))
+                    )
+                )
                 throw MCPClientError.connectionFailed("Authentication configuration error: \(error.localizedDescription)")
             }
         } else {
@@ -211,20 +241,38 @@ public actor MCPClient {
             maxRetries: config.maxRetries ?? 3
         )
         
-        logger.info("Connecting to remote server '\(config.name)' at \(config.url)")
+        logger.info(
+            "Connecting to remote server",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(config.name)),
+                ("url", .string(config.url))
+            )
+        )
         
         do {
             try await connect(transport: transport)
             try await getTools()
-            logger.info("Successfully connected to remote server '\(config.name)'")
+            logger.info(
+                "Successfully connected to remote server",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
         } catch let oauthFlowError as OAuthManualFlowRequired {
-            logger.info("OAuth manual flow required for MCP server - propagating error with metadata")
+            logger.info(
+                "OAuth manual flow required for MCP server",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
             // Re-throw the OAuth manual flow required error to preserve all metadata
             throw oauthFlowError
         } catch let transportError as RemoteTransport.RemoteTransportError {
             // Check if this is an OAuth discovery requirement
             if case .oauthDiscoveryRequired(let resourceMetadataURL) = transportError {
-                logger.info("OAuth discovery required for MCP server, resource metadata: \(resourceMetadataURL)")
+                logger.info(
+                    "OAuth discovery required for MCP server",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(config.name)),
+                        ("resourceMetadataURL", .string(resourceMetadataURL))
+                    )
+                )
                 
                 // Attempt OAuth discovery and retry connection
                 try await connectWithOAuthDiscovery(serverURL: serverURL, config: config, resourceMetadataURL: resourceMetadataURL)
@@ -245,7 +293,13 @@ public actor MCPClient {
     ///   - config: The remote server configuration
     ///   - resourceMetadataURL: The resource metadata URL from the OAuth challenge
     private func connectWithOAuthDiscovery(serverURL: URL, config: MCPConfig.RemoteServerConfig, resourceMetadataURL: String) async throws {
-        logger.info("Starting OAuth discovery process for MCP server")
+        logger.info(
+            "Starting OAuth discovery process for MCP server",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(config.name)),
+                ("resourceMetadataURL", .string(resourceMetadataURL))
+            )
+        )
         
         // Extract redirect URI from configuration or use default
         let redirectURIString: String
@@ -293,16 +347,31 @@ public actor MCPClient {
         )
         
         do {
-            logger.info("Attempting connection with OAuth discovery provider")
+            logger.info(
+                "Attempting connection with OAuth discovery provider",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
             try await connect(transport: discoveryTransport)
             try await getTools()
-            logger.info("Successfully connected to remote server '\(config.name)' using OAuth discovery")
+            logger.info(
+                "Successfully connected to remote server using OAuth discovery",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
         } catch let oauthFlowError as OAuthManualFlowRequired {
-            logger.info("OAuth manual flow required for MCP server - propagating error with metadata")
+            logger.info(
+                "OAuth manual flow required for MCP server",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
             // Re-throw the OAuth manual flow required error to preserve all metadata
             throw oauthFlowError
         } catch {
-            logger.error("OAuth discovery failed for MCP server: \(error)")
+            logger.error(
+                "OAuth discovery failed for MCP server",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("server", .string(config.name)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             throw MCPClientError.connectionFailed("OAuth discovery failed: \(error.localizedDescription)")
         }
     }
@@ -370,19 +439,53 @@ public actor MCPClient {
         for item in content {
             switch item {
             case .text(let text):
-                logger.info("Generated text: \(text)")
+                logger.info(
+                    "Generated text content",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("tool", .string(toolName)),
+                        ("characters", .stringConvertible(text.count))
+                    )
+                )
             case .image(_, let mimeType, let metadata):
                 if let width = metadata?["width"] as? Int,
                    let height = metadata?["height"] as? Int {
-                    logger.info("Generated \(width)x\(height) image of type \(mimeType)")
+                    logger.info(
+                        "Generated image content",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("tool", .string(toolName)),
+                            ("mimeType", .string(mimeType)),
+                            ("width", .stringConvertible(width)),
+                            ("height", .stringConvertible(height))
+                        )
+                    )
                     // Save or display the image data
                 }
             case .audio(_, let mimeType):
-                logger.info("Received audio data of type \(mimeType)")
+                logger.info(
+                    "Received audio content",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("tool", .string(toolName)),
+                        ("mimeType", .string(mimeType))
+                    )
+                )
             case .resource(let uri, let mimeType, let text):
-                logger.info("Received resource from \(uri) of type \(mimeType)")
+                logger.info(
+                    "Received resource content",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("tool", .string(toolName)),
+                        ("uri", .string(uri)),
+                        ("mimeType", .string(mimeType))
+                    )
+                )
                 if let text = text {
-                    logger.info("Resource text: \(text)")
+                    logger.info(
+                        "Resource text content",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("tool", .string(toolName)),
+                            ("uri", .string(uri)),
+                            ("characters", .stringConvertible(text.count))
+                        )
+                    )
                 }
             }
         }
@@ -417,11 +520,17 @@ public actor MCPClient {
         // Register notification handler
         await client.onNotification(ResourceUpdatedNotification.self) { message in
             let uri = message.params.uri
-            self.logger.info("Resource \(uri) updated with new content")
+            self.logger.info(
+                "Resource updated with new content",
+                metadata: SwiftAgentKitLogging.metadata(("uri", .string(uri)))
+            )
             
             // Fetch the updated resource content
             _ = try await self.client?.readResource(uri: uri)
-            self.logger.info("Updated resource content received")
+            self.logger.info(
+                "Updated resource content received",
+                metadata: SwiftAgentKitLogging.metadata(("uri", .string(uri)))
+            )
         }
     }
     

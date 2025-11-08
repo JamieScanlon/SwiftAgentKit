@@ -2,6 +2,19 @@
 
 The MCP module provides support for the [Model Context Protocol (MCP)](https://modelcontextprotocol.org), enabling your agent to connect to and interact with MCP-compliant model servers, tools, and resources.
 
+> ℹ️ **Logging tip**  
+> Bootstrap logging once (for example in `main`) so every MCP component shares the same handler and level:
+> ```swift
+> import Logging
+> import SwiftAgentKit
+> 
+> SwiftAgentKitLogging.bootstrap(
+>     logger: Logger(label: "com.example.mcp"),
+>     level: .info
+> )
+> ```
+> The snippets below continue to use `print` for CLI output, but internal diagnostics (server boot, transport events, tool calls) now flow through `SwiftAgentKitLogging`.
+
 ## Architecture Overview
 
 The MCP module follows a **separation of concerns** architecture:

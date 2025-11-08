@@ -12,7 +12,7 @@ import Logging
 /// This provider automatically registers with authorization servers and manages client credentials
 public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
     
-    private let logger = Logger(label: "DynamicClientRegistrationAuthProvider")
+    private let logger: Logger
     
     /// The authentication scheme this provider handles
     public let scheme: AuthenticationScheme = .oauth
@@ -45,12 +45,40 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
         registrationConfig: DynamicClientRegistrationConfig,
         registrationRequest: DynamicClientRegistration.ClientRegistrationRequest,
         softwareStatement: String? = nil,
-        credentialStorage: DynamicClientCredentialStorage? = nil
+        credentialStorage: DynamicClientCredentialStorage? = nil,
+        logger: Logger?
     ) {
         self.registrationConfig = registrationConfig
         self.registrationRequest = registrationRequest
         self.softwareStatement = softwareStatement
         self.credentialStorage = credentialStorage
+        if let logger {
+            self.logger = logger
+        } else {
+            let metadata = SwiftAgentKitLogging.metadata(
+                ("registrationEndpoint", .string(registrationConfig.registrationEndpoint.absoluteString)),
+                ("clientName", .string(registrationRequest.clientName ?? "unknown"))
+            )
+            self.logger = SwiftAgentKitLogging.logger(
+                for: .authentication("DynamicClientRegistrationAuthProvider"),
+                metadata: metadata
+            )
+        }
+    }
+    
+    public init(
+        registrationConfig: DynamicClientRegistrationConfig,
+        registrationRequest: DynamicClientRegistration.ClientRegistrationRequest,
+        softwareStatement: String? = nil,
+        credentialStorage: DynamicClientCredentialStorage? = nil
+    ) {
+        self.init(
+            registrationConfig: registrationConfig,
+            registrationRequest: registrationRequest,
+            softwareStatement: softwareStatement,
+            credentialStorage: credentialStorage,
+            logger: nil
+        )
     }
     
     /// Provides authentication headers for HTTP requests
@@ -190,7 +218,10 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
                 softwareStatement: softwareStatement
             )
             
-            logger.info("Successfully registered client with ID: \(response.clientId)")
+            logger.info(
+                "Successfully registered client",
+                metadata: SwiftAgentKitLogging.metadata(("clientId", .string(response.clientId)))
+            )
             
             // Store the registered client
             registeredClient = response
@@ -204,7 +235,10 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
             }
             
         } catch {
-            logger.error("Failed to register client: \(error)")
+            logger.error(
+                "Failed to register client",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             throw AuthenticationError.authenticationFailed("Client registration failed: \(error.localizedDescription)")
         }
     }
@@ -221,7 +255,10 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
         // 2. Create the appropriate OAuth provider (PKCE, OAuth Discovery, etc.)
         // 3. Handle different grant types and response types
         
-        logger.info("Creating OAuth provider for registered client: \(response.clientId)")
+        logger.info(
+            "Creating OAuth provider for registered client",
+            metadata: SwiftAgentKitLogging.metadata(("clientId", .string(response.clientId)))
+        )
         
         // This is a placeholder - you would implement the actual OAuth provider creation logic here
         // based on your specific OAuth flow requirements
@@ -256,12 +293,22 @@ public protocol DynamicClientCredentialStorage: Sendable {
 /// Default implementation of credential storage using UserDefaults
 public actor DefaultDynamicClientCredentialStorage: DynamicClientCredentialStorage {
     
-    private let logger = Logger(label: "DefaultDynamicClientCredentialStorage")
+    private let logger: Logger
     private let userDefaults: UserDefaults
     private let keyPrefix = "DynamicClientRegistration_"
     
-    public init(userDefaults: UserDefaults = UserDefaults.standard) {
+    public init(
+        userDefaults: UserDefaults = UserDefaults.standard,
+        logger: Logger?
+    ) {
         self.userDefaults = userDefaults
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .authentication("DefaultDynamicClientCredentialStorage")
+        )
+    }
+    
+    public init(userDefaults: UserDefaults = UserDefaults.standard) {
+        self.init(userDefaults: userDefaults, logger: nil)
     }
     
     public func storeCredentials(_ credentials: DynamicClientRegistration.ClientRegistrationResponse) async {
@@ -275,10 +322,16 @@ public actor DefaultDynamicClientCredentialStorage: DynamicClientCredentialStora
             let key = "\(keyPrefix)\(timestamp)_\(credentials.clientId)"
             userDefaults.set(data, forKey: key)
             
-            logger.info("Stored credentials for client: \(credentials.clientId)")
+            logger.info(
+                "Stored credentials for client",
+                metadata: SwiftAgentKitLogging.metadata(("clientId", .string(credentials.clientId)))
+            )
             
         } catch {
-            logger.error("Failed to store credentials: \(error)")
+            logger.error(
+                "Failed to store credentials",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
         }
     }
     
@@ -316,11 +369,17 @@ public actor DefaultDynamicClientCredentialStorage: DynamicClientCredentialStora
             decoder.dateDecodingStrategy = .iso8601
             let credentials = try decoder.decode(DynamicClientRegistration.ClientRegistrationResponse.self, from: data)
             
-            logger.info("Loaded credentials for client: \(credentials.clientId)")
+            logger.info(
+                "Loaded credentials for client",
+                metadata: SwiftAgentKitLogging.metadata(("clientId", .string(credentials.clientId)))
+            )
             return credentials
             
         } catch {
-            logger.error("Failed to load credentials: \(error)")
+            logger.error(
+                "Failed to load credentials",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             return nil
         }
     }
@@ -356,11 +415,17 @@ public actor DefaultDynamicClientCredentialStorage: DynamicClientCredentialStora
             decoder.dateDecodingStrategy = .iso8601
             let credentials = try decoder.decode(DynamicClientRegistration.ClientRegistrationResponse.self, from: data)
             
-            logger.info("Loaded credentials for client: \(credentials.clientId)")
+            logger.info(
+                "Loaded credentials for client",
+                metadata: SwiftAgentKitLogging.metadata(("clientId", .string(credentials.clientId)))
+            )
             return credentials
             
         } catch {
-            logger.error("Failed to load credentials: \(error)")
+            logger.error(
+                "Failed to load credentials",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             return nil
         }
     }
@@ -376,7 +441,10 @@ public actor DefaultDynamicClientCredentialStorage: DynamicClientCredentialStora
             }
         }
         
-        logger.info("Cleared credentials for client: \(clientId)")
+        logger.info(
+            "Cleared credentials for client",
+            metadata: SwiftAgentKitLogging.metadata(("clientId", .string(clientId)))
+        )
     }
     
     public func clearAllCredentials() async {
@@ -387,6 +455,9 @@ public actor DefaultDynamicClientCredentialStorage: DynamicClientCredentialStora
             userDefaults.removeObject(forKey: key)
         }
         
-        logger.info("Cleared all stored credentials (\(credentialKeys.count) clients)")
+        logger.info(
+            "Cleared all stored credentials",
+            metadata: SwiftAgentKitLogging.metadata(("clientCount", .stringConvertible(credentialKeys.count)))
+        )
     }
 }

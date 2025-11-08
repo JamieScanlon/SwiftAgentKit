@@ -4,10 +4,23 @@ import EasyJSON
 
 public struct SSEClient: Sendable {
     private let baseURL: URL
-    private let logger = Logger(label: "SSEClient")
+    private let logger: Logger
+    
+    public init(baseURL: URL, logger: Logger?) {
+        self.baseURL = baseURL
+        if let logger {
+            self.logger = logger
+        } else {
+            let metadata: Logger.Metadata = ["baseURL": .string(baseURL.absoluteString)]
+            self.logger = SwiftAgentKitLogging.logger(
+                for: .networking("SSEClient"),
+                metadata: metadata
+            )
+        }
+    }
     
     public init(baseURL: URL) {
-        self.baseURL = baseURL
+        self.init(baseURL: baseURL, logger: nil)
     }
     
     public func sseRequest(_ endpoint: String,

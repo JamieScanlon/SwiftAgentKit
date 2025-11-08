@@ -16,11 +16,18 @@ import EasyJSON
 /// Creates a MCPClient for every available server
 /// Dispatches tool calls to clients
 public actor MCPManager {
-    private let logger = Logger(label: "MCPManager")
+    private let logger: Logger
     private let connectionTimeout: TimeInterval
     
-    public init(connectionTimeout: TimeInterval = 30.0) {
+    public init(connectionTimeout: TimeInterval = 30.0, logger: Logger? = nil) {
         self.connectionTimeout = connectionTimeout
+        let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("MCPManager"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("connectionTimeout", .stringConvertible(connectionTimeout))
+            )
+        )
+        self.logger = resolvedLogger
     }
     
     public enum State: Sendable {
@@ -43,7 +50,10 @@ public actor MCPManager {
         do {
             try await loadMCPConfiguration(configFileURL: configFileURL)
         } catch {
-            logger.error("Failed to initialize MCPManager: \(error)")
+            logger.error(
+                "Failed to initialize MCPManager",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
         }
     }
     
@@ -88,7 +98,10 @@ public actor MCPManager {
             try await createClients(config)
             state = .initialized
         } catch {
-            logger.error("Error loading MCP configuration: \(error)")
+            logger.error(
+                "Error loading MCP configuration",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             state = .notReady
         }
     }
@@ -107,12 +120,21 @@ public actor MCPManager {
                     try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
                     try await client.getTools()
                     clients.append(client)
-                    logger.info("Successfully connected to local MCP server: \(serverName)")
+                    logger.info(
+                        "Successfully connected to local MCP server",
+                        metadata: SwiftAgentKitLogging.metadata(("server", .string(serverName)))
+                    )
                 } catch let mcpError as MCPClient.MCPClientError {
                     logMCPClientError(mcpError, serverName: serverName)
                     failedServers.append(serverName)
                 } catch {
-                    logger.error("Failed to connect to local MCP server '\(serverName)': \(error)")
+                    logger.error(
+                        "Failed to connect to local MCP server",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("server", .string(serverName)),
+                            ("error", .string(String(describing: error)))
+                        )
+                    )
                     failedServers.append(serverName)
                 }
             }
@@ -128,7 +150,13 @@ public actor MCPManager {
                 )
                 
                 guard let serverURL = URL(string: remoteConfig.url) else {
-                    logger.error("Invalid URL for remote server '\(remoteConfig.name)': \(remoteConfig.url)")
+                    logger.error(
+                        "Invalid URL for remote server",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("server", .string(remoteConfig.name)),
+                            ("url", .string(remoteConfig.url))
+                        )
+                    )
                     failedServers.append(remoteConfig.name)
                     continue
                 }
@@ -145,19 +173,34 @@ public actor MCPManager {
                 )
                 
                 clients.append(client)
-                logger.info("Successfully connected to remote MCP server: \(remoteConfig.name)")
+                logger.info(
+                    "Successfully connected to remote MCP server",
+                    metadata: SwiftAgentKitLogging.metadata(("server", .string(remoteConfig.name)))
+                )
                 
             } catch let mcpError as MCPClient.MCPClientError {
                 logMCPClientError(mcpError, serverName: remoteConfig.name)
                 failedServers.append(remoteConfig.name)
             } catch {
-                logger.error("Failed to connect to remote MCP server '\(remoteConfig.name)': \(error)")
+                logger.error(
+                    "Failed to connect to remote MCP server",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(remoteConfig.name)),
+                        ("error", .string(String(describing: error)))
+                    )
+                )
                 failedServers.append(remoteConfig.name)
             }
         }
         
         if !failedServers.isEmpty {
-            logger.warning("Failed to connect to \(failedServers.count) MCP servers: \(failedServers.joined(separator: ", "))")
+            logger.warning(
+                "Failed to connect to MCP servers",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("count", .stringConvertible(failedServers.count)),
+                    ("servers", .string(failedServers.joined(separator: ", ")))
+                )
+            )
         }
         
         await buildToolsJson()
@@ -166,33 +209,69 @@ public actor MCPManager {
     private func logMCPClientError(_ mcpError: MCPClient.MCPClientError, serverName: String) {
         switch mcpError {
         case .connectionTimeout(let timeout):
-            logger.warning("MCP server '\(serverName)' connection timed out after \(timeout) seconds")
+            logger.warning(
+                "MCP server connection timed out",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("server", .string(serverName)),
+                    ("timeoutSeconds", .stringConvertible(timeout))
+                )
+            )
         case .pipeError(let message):
-            logger.warning("MCP server '\(serverName)' pipe error: \(message)")
+            logger.warning(
+                "MCP server pipe error",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("server", .string(serverName)),
+                    ("message", .string(message))
+                )
+            )
         case .processTerminated(let message):
-            logger.warning("MCP server '\(serverName)' process terminated: \(message)")
+            logger.warning(
+                "MCP server process terminated",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("server", .string(serverName)),
+                    ("message", .string(message))
+                )
+            )
         case .connectionFailed(let message):
-            logger.warning("MCP server '\(serverName)' connection failed: \(message)")
+            logger.warning(
+                "MCP server connection failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("server", .string(serverName)),
+                    ("message", .string(message))
+                )
+            )
         case .notConnected:
-            logger.warning("MCP server '\(serverName)' not connected")
+            logger.warning(
+                "MCP server not connected",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(serverName)))
+            )
         }
     }
     
     private func createAuthProvider(for remoteConfig: MCPConfig.RemoteServerConfig) throws -> (any AuthenticationProvider)? {
         // Try environment-based auth first
         if let envAuthProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: remoteConfig.name) {
-            logger.info("Using environment-based authentication for server: \(remoteConfig.name)")
+            logger.info(
+                "Using environment-based authentication for server",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(remoteConfig.name)))
+            )
             return envAuthProvider
         }
         
         // Try config-based auth
         guard let authType = remoteConfig.authType,
               let authConfig = remoteConfig.authConfig else {
-            logger.info("No authentication configured for remote server: \(remoteConfig.name)")
+            logger.info(
+                "No authentication configured for remote server",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(remoteConfig.name)))
+            )
             return nil
         }
         
-        logger.info("Creating authentication provider from config for server: \(remoteConfig.name)")
+        logger.info(
+            "Creating authentication provider from config",
+            metadata: SwiftAgentKitLogging.metadata(("server", .string(remoteConfig.name)))
+        )
         return try AuthenticationFactory.createAuthProvider(authType: authType, config: authConfig, serverURL: remoteConfig.url)
     }
     

@@ -20,7 +20,8 @@ struct RemoteTransportConnectionTests {
         let serverURL = URL(string: "https://api.example.com/mcp")!
         let transport = RemoteTransport(serverURL: serverURL)
         
-        #expect(transport.logger.label == "RemoteTransport")
+        #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+        #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
         
         // Test that it can be initialized without errors
         await transport.disconnect() // Safe cleanup
@@ -39,7 +40,8 @@ struct RemoteTransportConnectionTests {
             maxRetries: 5
         )
         
-        #expect(transport.logger.label == "RemoteTransport")
+        #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+        #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
         
         // Verify auth provider can generate headers
         let headers = try await authProvider.authenticationHeaders()
@@ -121,7 +123,8 @@ struct RemoteTransportConnectionTests {
             #expect(!headers.isEmpty)
             
             // Verify transport initializes correctly with auth provider
-            #expect(transport.logger.label == "RemoteTransport")
+            #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+            #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
             
             await transport.disconnect()
         }
@@ -140,7 +143,8 @@ struct RemoteTransportConnectionTests {
         )
         
         // Should initialize fine
-        #expect(transport.logger.label == "RemoteTransport")
+        #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+        #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
         
         // Connection should fail due to auth provider failure
         do {
@@ -214,7 +218,8 @@ struct RemoteTransportConnectionTests {
         // This is tested indirectly through the send/receive functionality
         // since we can't directly access private methods
         
-        #expect(transport.logger.label == "RemoteTransport")
+        #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+        #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
         await transport.disconnect()
     }
     
@@ -273,7 +278,8 @@ struct RemoteTransportConnectionTests {
                 maxRetries: 1
             )
             
-            #expect(transport.logger.label == "RemoteTransport")
+            #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+            #expect(transport.logger[metadataKey: "serverURL"] == .string(url.absoluteString))
             
             // Test that initialization works with various URL formats
             // (connection will fail but that's expected)

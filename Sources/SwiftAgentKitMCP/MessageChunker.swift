@@ -7,6 +7,7 @@
 
 import Foundation
 import Logging
+import SwiftAgentKit
 
 /// Handles chunking and reassembly of large messages to work around pipe size limits
 public actor MessageChunker {
@@ -74,7 +75,9 @@ public actor MessageChunker {
     private var messageBuffers: [String: [Int: Data]] = [:]
     
     public init(logger: Logger? = nil) {
-        self.logger = logger ?? Logger(label: "mcp.chunker")
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("MessageChunker")
+        )
     }
     
     /// Chunk a message into multiple frames if it exceeds the maximum chunk size
@@ -112,7 +115,13 @@ public actor MessageChunker {
             frames.append(frame.encode())
         }
         
-        logger.info("Chunked message into \(totalChunks) frames (total size: \(message.count) bytes)")
+        logger.info(
+            "Chunked message",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("frames", .stringConvertible(totalChunks)),
+                ("bytes", .stringConvertible(message.count))
+            )
+        )
         return frames
     }
     
@@ -148,12 +157,26 @@ public actor MessageChunker {
             // Clean up the buffer
             messageBuffers.removeValue(forKey: frame.messageId)
             
-            logger.info("Reassembled message from \(frame.totalChunks) frames (total size: \(completeMessage.count) bytes)")
+            logger.info(
+                "Reassembled message",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("frames", .stringConvertible(frame.totalChunks)),
+                    ("bytes", .stringConvertible(completeMessage.count)),
+                    ("messageId", .string(frame.messageId))
+                )
+            )
             return completeMessage
         }
         
         // Still waiting for more chunks
-        logger.debug("Received chunk \(frame.chunkIndex + 1)/\(frame.totalChunks) for message \(frame.messageId)")
+        logger.debug(
+            "Received chunk",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("messageId", .string(frame.messageId)),
+                ("chunkIndex", .stringConvertible(frame.chunkIndex)),
+                ("totalChunks", .stringConvertible(frame.totalChunks))
+            )
+        )
         return nil
     }
     

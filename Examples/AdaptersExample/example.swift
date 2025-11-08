@@ -4,9 +4,18 @@ import SwiftAgentKit
 import SwiftAgentKitA2A
 import SwiftAgentKitAdapters
 
+private func configureLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.adapters"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("Adapters")))
+    )
+}
+
 // Example: Using OpenAI Adapter with A2A Server
 func openAIAdapterExample() async {
-    let logger = Logger(label: "OpenAIAdapterExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("OpenAIAdapterExample"))
     logger.info("=== SwiftAgentKit OpenAI Adapter Example ===")
     
     // Note: In a real application, you would get the API key from environment variables
@@ -42,7 +51,8 @@ func openAIAdapterExample() async {
 
 // Example: Enhanced OpenAI Adapter Features
 func enhancedOpenAIExample() async {
-    let logger = Logger(label: "EnhancedOpenAIExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("EnhancedOpenAIExample"))
     logger.info("=== Enhanced OpenAI Adapter Example ===")
     
     // Example 1: Basic configuration with system prompt
@@ -140,7 +150,8 @@ func enhancedOpenAIExample() async {
 @main
 struct AdaptersExample {
     static func main() async {
-        let logger = Logger(label: "AdaptersExample")
+        configureLogging()
+        let logger = SwiftAgentKitLogging.logger(for: .examples("AdaptersExample"))
         
         // Check if API keys are provided
         let hasOpenAIKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] != nil

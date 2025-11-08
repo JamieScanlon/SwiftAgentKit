@@ -12,9 +12,18 @@ import SwiftAgentKit
 import SwiftAgentKitMCP
 import EasyJSON
 
+private func configureChunkedLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.mcp.chunked"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("MCPChunkedStdio")))
+    )
+}
+
 /// Example demonstrating chunked stdio transport for handling large messages
 public func runChunkedStdioExample() async throws {
-    let logger = Logger(label: "chunked-stdio-example")
+    configureChunkedLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("ChunkedStdioExample"))
     logger.info("Starting Chunked Stdio Transport Example")
     
     // MARK: - Setup MCP Server with Adaptive Stdio Transport

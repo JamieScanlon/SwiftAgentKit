@@ -8,6 +8,7 @@
 import Foundation
 import Logging
 import MCP
+import SwiftAgentKit
 import System
 
 /// A stdio transport that supports chunking large messages to work around pipe size limits
@@ -22,8 +23,16 @@ public actor ChunkedStdioTransport: Transport {
     private var messageContinuation: AsyncThrowingStream<Data, Swift.Error>.Continuation?
     
     public init(logger: Logger? = nil) {
-        self.logger = logger ?? Logger(label: "mcp.transport.chunked-stdio")
-        self.chunker = MessageChunker(logger: self.logger)
+        let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("ChunkedStdioTransport")
+        )
+        self.logger = resolvedLogger
+        self.chunker = MessageChunker(
+            logger: SwiftAgentKitLogging.logger(
+                for: .mcp("MessageChunker"),
+                metadata: SwiftAgentKitLogging.metadata(("transport", .string("chunked-stdio")))
+            )
+        )
         self.stdioTransport = MCP.StdioTransport()
     }
     

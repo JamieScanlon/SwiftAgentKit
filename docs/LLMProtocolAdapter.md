@@ -2,6 +2,19 @@
 
 The `LLMProtocolAdapter` is a generic adapter that wraps any `LLMProtocol` implementation and makes it compatible with the A2A (Agent-to-Agent) protocol. This adapter provides a bridge between the SwiftAgentKit's LLM interface and the A2A server infrastructure.
 
+> ℹ️ **Logging tip**  
+> The adapter now emits detailed debug information (agentic iterations, tool execution, streaming progress) through `SwiftAgentKitLogging`. Bootstrap once prior to creating the adapter:
+> ```swift
+> import Logging
+> import SwiftAgentKit
+> 
+> SwiftAgentKitLogging.bootstrap(
+>     logger: Logger(label: "com.example.llm"),
+>     level: .info
+> )
+> ```
+> Any `print` statements in this guide are for illustrative CLI feedback; the adapter itself relies on the logger you configure.
+
 ## Overview
 
 The `LLMProtocolAdapter` allows you to:

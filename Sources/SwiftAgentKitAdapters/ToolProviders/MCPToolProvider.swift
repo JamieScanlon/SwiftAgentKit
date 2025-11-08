@@ -14,7 +14,7 @@ import SwiftAgentKitMCP
 /// Direct MCP tool provider
 public struct MCPToolProvider: ToolProvider {
     private let clients: [MCPClient]
-    private let logger = Logger(label: "MCPToolProvider")
+    private let logger: Logger
     
     public var name: String { "MCP Tools" }
     
@@ -27,12 +27,19 @@ public struct MCPToolProvider: ToolProvider {
         return tools
     }
     
-    public init(clients: [MCPClient]) {
+    public init(clients: [MCPClient], logger: Logger? = nil) {
         self.clients = clients
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .adapters("MCPToolProvider"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("clientCount", .stringConvertible(clients.count))
+            )
+        )
     }
     
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         for client in clients {
+            let clientName = await client.name
             // Check if this client has the requested tool
             let clientTools = await client.tools
             guard clientTools.contains(where: { $0.name == toolCall.name }) else { continue }
@@ -53,7 +60,14 @@ public struct MCPToolProvider: ToolProvider {
                     )
                 }
             } catch {
-                logger.warning("MCP client call failed: \(error)")
+                logger.warning(
+                    "MCP client tool execution failed",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("toolName", .string(toolCall.name)),
+                        ("client", .string(clientName)),
+                        ("error", .string(String(describing: error)))
+                    )
+                )
                 continue
             }
         }

@@ -8,6 +8,7 @@
 import Foundation
 import Logging
 import MCP
+import SwiftAgentKit
 import System
 
 actor ClientTransport: Transport {
@@ -18,8 +19,16 @@ actor ClientTransport: Transport {
     init(inPipe: Pipe, outPipe: Pipe, logger: Logging.Logger? = nil) {
         self.inPipe = inPipe
         self.outPipe = outPipe
-        self.logger = logger ?? Logging.Logger(label: "mcp.transport.stdio")
-        self.chunker = MessageChunker(logger: self.logger)
+        let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("ClientTransport")
+        )
+        self.logger = resolvedLogger
+        self.chunker = MessageChunker(
+            logger: SwiftAgentKitLogging.logger(
+                for: .mcp("MessageChunker"),
+                metadata: SwiftAgentKitLogging.metadata(("transport", .string("client-stdio")))
+            )
+        )
         
         // Create message stream
         var continuation: AsyncThrowingStream<Data, Swift.Error>.Continuation!

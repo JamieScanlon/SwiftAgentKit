@@ -76,14 +76,24 @@ public actor RemoteTransport: Transport {
         connectionTimeout: TimeInterval = 30.0,
         requestTimeout: TimeInterval = 60.0,
         maxRetries: Int = 3,
-        urlSession: URLSession? = nil
+        urlSession: URLSession? = nil,
+        logger: Logger? = nil
     ) {
         self.serverURL = serverURL
         self.authProvider = authProvider
         self.connectionTimeout = connectionTimeout
         self.requestTimeout = requestTimeout
         self.maxRetries = maxRetries
-        self.logger = Logger(label: "RemoteTransport")
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("RemoteTransport"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("component", .string("RemoteTransport")),
+                ("serverURL", .string(serverURL.absoluteString)),
+                ("connectionTimeout", .stringConvertible(connectionTimeout)),
+                ("requestTimeout", .stringConvertible(requestTimeout)),
+                ("maxRetries", .stringConvertible(maxRetries))
+            )
+        )
         
         // Configure URLSession with timeouts
         let config = URLSessionConfiguration.default
@@ -102,7 +112,10 @@ public actor RemoteTransport: Transport {
             return 
         }
         
-        logger.info("Connecting to remote MCP server at \(serverURL)")
+        logger.info(
+            "Connecting to remote MCP server",
+            metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(serverURL.absoluteString)))
+        )
         
         // Test connection with a health check or initial handshake
         try await testConnection()
@@ -119,7 +132,10 @@ public actor RemoteTransport: Transport {
         }
         
         isConnected = true
-        logger.info("Successfully connected to remote MCP server")
+        logger.info(
+            "Successfully connected to remote MCP server",
+            metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(serverURL.absoluteString)))
+        )
     }
     
     /// Disconnects from the remote server
@@ -129,7 +145,10 @@ public actor RemoteTransport: Transport {
             return 
         }
         
-        logger.info("Disconnecting from remote MCP server")
+        logger.info(
+            "Disconnecting from remote MCP server",
+            metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(serverURL.absoluteString)))
+        )
         
         isConnected = false
         messageContinuation?.finish()
@@ -139,7 +158,10 @@ public actor RemoteTransport: Transport {
         // Clean up authentication if needed
         await authProvider?.cleanup()
         
-        logger.info("Disconnected from remote MCP server")
+        logger.info(
+            "Disconnected from remote MCP server",
+            metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(serverURL.absoluteString)))
+        )
     }
     
     /// Sends data to the remote server
@@ -168,10 +190,19 @@ public actor RemoteTransport: Transport {
                 }
                 logger.debug("Added authentication headers")
             } catch let oauthFlowError as OAuthManualFlowRequired {
-                logger.info("OAuth manual flow required - propagating error with metadata")
+                logger.info(
+                    "OAuth manual flow required",
+                    metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(serverURL.absoluteString)))
+                )
                 throw oauthFlowError
             } catch {
-                logger.error("Failed to get authentication headers: \(error)")
+                logger.error(
+                    "Failed to get authentication headers",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("serverURL", .string(serverURL.absoluteString)),
+                        ("error", .string(String(describing: error)))
+                    )
+                )
                 throw RemoteTransportError.authenticationFailed(error.localizedDescription)
             }
         }
@@ -196,7 +227,10 @@ public actor RemoteTransport: Transport {
                     processedData = unwrappedJSONData
                     logger.debug("Successfully unwrapped JSON from SSE response")
                 } else {
-                    logger.warning("Failed to extract JSON from SSE response, using raw data")
+                    logger.warning(
+                        "Failed to extract JSON from SSE response; using raw data",
+                        metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(serverURL.absoluteString)))
+                    )
                 }
             }
             
@@ -204,7 +238,10 @@ public actor RemoteTransport: Transport {
             if isValidJSONRPCMessage(processedData) {
                 messageContinuation?.yield(processedData)
             } else {
-                logger.warning("Received non-JSON-RPC response from server")
+                logger.warning(
+                    "Received non-JSON-RPC response from server",
+                    metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(serverURL.absoluteString)))
+                )
                 // Still yield it in case it's a valid response in a different format
                 messageContinuation?.yield(processedData)
             }
@@ -261,7 +298,13 @@ public actor RemoteTransport: Transport {
             
             logger.debug("Connection test successful")
         } catch {
-            logger.error("Connection test failed: \(error)")
+            logger.error(
+                "Connection test failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("serverURL", .string(serverURL.absoluteString)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             if let transportError = error as? RemoteTransportError {
                 throw transportError
             } else {
@@ -284,7 +327,14 @@ public actor RemoteTransport: Transport {
                 
                 // Check for authentication challenges
                 if httpResponse.statusCode == 401 && retryCount < maxRetries {
-                    logger.info("Received authentication challenge (401), attempting to refresh credentials (attempt \(retryCount + 1)/\(maxRetries))")
+                    logger.info(
+                        "Received authentication challenge (401), attempting to refresh credentials",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("serverURL", .string(self.serverURL.absoluteString)),
+                            ("attempt", .stringConvertible(retryCount + 1)),
+                            ("maxRetries", .stringConvertible(self.maxRetries))
+                        )
+                    )
                     
                     if let authProvider = authProvider {
                         let challenge = AuthenticationChallenge(
@@ -306,16 +356,28 @@ public actor RemoteTransport: Transport {
                             logger.debug("Updated authentication headers, retrying request")
                             continue // Retry with new credentials
                         } catch let oauthFlowError as OAuthManualFlowRequired {
-                            logger.info("OAuth manual flow required - propagating error with metadata")
+                            logger.info(
+                                "OAuth manual flow required",
+                                metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(self.serverURL.absoluteString)))
+                            )
                             // Re-throw the OAuth manual flow required error to preserve all metadata
                             throw oauthFlowError
                         } catch {
-                            logger.error("Failed to handle authentication challenge: \(error)")
+                            logger.error(
+                                "Failed to handle authentication challenge",
+                                metadata: SwiftAgentKitLogging.metadata(
+                                    ("serverURL", .string(self.serverURL.absoluteString)),
+                                    ("error", .string(String(describing: error)))
+                                )
+                            )
                             throw RemoteTransportError.authenticationFailed("Authentication refresh failed: \(error.localizedDescription)")
                         }
                     } else {
                         // No authentication provider available - this might be a discovery opportunity
-                        logger.warning("No authentication provider available for 401 challenge - this might indicate the need for OAuth discovery")
+                        logger.warning(
+                            "No authentication provider available for 401 challenge",
+                            metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(self.serverURL.absoluteString)))
+                        )
                         
                         // Check if the response contains WWW-Authenticate header with OAuth challenge
                         // Note: HTTP headers are case-insensitive, but dictionary lookup is case-sensitive
@@ -327,11 +389,20 @@ public actor RemoteTransport: Transport {
                             logger.debug("Found WWW-Authenticate header: \(wwwAuthenticate)")
                             
                             if wwwAuthenticate.lowercased().contains("bearer") || wwwAuthenticate.lowercased().contains("oauth") {
-                                logger.info("Detected OAuth challenge in WWW-Authenticate header")
+                                logger.info(
+                                    "Detected OAuth challenge in WWW-Authenticate header",
+                                    metadata: SwiftAgentKitLogging.metadata(("serverURL", .string(self.serverURL.absoluteString)))
+                                )
                                 
                                 // Check for resource_metadata which indicates MCP OAuth discovery opportunity
                                 if let resourceMetadataURL = extractResourceMetadataURL(from: wwwAuthenticate) {
-                                    logger.info("Detected MCP OAuth discovery opportunity with resource_metadata: \(resourceMetadataURL)")
+                                    logger.info(
+                                        "Detected MCP OAuth discovery opportunity",
+                                        metadata: SwiftAgentKitLogging.metadata(
+                                            ("serverURL", .string(self.serverURL.absoluteString)),
+                                            ("resourceMetadataURL", .string(resourceMetadataURL))
+                                        )
+                                    )
                                     throw RemoteTransportError.oauthDiscoveryRequired(resourceMetadataURL: resourceMetadataURL)
                                 } else {
                                     logger.debug("No resource_metadata found in WWW-Authenticate header")
@@ -359,7 +430,16 @@ public actor RemoteTransport: Transport {
                     let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown server error"
                     
                     if retryCount < maxRetries {
-                        logger.warning("Server error \(httpResponse.statusCode), retrying (\(retryCount + 1)/\(maxRetries)): \(errorMessage)")
+                        logger.warning(
+                            "Server error, retrying",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("serverURL", .string(self.serverURL.absoluteString)),
+                                ("status", .stringConvertible(httpResponse.statusCode)),
+                                ("attempt", .stringConvertible(retryCount + 1)),
+                                ("maxRetries", .stringConvertible(self.maxRetries)),
+                                ("message", .string(errorMessage))
+                            )
+                        )
                         retryCount += 1
                         
                         // Exponential backoff for server errors
@@ -384,7 +464,15 @@ public actor RemoteTransport: Transport {
             } catch {
                 if retryCount < maxRetries {
                     retryCount += 1
-                    logger.warning("Request failed, retrying (\(retryCount)/\(maxRetries)): \(error)")
+                    logger.warning(
+                        "Request failed, retrying",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("serverURL", .string(self.serverURL.absoluteString)),
+                            ("attempt", .stringConvertible(retryCount)),
+                            ("maxRetries", .stringConvertible(self.maxRetries)),
+                            ("error", .string(String(describing: error)))
+                        )
+                    )
                     
                     // Brief delay before retry for network errors
                     try await Task.sleep(for: .seconds(1.0))

@@ -13,7 +13,7 @@ import SwiftAgentKitA2A
 /// Direct A2A agent tool provider
 public struct A2AToolProvider: ToolProvider {
     private let clients: [A2AClient]
-    private let logger = Logger(label: "A2AToolProvider")
+    private let logger: Logger
     
     public var name: String { "A2A Agents" }
     
@@ -34,8 +34,14 @@ public struct A2AToolProvider: ToolProvider {
         return tools
     }
     
-    public init(clients: [A2AClient]) {
+    public init(clients: [A2AClient], logger: Logger? = nil) {
         self.clients = clients
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .adapters("A2AToolProvider"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("clientCount", .stringConvertible(clients.count))
+            )
+        )
     }
     
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
@@ -89,7 +95,14 @@ public struct A2AToolProvider: ToolProvider {
                     continue
                 }
             } catch {
-                logger.warning("A2A client call failed: \(error)")
+                logger.warning(
+                    "A2A client call failed",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("toolName", .string(toolCall.name)),
+                        ("client", .string(agentCard.name)),
+                        ("error", .string(String(describing: error)))
+                    )
+                )
                 continue
             }
         }

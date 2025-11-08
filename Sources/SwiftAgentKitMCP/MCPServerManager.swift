@@ -14,9 +14,13 @@ import SwiftAgentKit
 /// Manages the lifecycle of MCP server processes
 public actor MCPServerManager {
     
-    private let logger = Logger(label: "MCPServerManager")
+    private let logger: Logger
     
-    public init() {}
+    public init(logger: Logger? = nil) {
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("MCPServerManager")
+        )
+    }
     
     /// Boots up an MCP server and returns the communication pipes
     /// - Parameters:
@@ -26,21 +30,45 @@ public actor MCPServerManager {
     /// - Throws: Errors if server startup fails
     public func bootServer(bootCall: MCPConfig.ServerBootCall, globalEnvironment: JSON = .object([:])) async throws -> (inPipe: Pipe, outPipe: Pipe) {
         
-        logger.info("Booting MCP server: \(bootCall.name)")
+        logger.info(
+            "Booting MCP server",
+            metadata: SwiftAgentKitLogging.metadata(("server", .string(bootCall.name)))
+        )
         
         // Merge global and server-specific environment variables
         var environment = globalEnvironment.mcpEnvironment
         let bootCallEnvironment = bootCall.environment.mcpEnvironment
         environment.merge(bootCallEnvironment, uniquingKeysWith: { (_, new) in new })
         
-        logger.debug("Server command: \(bootCall.command)")
-        logger.debug("Server arguments: \(bootCall.arguments)")
-        logger.debug("Environment variables: \(environment)")
+        logger.debug(
+            "Server command",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(bootCall.name)),
+                ("command", .string(bootCall.command))
+            )
+        )
+        logger.debug(
+            "Server arguments",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(bootCall.name)),
+                ("arguments", .stringConvertible(bootCall.arguments))
+            )
+        )
+        logger.debug(
+            "Server environment variables",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(bootCall.name)),
+                ("environment", .string(environment.description))
+            )
+        )
         
         // Start the server process
         let (inPipe, outPipe) = Shell.shell(bootCall.command, arguments: bootCall.arguments, environment: environment)
         
-        logger.info("MCP server '\(bootCall.name)' started successfully")
+        logger.info(
+            "MCP server started successfully",
+            metadata: SwiftAgentKitLogging.metadata(("server", .string(bootCall.name)))
+        )
         
         return (inPipe: inPipe, outPipe: outPipe)
     }
@@ -51,7 +79,12 @@ public actor MCPServerManager {
     /// - Throws: Errors if any server startup fails
     public func bootServers(config: MCPConfig) async throws -> [String: (inPipe: Pipe, outPipe: Pipe)] {
         
-        logger.info("Booting \(config.serverBootCalls.count) MCP servers")
+        logger.info(
+            "Booting MCP servers",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("count", .stringConvertible(config.serverBootCalls.count))
+            )
+        )
         
         var serverPipes: [String: (inPipe: Pipe, outPipe: Pipe)] = [:]
         
@@ -60,7 +93,12 @@ public actor MCPServerManager {
             serverPipes[bootCall.name] = pipes
         }
         
-        logger.info("Successfully booted all \(serverPipes.count) MCP servers")
+        logger.info(
+            "Successfully booted MCP servers",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("count", .stringConvertible(serverPipes.count))
+            )
+        )
         
         return serverPipes
     }
@@ -74,7 +112,10 @@ public actor MCPServerManager {
     public func bootServer(named serverName: String, config: MCPConfig) async throws -> (inPipe: Pipe, outPipe: Pipe) {
         
         guard let bootCall = config.serverBootCalls.first(where: { $0.name == serverName }) else {
-            logger.error("Server '\(serverName)' not found in configuration")
+            logger.error(
+                "Server not found in configuration",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(serverName)))
+            )
             throw MCPServerManagerError.serverNotFound(serverName)
         }
         
