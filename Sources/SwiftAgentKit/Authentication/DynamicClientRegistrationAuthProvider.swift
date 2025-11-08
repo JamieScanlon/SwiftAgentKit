@@ -168,7 +168,7 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
             if await oauthProvider.isAuthenticationValid() {
                 return // Everything is good
             } else {
-                logger.info("OAuth provider is no longer valid, attempting to refresh or re-register")
+                logger.debug("OAuth provider reported invalid state, attempting to refresh or re-register")
                 // Try to refresh the OAuth provider
                 do {
                     let challenge = AuthenticationChallenge(
@@ -180,7 +180,10 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
                     _ = try await oauthProvider.handleAuthenticationChallenge(challenge)
                     return // Refresh was successful
                 } catch {
-                    logger.info("OAuth refresh failed, will re-register client")
+                    logger.warning(
+                        "OAuth refresh failed for registered client; forcing re-registration",
+                        metadata: ["error": .string(String(describing: error))]
+                    )
                     // If refresh fails, we'll re-register below
                 }
             }
@@ -189,7 +192,7 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
         // Try to load existing credentials from storage
         if let credentialStorage = credentialStorage {
             if let storedCredentials = await credentialStorage.loadCredentials() {
-                logger.info("Found stored client credentials, attempting to use them")
+                logger.debug("Found stored client credentials, attempting to use them")
                 
                 // Create OAuth provider with stored credentials
                 if let oauthProvider = try await createOAuthProvider(from: storedCredentials) {
@@ -198,10 +201,10 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
                     
                     // Verify the credentials are still valid
                     if await oauthProvider.isAuthenticationValid() {
-                        logger.info("Stored credentials are valid, using existing registration")
+                        logger.debug("Stored credentials validated successfully; keeping existing registration")
                         return
                     } else {
-                        logger.info("Stored credentials are invalid, will re-register")
+                        logger.warning("Stored credentials failed validation; re-registering client")
                     }
                 }
             }
@@ -255,7 +258,7 @@ public actor DynamicClientRegistrationAuthProvider: AuthenticationProvider {
         // 2. Create the appropriate OAuth provider (PKCE, OAuth Discovery, etc.)
         // 3. Handle different grant types and response types
         
-        logger.info(
+        logger.debug(
             "Creating OAuth provider for registered client",
             metadata: SwiftAgentKitLogging.metadata(("clientId", .string(response.clientId)))
         )

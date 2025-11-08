@@ -29,7 +29,7 @@ public struct BasicAuthProvider: AuthenticationProvider {
         } else {
             self.logger = SwiftAgentKitLogging.logger(
                 for: .authentication("BasicAuthProvider"),
-                metadata: SwiftAgentKitLogging.metadata(("scheme", .string("basic")))
+                metadata: ["scheme": .string("basic")]
             )
         }
     }
@@ -49,9 +49,17 @@ public struct BasicAuthProvider: AuthenticationProvider {
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info(
-            "Handling Basic auth challenge",
-            metadata: ["status": .stringConvertible(challenge.statusCode)]
+        let wwwAuthenticate = challenge.headers["WWW-Authenticate"]
+        let parameters = wwwAuthenticate.map(WWWAuthenticateParser.parseWWWAuthenticateHeader) ?? [:]
+        let realm = parameters["realm"]
+        
+        logger.warning(
+            "Basic authentication challenge encountered",
+            metadata: [
+                "status": .stringConvertible(challenge.statusCode),
+                "realm": .string(realm ?? "unknown"),
+                "server": .string(challenge.serverInfo ?? "unknown")
+            ]
         )
         
         guard challenge.statusCode == 401 else {
@@ -71,6 +79,6 @@ public struct BasicAuthProvider: AuthenticationProvider {
     
     public func cleanup() async {
         // No cleanup needed for Basic auth
-        logger.info("Basic authentication cleaned up")
+        logger.debug("Basic authentication cleaned up")
     }
 }

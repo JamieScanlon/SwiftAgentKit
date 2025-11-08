@@ -7,6 +7,14 @@ public enum SwiftAgentKitLogging {
         var baseLogger: Logger
         var defaultMetadata: Logger.Metadata
         var currentLevel: Logger.Level
+        var overrideStack: [ScopedOverride]
+    }
+    
+    private struct ScopedOverride: Sendable {
+        let id: UUID
+        let previousLevel: Logger.Level
+        let previousMetadata: Logger.Metadata
+        let previousLogger: Logger
     }
     
     private final class LockProtected<Value: Sendable>: @unchecked Sendable {
@@ -32,7 +40,8 @@ public enum SwiftAgentKitLogging {
         LoggingState(
             baseLogger: SwiftAgentKitLogging.makeNullLogger(),
             defaultMetadata: [:],
-            currentLevel: .info
+            currentLevel: .info,
+            overrideStack: []
         )
     )
     
@@ -144,6 +153,17 @@ public enum SwiftAgentKitLogging {
         metadata: Logger.Metadata = [:]
     ) {
         state.withValue { state in
+            let callSite = Thread.callStackSymbols.dropFirst().first ?? "unknown"
+            let targetLogger = logger ?? makeNullLogger()
+            targetLogger.debug(
+                "SwiftAgentKitLogging bootstrap invoked",
+                metadata: [
+                    "level": .string(level.rawValue),
+                    "metadataKeys": .string(metadata.keys.sorted().joined(separator: ",")),
+                    "overrideActive": .string(state.overrideStack.isEmpty ? "false" : "true"),
+                    "callSite": .string(callSite)
+                ]
+            )
             state.baseLogger = logger ?? makeNullLogger()
             state.defaultMetadata = metadata
             state.currentLevel = level.swiftLogLevel
@@ -154,6 +174,17 @@ public enum SwiftAgentKitLogging {
     /// Update the log level for the entire library.
     public static func setLevel(_ level: AgentLogLevel) {
         state.withValue { state in
+            let callSite = Thread.callStackSymbols.dropFirst().first ?? "unknown"
+            let previousLevel = AgentLogLevel(swiftLogLevel: state.currentLevel)
+            state.baseLogger.debug(
+                "SwiftAgentKitLogging setLevel invoked",
+                metadata: [
+                    "newLevel": .string(level.rawValue),
+                    "previousLevel": .string(previousLevel.rawValue),
+                    "overrideActive": .string(state.overrideStack.isEmpty ? "false" : "true"),
+                    "callSite": .string(callSite)
+                ]
+            )
             state.currentLevel = level.swiftLogLevel
             state.baseLogger.logLevel = state.currentLevel
         }
@@ -194,7 +225,71 @@ public enum SwiftAgentKitLogging {
             state.defaultMetadata = [:]
             state.currentLevel = .info
             state.baseLogger.logLevel = state.currentLevel
+            state.overrideStack.removeAll()
         }
+    }
+    
+    /// Temporarily override the global logging configuration for the duration of the closure.
+    /// Useful in tests that need to adjust log level or metadata without leaking state.
+    @discardableResult
+    public static func withScopedOverride<T>(
+        level: AgentLogLevel? = nil,
+        metadata: Logger.Metadata? = nil,
+        logger: Logger? = nil,
+        _ perform: () throws -> T
+    ) rethrows -> T {
+        let override = state.withValue { state -> ScopedOverride in
+            let ticket = ScopedOverride(
+                id: UUID(),
+                previousLevel: state.currentLevel,
+                previousMetadata: state.defaultMetadata,
+                previousLogger: state.baseLogger
+            )
+            state.overrideStack.append(ticket)
+            
+            if let logger {
+                state.baseLogger = logger
+            }
+            if let metadata {
+                state.defaultMetadata = metadata
+            }
+            if let level {
+                state.currentLevel = level.swiftLogLevel
+                state.baseLogger.logLevel = state.currentLevel
+            }
+            state.baseLogger.debug(
+                "Applying scoped logging override",
+                metadata: [
+                    "overrideId": .string(ticket.id.uuidString),
+                    "level": .string(AgentLogLevel(swiftLogLevel: state.currentLevel).rawValue),
+                    "metadataKeys": .string(state.defaultMetadata.keys.sorted().joined(separator: ","))
+                ]
+            )
+            return ticket
+        }
+        
+        defer {
+            state.withValue { state in
+                guard let last = state.overrideStack.last, last.id == override.id else {
+                    state.baseLogger.warning(
+                        "Attempted to pop logging override out of order",
+                        metadata: ["overrideId": .string(override.id.uuidString)]
+                    )
+                    return
+                }
+                state.overrideStack.removeLast()
+                state.baseLogger = override.previousLogger
+                state.defaultMetadata = override.previousMetadata
+                state.currentLevel = override.previousLevel
+                state.baseLogger.logLevel = state.currentLevel
+                state.baseLogger.debug(
+                    "Restored logging state after scoped override",
+                    metadata: ["overrideId": .string(override.id.uuidString)]
+                )
+            }
+        }
+        
+        return try perform()
     }
     
     private static func mergeMetadata(_ parts: Logger.Metadata...) -> Logger.Metadata {

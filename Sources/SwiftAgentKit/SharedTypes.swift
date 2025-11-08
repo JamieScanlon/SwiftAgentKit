@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import Logging
 
 // MARK: - HTTP Method
 
@@ -32,9 +33,19 @@ public enum APIError: Error {
 // MARK: - Streaming Data Buffer
 
 public actor StreamingDataBuffer {
+    private static let logger = SwiftAgentKitLogging.logger(
+        for: .core("StreamingDataBuffer")
+    )
     
     public var buffer = Data()
     public func append(_ data: Data) {
         buffer.append(data)
+        Self.logger.debug(
+            "Appended data chunk to streaming buffer",
+            metadata: [
+                "appendedBytes": .stringConvertible(data.count),
+                "totalBytes": .stringConvertible(buffer.count)
+            ]
+        )
     }
 } 

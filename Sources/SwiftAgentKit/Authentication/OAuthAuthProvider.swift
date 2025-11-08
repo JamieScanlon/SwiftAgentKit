@@ -119,13 +119,28 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             try await refreshAccessToken()
         }
         
+        if let expiresAt = tokens.expiresAt {
+            logger.debug(
+                "Using OAuth access token",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("expiresIn", .stringConvertible(expiresAt.timeIntervalSinceNow)),
+                    ("hasRefreshToken", .string(tokens.refreshToken != nil ? "true" : "false"))
+                )
+            )
+        }
+        
         return ["Authorization": "\(tokens.tokenType) \(tokens.accessToken)"]
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info(
-            "Handling OAuth authentication challenge",
-            metadata: SwiftAgentKitLogging.metadata(("status", .stringConvertible(challenge.statusCode)))
+        let hasRefreshToken = tokens.refreshToken != nil
+        logger.warning(
+            "OAuth authentication challenge encountered",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("status", .stringConvertible(challenge.statusCode)),
+                ("refreshToken", .string(hasRefreshToken ? "present" : "missing")),
+                ("server", .string(challenge.serverInfo ?? "unknown"))
+            )
         )
         
         guard challenge.statusCode == 401 else {
@@ -148,7 +163,7 @@ public actor OAuthAuthProvider: AuthenticationProvider {
     
     public func cleanup() async {
         // In a production app, you might want to revoke the tokens
-        logger.info("OAuth authentication cleaned up")
+        logger.debug("OAuth authentication cleaned up")
     }
     
     /// Get current access token (useful for debugging or logging)
@@ -164,7 +179,7 @@ public actor OAuthAuthProvider: AuthenticationProvider {
     /// Update tokens (useful when tokens are refreshed externally)
     public func updateTokens(_ newTokens: OAuthTokens) async {
         self.tokens = newTokens
-        logger.info("OAuth tokens updated")
+        logger.debug("OAuth tokens updated")
     }
     
     // MARK: - Private Methods
@@ -184,7 +199,13 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             throw AuthenticationError.authenticationExpired
         }
         
-        logger.info("Refreshing OAuth access token")
+        logger.info(
+            "Refreshing OAuth access token",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("tokenEndpoint", .string(config.tokenEndpoint.absoluteString)),
+                ("clientId", .string(config.clientId))
+            )
+        )
         
         // Prepare refresh token request
         var request = URLRequest(url: config.tokenEndpoint)
@@ -204,7 +225,7 @@ public actor OAuthAuthProvider: AuthenticationProvider {
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = config.resourceURI {
             bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
-            logger.info(
+            logger.debug(
                 "Added resource parameter to token refresh request",
                 metadata: SwiftAgentKitLogging.metadata(("resourceURI", .string(resourceURI)))
             )
@@ -246,7 +267,13 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             let newTokens = try parseTokenResponse(data)
             self.tokens = newTokens
             
-            logger.info("Successfully refreshed OAuth access token")
+            logger.info(
+                "Successfully refreshed OAuth access token",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("expiresIn", .stringConvertible(newTokens.expiresAt?.timeIntervalSinceNow ?? 0)),
+                    ("scope", .string(newTokens.scope ?? "unspecified"))
+                )
+            )
             
         } catch {
             logger.error(

@@ -1,10 +1,21 @@
 import Foundation
+import Logging
 
 public struct RequestBuilder {
     public let baseURL: URL
+    private let logger: Logger
     
-    public init(baseURL: URL) {
+    public init(baseURL: URL, logger: Logger? = nil) {
         self.baseURL = baseURL
+        if let logger {
+            self.logger = logger
+        } else {
+            let metadata: Logger.Metadata = ["baseURL": .string(baseURL.absoluteString)]
+            self.logger = SwiftAgentKitLogging.logger(
+                for: .networking("RequestBuilder"),
+                metadata: metadata
+            )
+        }
     }
     
     public func createRequest(endpoint: String,
@@ -48,11 +59,33 @@ public struct RequestBuilder {
                     request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
                 }
             } catch {
+                logger.warning(
+                    "Failed to encode request body",
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "method": .string(method.rawValue),
+                        "error": .string(String(describing: error))
+                    ]
+                )
                 throw APIError.requestFailed(error)
             }
         default:
             break
         }
+        
+        var debugMetadata: Logger.Metadata = [
+            "endpoint": .string(endpoint),
+            "method": .string(method.rawValue),
+            "url": .string(request.url?.absoluteString ?? url.absoluteString),
+            "headerCount": .stringConvertible(request.allHTTPHeaderFields?.count ?? 0)
+        ]
+        if let parameters {
+            debugMetadata["parameterCount"] = .stringConvertible(parameters.count)
+        }
+        if let body = request.httpBody {
+            debugMetadata["bodyBytes"] = .stringConvertible(body.count)
+        }
+        logger.debug("Constructed URL request", metadata: debugMetadata)
         return request
     }
-} 
+}

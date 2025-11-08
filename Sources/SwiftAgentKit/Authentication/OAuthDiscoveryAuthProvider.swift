@@ -124,11 +124,17 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info("Handling authentication challenge")
+        logger.warning(
+            "OAuth discovery authentication challenge encountered",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("status", .stringConvertible(challenge.statusCode)),
+                ("server", .string(challenge.serverInfo ?? "unknown"))
+            )
+        )
         
         // If we get a 401, try to refresh the token or re-authenticate
         if challenge.statusCode == 401 {
-            logger.info("Received 401 challenge, attempting to refresh authentication")
+            logger.debug("Received 401 challenge, attempting to refresh authentication")
             
             // Try to refresh token if we have one
             if let refreshToken = refreshToken {
@@ -136,7 +142,10 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
                     try await refreshAccessToken(refreshToken: refreshToken)
                     return try await authenticationHeaders()
                 } catch {
-                    logger.warning("Token refresh failed: \(error)")
+                    logger.warning(
+                        "Token refresh failed during challenge handling",
+                        metadata: ["error": .string(String(describing: error))]
+                    )
                     // Fall through to full re-authentication
                 }
             }
@@ -160,7 +169,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     }
     
     public func cleanup() async {
-        logger.info("Cleaning up OAuth Discovery authentication")
+        logger.debug("Cleaning up OAuth Discovery authentication")
         accessToken = nil
         refreshToken = nil
         tokenExpiration = nil
@@ -246,8 +255,14 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         // Select appropriate scope based on server capabilities and configuration
         let selectedScope = selectOptimalScope(serverMetadata: metadata, configuredScope: scope)
-        logger.info("Dynamic client registration selected scope: '\(selectedScope)' (configured: '\(scope ?? "nil")')")
-        logger.info("Server supported scopes: \(metadata.scopesSupported ?? [])")
+        logger.info(
+            "Dynamic client registration selected scope",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("selectedScope", .string(selectedScope)),
+                ("configuredScope", .string(scope ?? "nil"))
+            )
+        )
+        logger.debug("Server supported scopes", metadata: ["scopes": .string("\(metadata.scopesSupported ?? [])")])
         
         // Create registration request optimized for MCP clients
         let registrationRequest = DynamicClientRegistration.ClientRegistrationRequest.mcpClientRequest(
@@ -257,14 +272,18 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         )
         
         // Log the registration request for debugging
-        logger.info("Sending registration request with metadata:")
-        logger.info("  - redirectUris: \(registrationRequest.redirectUris)")
-        logger.info("  - clientName: \(registrationRequest.clientName ?? "nil")")
-        logger.info("  - applicationType: \(registrationRequest.applicationType ?? "nil")")
-        logger.info("  - grantTypes: \(registrationRequest.grantTypes ?? [])")
-        logger.info("  - responseTypes: \(registrationRequest.responseTypes ?? [])")
-        logger.info("  - scope: \(registrationRequest.scope ?? "nil")")
-        logger.info("  - tokenEndpointAuthMethod: \(registrationRequest.tokenEndpointAuthMethod ?? "nil")")
+        logger.debug(
+            "Registration request metadata",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("redirectUris", .string("\(registrationRequest.redirectUris)")),
+                ("clientName", .string(registrationRequest.clientName ?? "nil")),
+                ("applicationType", .string(registrationRequest.applicationType ?? "nil")),
+                ("grantTypes", .string("\(registrationRequest.grantTypes ?? [])")),
+                ("responseTypes", .string("\(registrationRequest.responseTypes ?? [])")),
+                ("scope", .string(registrationRequest.scope ?? "nil")),
+                ("tokenEndpointAuthMethod", .string(registrationRequest.tokenEndpointAuthMethod ?? "nil"))
+            )
+        )
         
         // Create registration client and perform registration
         let registrationClient = DynamicClientRegistrationClient(config: registrationConfig)
@@ -279,11 +298,14 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             registeredClientSecret = response.clientSecret
             
             logger.info("Dynamic client registration completed successfully")
-            logger.info("Registration Summary:")
-            logger.info("  - Registered Client ID: \(response.clientId)")
-            logger.info("  - Registration Scope: '\(selectedScope)'")
-            logger.info("  - Server Supported Scopes: \(metadata.scopesSupported ?? [])")
-            logger.info("  - This scope will be used consistently in OAuth flow")
+            logger.debug(
+                "Registration summary",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("registeredClientId", .string(response.clientId)),
+                    ("registrationScope", .string(selectedScope)),
+                    ("serverSupportedScopes", .string("\(metadata.scopesSupported ?? [])"))
+                )
+            )
             
         } catch let registrationError as DynamicClientRegistrationError {
             logger.error("Dynamic client registration failed with specific error: \(registrationError)")
@@ -307,7 +329,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         if let configuredScope = configuredScope, !configuredScope.isEmpty {
             // Check if the configured scope is supported by the server
             if serverSupportedScopes.contains(configuredScope) {
-                logger.info("Using configured scope: \(configuredScope)")
+                logger.debug("Using configured scope", metadata: ["scope": .string(configuredScope)])
                 return configuredScope
             } else {
                 logger.warning("Configured scope '\(configuredScope)' not supported by server. Supported scopes: \(serverSupportedScopes)")
@@ -324,7 +346,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         for combinedScope in exactCombinedScopes {
             if serverSupportedScopes.contains(combinedScope) {
-                logger.info("Selected exact server-supported scope: \(combinedScope)")
+                logger.info("Selected server-supported scope", metadata: ["scope": .string(combinedScope)])
                 return combinedScope
             }
         }
@@ -332,7 +354,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // Check for scope combinations we can build from individual scopes
         let builtCombinedScope = buildOptimalScope(from: serverSupportedScopes)
         if !builtCombinedScope.isEmpty {
-            logger.info("Built combined scope from individual scopes: \(builtCombinedScope)")
+            logger.debug("Built combined scope from individual scopes", metadata: ["scope": .string(builtCombinedScope)])
             return builtCombinedScope
         }
         
@@ -341,19 +363,19 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         
         for individualScope in individualScopes {
             if serverSupportedScopes.contains(individualScope) {
-                logger.info("Selected individual server-supported scope: \(individualScope)")
+                    logger.debug("Selected individual server-supported scope", metadata: ["scope": .string(individualScope)])
                 return individualScope
             }
         }
         
         // If no preferred scope is found, use the first available scope
         if let firstScope = serverSupportedScopes.first {
-            logger.info("Using first available server scope: \(firstScope)")
+            logger.info("Using first available server scope", metadata: ["scope": .string(firstScope)])
             return firstScope
         }
         
         // Fallback to default scope if server doesn't specify supported scopes
-        logger.info("No server-supported scopes found, using default: mcp")
+        logger.info("No server-supported scopes found, using default scope 'mcp'")
         return "mcp"
     }
     

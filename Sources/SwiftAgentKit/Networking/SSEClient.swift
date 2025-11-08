@@ -28,6 +28,15 @@ public struct SSEClient: Sendable {
                             parameters: [String: Sendable]? = nil,
                             headers: [String: String]? = nil) -> AsyncStream<[String: Sendable]> {
         return AsyncStream { continuation in
+            logger.info(
+                "Opening SSE connection",
+                metadata: [
+                    "endpoint": .string(endpoint),
+                    "method": .string(method.rawValue),
+                    "parameterCount": .stringConvertible(parameters?.count ?? 0),
+                    "headerCount": .stringConvertible(headers?.count ?? 0)
+                ]
+            )
             let url = baseURL.appendingPathComponent(endpoint)
             var request = URLRequest(url: url)
             request.httpMethod = method.rawValue
@@ -39,8 +48,22 @@ public struct SSEClient: Sendable {
             if let parameters = parameters, method == .post {
                 do {
                     request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
+                    logger.debug(
+                        "Serialized SSE parameters",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "parameterKeys": .string(parameters.keys.sorted().joined(separator: ",")),
+                            "bodyBytes": .stringConvertible(request.httpBody?.count ?? 0)
+                        ]
+                    )
                 } catch {
-                    self.logger.error("SSE Error: Failed to serialize parameters: \(error)")
+                    self.logger.error(
+                        "Failed to serialize SSE parameters",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "error": .string(String(describing: error))
+                        ]
+                    )
                     continuation.finish()
                     return
                 }
@@ -49,12 +72,22 @@ public struct SSEClient: Sendable {
             let logger = self.logger
             let task = session.dataTask(with: request) { data, response, error in
                 if let error = error {
-                    logger.error("SSE Error: \(error)")
+                    logger.error(
+                        "SSE request failed",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "error": .string(String(describing: error))
+                        ]
+                    )
                     continuation.finish()
                     return
                 }
                 guard let data = data,
                       let responseString = String(data: data, encoding: .utf8) else {
+                    logger.warning(
+                        "SSE request returned empty response",
+                        metadata: ["endpoint": .string(endpoint)]
+                    )
                     continuation.finish()
                     return
                 }
@@ -68,11 +101,19 @@ public struct SSEClient: Sendable {
                         }
                     }
                 }
+                logger.info(
+                    "SSE request completed",
+                    metadata: ["endpoint": .string(endpoint)]
+                )
                 continuation.finish()
             }
             task.resume()
             continuation.onTermination = { _ in
                 task.cancel()
+                logger.debug(
+                    "SSE request cancelled",
+                    metadata: ["endpoint": .string(endpoint)]
+                )
             }
         }
     }
@@ -82,6 +123,15 @@ public struct SSEClient: Sendable {
                                 parameters: JSON? = nil,
                                 headers: [String: String]? = nil) -> AsyncStream<JSON> {
         return AsyncStream { continuation in
+            logger.info(
+                "Opening SSE connection",
+                metadata: [
+                    "endpoint": .string(endpoint),
+                    "method": .string(method.rawValue),
+                    "hasParameters": .string(parameters == nil ? "false" : "true"),
+                    "headerCount": .stringConvertible(headers?.count ?? 0)
+                ]
+            )
             let url = baseURL.appendingPathComponent(endpoint)
             var request = URLRequest(url: url)
             request.httpMethod = method.rawValue
@@ -95,8 +145,21 @@ public struct SSEClient: Sendable {
                     // Convert JSON to Data for the request body
                     let parametersDict = try self.jsonToAny(parameters)
                     request.httpBody = try JSONSerialization.data(withJSONObject: parametersDict)
+                    logger.debug(
+                        "Serialized SSE parameters",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "bodyBytes": .stringConvertible(request.httpBody?.count ?? 0)
+                        ]
+                    )
                 } catch {
-                    self.logger.error("SSE Error: Failed to serialize parameters: \(error)")
+                    self.logger.error(
+                        "Failed to serialize SSE parameters",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "error": .string(String(describing: error))
+                        ]
+                    )
                     continuation.finish()
                     return
                 }
@@ -105,12 +168,22 @@ public struct SSEClient: Sendable {
             let logger = self.logger
             let task = session.dataTask(with: request) { data, response, error in
                 if let error = error {
-                    logger.error("SSE Error: \(error)")
+                    logger.error(
+                        "SSE request failed",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "error": .string(String(describing: error))
+                        ]
+                    )
                     continuation.finish()
                     return
                 }
                 guard let data = data,
                       let responseString = String(data: data, encoding: .utf8) else {
+                    logger.warning(
+                        "SSE request returned empty response",
+                        metadata: ["endpoint": .string(endpoint)]
+                    )
                     continuation.finish()
                     return
                 }
@@ -125,11 +198,19 @@ public struct SSEClient: Sendable {
                         }
                     }
                 }
+                logger.info(
+                    "SSE request completed",
+                    metadata: ["endpoint": .string(endpoint)]
+                )
                 continuation.finish()
             }
             task.resume()
             continuation.onTermination = { _ in
                 task.cancel()
+                logger.debug(
+                    "SSE request cancelled",
+                    metadata: ["endpoint": .string(endpoint)]
+                )
             }
         }
     }

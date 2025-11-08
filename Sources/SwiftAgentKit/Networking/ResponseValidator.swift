@@ -1,16 +1,25 @@
 import Foundation
 import EasyJSON
+import Logging
 
 public struct ResponseValidator {
     private let decoder: JSONDecoder
+    private let logger: Logger
     
-    public init(decoder: JSONDecoder? = nil) {
+    public init(decoder: JSONDecoder? = nil, logger: Logger? = nil) {
         if let decoder = decoder {
             self.decoder = decoder
         } else {
             let d = JSONDecoder()
             d.dateDecodingStrategy = .iso8601
             self.decoder = d
+        }
+        if let logger {
+            self.logger = logger
+        } else {
+            self.logger = SwiftAgentKitLogging.logger(
+                for: .networking("ResponseValidator")
+            )
         }
     }
     
@@ -23,8 +32,17 @@ public struct ResponseValidator {
                let message = errorData["message"] as? String {
                 errorMessage = message
             } else if let stringValue = String(data: data, encoding: .utf8) {
-                errorMessage = stringValue
+                errorMessage = String(stringValue.prefix(512))
             }
+            
+            var metadata: Logger.Metadata = [
+                "status": .stringConvertible(statusCode),
+                "responseBytes": .stringConvertible(data.count)
+            ]
+            if let errorMessage {
+                metadata["excerpt"] = .string(errorMessage)
+            }
+            logger.warning("Server returned non-success status", metadata: metadata)
             throw APIError.serverError(statusCode: statusCode, message: errorMessage)
         }
     }
@@ -33,6 +51,14 @@ public struct ResponseValidator {
         do {
             return try decoder.decode(T.self, from: data)
         } catch {
+            logger.error(
+                "Failed to decode response payload",
+                metadata: [
+                    "type": .string(String(describing: T.self)),
+                    "responseBytes": .stringConvertible(data.count),
+                    "error": .string(String(describing: error))
+                ]
+            )
             throw APIError.decodingFailed(error)
         }
     }
@@ -44,6 +70,13 @@ public struct ResponseValidator {
             }
             return json
         } catch {
+            logger.error(
+                "Failed to decode JSON dictionary response",
+                metadata: [
+                    "responseBytes": .stringConvertible(data.count),
+                    "error": .string(String(describing: error))
+                ]
+            )
             throw APIError.decodingFailed(error)
         }
     }
@@ -62,6 +95,13 @@ public struct ResponseValidator {
         } catch let error as APIError {
             throw error
         } catch {
+            logger.error(
+                "Failed to decode EasyJSON response",
+                metadata: [
+                    "responseBytes": .stringConvertible(data.count),
+                    "error": .string(String(describing: error))
+                ]
+            )
             throw APIError.decodingFailed(error)
         }
     }
@@ -91,4 +131,4 @@ public struct ResponseValidator {
             return .string("")
         }
     }
-} 
+}

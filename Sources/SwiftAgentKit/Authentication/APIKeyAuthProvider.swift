@@ -35,13 +35,12 @@ public struct APIKeyAuthProvider: AuthenticationProvider {
         if let logger {
             self.logger = logger
         } else {
-            let metadata = SwiftAgentKitLogging.metadata(
-                ("header", .string(headerName)),
-                ("prefixed", .string(prefix != nil ? "true" : "false"))
-            )
             self.logger = SwiftAgentKitLogging.logger(
                 for: .authentication("APIKeyAuthProvider"),
-                metadata: metadata
+                metadata: [
+                    "header": .string(headerName),
+                    "prefixed": .string(prefix != nil ? "true" : "false")
+                ]
             )
         }
     }
@@ -68,8 +67,13 @@ public struct APIKeyAuthProvider: AuthenticationProvider {
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
         // API keys typically don't refresh, so if we get a challenge, the key is likely invalid
         logger.error(
-            "API Key authentication challenge received",
-            metadata: ["status": .stringConvertible(challenge.statusCode)]
+            "API key rejected by remote service",
+            metadata: [
+                "status": .stringConvertible(challenge.statusCode),
+                "header": .string(headerName),
+                "prefix": .string(prefix ?? "none"),
+                "server": .string(challenge.serverInfo ?? "unknown")
+            ]
         )
         throw AuthenticationError.invalidCredentials
     }
@@ -82,6 +86,6 @@ public struct APIKeyAuthProvider: AuthenticationProvider {
     
     public func cleanup() async {
         // No cleanup needed for API keys
-        logger.info("API Key authentication cleaned up")
+        logger.debug("API key authentication cleaned up")
     }
 }

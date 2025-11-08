@@ -7,9 +7,13 @@
 
 import Foundation
 import CryptoKit
+import Logging
 
 /// Utilities for implementing PKCE (Proof Key for Code Exchange) as per RFC 7636 and OAuth 2.1 Section 7.5.2
 public struct PKCEUtilities {
+    private static let logger = SwiftAgentKitLogging.logger(
+        for: .authentication("PKCEUtilities")
+    )
     
     /// PKCE code verifier and challenge pair
     public struct PKCEPair: Sendable {
@@ -27,14 +31,30 @@ public struct PKCEUtilities {
     /// - Returns: PKCE pair with code verifier and S256 challenge
     /// - Throws: PKCEError if generation fails
     public static func generatePKCEPair() throws -> PKCEPair {
-        // Generate a cryptographically random code verifier
-        // Length should be between 43 and 128 characters (RFC 7636 Section 4.1)
-        let codeVerifier = try generateCodeVerifier()
-        
-        // Generate code challenge using S256 method
-        let codeChallenge = try generateCodeChallenge(from: codeVerifier)
-        
-        return PKCEPair(codeVerifier: codeVerifier, codeChallenge: codeChallenge)
+        logger.debug("Generating PKCE pair")
+        do {
+            // Generate a cryptographically random code verifier
+            // Length should be between 43 and 128 characters (RFC 7636 Section 4.1)
+            let codeVerifier = try generateCodeVerifier()
+            
+            // Generate code challenge using S256 method
+            let codeChallenge = try generateCodeChallenge(from: codeVerifier)
+            
+            logger.debug(
+                "Generated PKCE pair",
+                metadata: [
+                    "codeVerifierLength": .stringConvertible(codeVerifier.count),
+                    "challengeLength": .stringConvertible(codeChallenge.count)
+                ]
+            )
+            return PKCEPair(codeVerifier: codeVerifier, codeChallenge: codeChallenge)
+        } catch {
+            logger.error(
+                "Failed to generate PKCE pair",
+                metadata: ["error": .string(String(describing: error))]
+            )
+            throw error
+        }
     }
     
     /// Generate a code verifier string
@@ -51,6 +71,10 @@ public struct PKCEUtilities {
             .replacingOccurrences(of: "=", with: "")
         
         guard base64String.count >= 43 && base64String.count <= 128 else {
+            logger.warning(
+                "Generated code verifier has invalid length",
+                metadata: ["length": .stringConvertible(base64String.count)]
+            )
             throw PKCEError.invalidCodeVerifierLength(base64String.count)
         }
         
@@ -63,6 +87,10 @@ public struct PKCEUtilities {
     /// - Throws: PKCEError if generation fails
     private static func generateCodeChallenge(from codeVerifier: String) throws -> String {
         guard let data = codeVerifier.data(using: .utf8) else {
+            logger.warning(
+                "Unable to convert code verifier to UTF-8 data",
+                metadata: ["verifierLength": .stringConvertible(codeVerifier.count)]
+            )
             throw PKCEError.invalidCodeVerifier("Unable to convert code verifier to UTF-8 data")
         }
         
@@ -86,8 +114,23 @@ public struct PKCEUtilities {
     public static func validateCodeVerifier(_ codeVerifier: String, against codeChallenge: String) -> Bool {
         do {
             let expectedChallenge = try generateCodeChallenge(from: codeVerifier)
-            return expectedChallenge == codeChallenge
+            let matches = expectedChallenge == codeChallenge
+            if !matches {
+                logger.debug(
+                    "Provided code verifier does not match expected challenge",
+                    metadata: [
+                        "verifierLength": .stringConvertible(codeVerifier.count),
+                        "expectedLength": .stringConvertible(expectedChallenge.count),
+                        "providedLength": .stringConvertible(codeChallenge.count)
+                    ]
+                )
+            }
+            return matches
         } catch {
+            logger.debug(
+                "Failed to validate code verifier",
+                metadata: ["error": .string(String(describing: error))]
+            )
             return false
         }
     }

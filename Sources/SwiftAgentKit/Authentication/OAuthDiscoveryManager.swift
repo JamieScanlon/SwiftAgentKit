@@ -218,7 +218,7 @@ public actor OAuthDiscoveryManager {
             )
             
             if let fallbackURL = fallbackAuthServerURL {
-                logger.info(
+                logger.debug(
                     "Attempting fallback to pre-configured authorization server URL",
                     metadata: ["authorizationServerURL": .string(fallbackURL.absoluteString)]
                 )

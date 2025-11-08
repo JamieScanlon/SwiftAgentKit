@@ -19,6 +19,7 @@ struct SwiftAgentKitLoggingTests {
             level: .debug,
             metadata: ["environment": .string("unit")]
         )
+        _ = recorder.drain()
         
         let logger = SwiftAgentKitLogging.logger(
             for: .authentication("OAuthAuthProvider"),
@@ -26,14 +27,14 @@ struct SwiftAgentKitLoggingTests {
         )
         logger.debug("payload")
         
-        let records = recorder.drain()
-        #expect(records.count == 1)
-        #expect(records.first?.level == .debug)
-        #expect(records.first?.metadata["subsystem"] == .string("swiftagentkit.authentication"))
-        #expect(records.first?.metadata["component"] == .string("OAuthAuthProvider"))
-        #expect(records.first?.metadata["environment"] == .string("unit"))
-        #expect(records.first?.metadata["requestId"] == .string("123"))
-        #expect(records.first?.message.contains("payload") == true)
+        let payloadLogs = recorder.drain().filter { $0.message.contains("payload") }
+        #expect(payloadLogs.count == 1)
+        let payloadLog = payloadLogs[0]
+        #expect(payloadLog.level == .debug)
+        #expect(payloadLog.metadata["subsystem"] == .string("swiftagentkit.authentication"))
+        #expect(payloadLog.metadata["component"] == .string("OAuthAuthProvider"))
+        #expect(payloadLog.metadata["environment"] == .string("unit"))
+        #expect(payloadLog.metadata["requestId"] == .string("123"))
     }
     
     @Test
@@ -46,17 +47,19 @@ struct SwiftAgentKitLoggingTests {
         }
         
         SwiftAgentKitLogging.bootstrap(logger: capturingLogger, level: .info)
+        _ = recorder.drain()
         
         let infoLogger = SwiftAgentKitLogging.logger(for: .core("Message"))
         infoLogger.debug("hidden")
         #expect(recorder.drain().isEmpty)
         
         SwiftAgentKitLogging.setLevel(.debug)
+        _ = recorder.drain()
         let debugLogger = SwiftAgentKitLogging.logger(for: .core("Message"))
         debugLogger.debug("visible")
         
         let logs = recorder.drain()
-        let messageLogs = logs.filter { $0.metadata["component"] == .string("Message") }
+        let messageLogs = logs.filter { $0.metadata["component"] == .string("Message") && $0.message.contains("visible") }
         #expect(messageLogs.count == 1)
         #expect(messageLogs.first?.level == .debug)
         #expect(messageLogs.first?.metadata["component"] == .string("Message"))

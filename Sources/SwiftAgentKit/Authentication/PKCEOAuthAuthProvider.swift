@@ -140,9 +140,13 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info(
-            "Handling PKCE OAuth authentication challenge",
-            metadata: ["status": .stringConvertible(challenge.statusCode)]
+        logger.warning(
+            "PKCE OAuth authentication challenge encountered",
+            metadata: [
+                "status": .stringConvertible(challenge.statusCode),
+                "server": .string(challenge.serverInfo ?? "unknown"),
+                "hasRefreshToken": .string(tokens?.refreshToken == nil ? "false" : "true")
+            ]
         )
         
         guard challenge.statusCode == 401 else {
@@ -176,7 +180,7 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
     
     public func cleanup() async {
         // In a production app, you might want to revoke the tokens
-        logger.info("PKCE OAuth authentication cleaned up")
+        logger.debug("PKCE OAuth authentication cleaned up")
         self.tokens = nil
         self.serverMetadata = nil
     }
@@ -213,7 +217,7 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = config.resourceURI {
             components?.queryItems?.append(URLQueryItem(name: "resource", value: resourceURI))
-            logger.info(
+            logger.debug(
                 "Added resource parameter to authorization request",
                 metadata: ["resourceURI": .string(resourceURI)]
             )
@@ -257,7 +261,7 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = config.resourceURI {
             bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
-            logger.info(
+            logger.debug(
                 "Added resource parameter to token request",
                 metadata: ["resourceURI": .string(resourceURI)]
             )
@@ -327,7 +331,7 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
     /// Update tokens (useful when tokens are refreshed externally)
     public func updateTokens(_ newTokens: OAuthTokens) async {
         self.tokens = newTokens
-        logger.info("PKCE OAuth tokens updated")
+        logger.debug("PKCE OAuth tokens updated")
     }
     
     /// Get the authorization endpoint URL
@@ -364,7 +368,7 @@ public actor PKCEOAuthAuthProvider: AuthenticationProvider {
         }
         
         let _ = try metadata.validatePKCESupport()
-        logger.info("PKCE support validated for authorization server")
+        logger.debug("PKCE support validated for authorization server")
     }
     
     private func getAuthorizationEndpointInternal() -> URL? {
