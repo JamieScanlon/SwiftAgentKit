@@ -619,8 +619,8 @@ private extension A2AServer {
             ("partCount", .stringConvertible(params.message.parts.count)),
             ("stream", .string(stream ? "true" : "false"))
         )
-        if let preview = previewText(from: params.message.parts) {
-            metadata["preview"] = .string(preview)
+        if let rendered = renderParts(from: params.message.parts) {
+            metadata["message"] = .string(rendered)
         }
         return metadata
     }
@@ -632,8 +632,8 @@ private extension A2AServer {
             ("role", .string(message.role)),
             ("partCount", .stringConvertible(message.parts.count))
         )
-        if let preview = previewText(from: message.parts) {
-            metadata["preview"] = .string(preview)
+        if let rendered = renderParts(from: message.parts) {
+            metadata["message"] = .string(rendered)
         }
         return metadata
     }
@@ -647,8 +647,8 @@ private extension A2AServer {
             ("artifactCount", .stringConvertible(task.artifacts?.count ?? 0))
         )
         if let lastMessage = task.history?.last,
-           let preview = previewText(from: lastMessage.parts) {
-            metadata["lastMessagePreview"] = .string(preview)
+           let rendered = renderParts(from: lastMessage.parts) {
+            metadata["lastMessage"] = .string(rendered)
         }
         return metadata
     }
@@ -664,19 +664,13 @@ private extension A2AServer {
                 kind = method
             }
         }
-        let preview: String
-        if json.count <= 200 {
-            preview = json
-        } else {
-            preview = "\(json.prefix(197))…"
-        }
         return SwiftAgentKitLogging.metadata(
             ("eventKind", .string(kind)),
-            ("payloadPreview", .string(preview))
+            ("payload", .string(json))
         )
     }
     
-    nonisolated func previewText(from parts: [A2AMessagePart]) -> String? {
+    nonisolated func renderParts(from parts: [A2AMessagePart]) -> String? {
         let raw = parts.compactMap { part -> String? in
             switch part {
             case .text(let text):
@@ -694,8 +688,6 @@ private extension A2AServer {
             }
         }.joined(separator: " ")
         guard !raw.isEmpty else { return nil }
-        let trimmed = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-        if trimmed.count <= 200 { return trimmed }
-        return "\(trimmed.prefix(197))…"
+        return raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     }
 }

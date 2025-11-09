@@ -486,8 +486,8 @@ private extension A2AClient {
            case .integer(let idValue) = requestId {
             metadata["requestId"] = .stringConvertible(idValue)
         }
-        if let preview = previewText(from: params.message.parts) {
-            metadata["preview"] = .string(preview)
+        if let rendered = renderParts(from: params.message.parts) {
+            metadata["message"] = .string(rendered)
         }
         return metadata
     }
@@ -498,8 +498,8 @@ private extension A2AClient {
             ("role", .string(message.role)),
             ("partCount", .stringConvertible(message.parts.count))
         )
-        if let preview = previewText(from: message.parts) {
-            metadata["preview"] = .string(preview)
+        if let rendered = renderParts(from: message.parts) {
+            metadata["message"] = .string(rendered)
         }
         return metadata
     }
@@ -511,8 +511,8 @@ private extension A2AClient {
             ("status", .string(task.status.state.rawValue))
         )
         if let lastMessage = task.history?.last,
-           let preview = previewText(from: lastMessage.parts) {
-            metadata["lastMessagePreview"] = .string(preview)
+           let rendered = renderParts(from: lastMessage.parts) {
+            metadata["lastMessage"] = .string(rendered)
         }
         metadata["artifactCount"] = .stringConvertible(task.artifacts?.count ?? 0)
         return metadata
@@ -534,13 +534,13 @@ private extension A2AClient {
             ("append", .string(event.append == true ? "true" : "false")),
             ("lastChunk", .string(event.lastChunk == true ? "true" : "false"))
         )
-        if let preview = previewText(from: event.artifact.parts) {
-            metadata["preview"] = .string(preview)
+        if let rendered = renderParts(from: event.artifact.parts) {
+            metadata["artifact"] = .string(rendered)
         }
         return metadata
     }
     
-    nonisolated func previewText(from parts: [A2AMessagePart]) -> String? {
+    nonisolated func renderParts(from parts: [A2AMessagePart]) -> String? {
         let raw = parts.compactMap { part -> String? in
             switch part {
             case .text(let text):
@@ -558,10 +558,7 @@ private extension A2AClient {
             }
         }.joined(separator: " ")
         guard !raw.isEmpty else { return nil }
-        let trimmed = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-        if trimmed.count <= 200 { return trimmed }
-        let prefix = trimmed.prefix(197)
-        return "\(prefix)…"
+        return raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     }
 }
 
