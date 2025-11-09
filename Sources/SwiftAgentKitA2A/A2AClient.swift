@@ -109,6 +109,11 @@ public actor A2AClient {
             throw A2AClientError.notInitialized
         }
         
+        logger.debug(
+            "Sending A2A message",
+            metadata: metadataForMessageSend(params: params)
+        )
+        
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Any] ?? [:]
         
         let response: [String: Sendable] = try await apiManager.jsonRequest("message/send", method: .post, parameters: jsonParams, headers: authHeaders)
@@ -120,12 +125,27 @@ public actor A2AClient {
                 case "message":
                     let messageData = try JSONSerialization.data(withJSONObject: result)
                     let message = try decoder.decode(A2AMessage.self, from: messageData)
+                    logger.debug(
+                        "Received message response",
+                        metadata: metadataForMessageResult(message)
+                    )
                     return .message(message)
                 case "task":
                     let taskData = try JSONSerialization.data(withJSONObject: result)
                     let task = try decoder.decode(A2ATask.self, from: taskData)
+                    logger.debug(
+                        "Received task response",
+                        metadata: metadataForTask(task)
+                    )
                     return .task(task)
                 default:
+                    logger.warning(
+                        "Unknown result kind from message/send",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("kind", .string(kind)),
+                            ("keys", .string(result.keys.sorted().joined(separator: ",")))
+                        )
+                    )
                     throw A2AClientError.invalidResponseType
                 }
             }
@@ -146,9 +166,14 @@ public actor A2AClient {
         requestId += 1
 //        let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Sendable] ?? [:]
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(jsonRPCRequest)) as? [String: Sendable] ?? [:]
+        let streamLogger = logger
         
         return AsyncStream { continuation in
             Task {
+                streamLogger.debug(
+                    "Opening message stream",
+                    metadata: metadataForMessageSend(params: params, stream: true)
+                )
                 
                 let sseStream = await apiManager.sseRequest("message/stream", method: HTTPMethod.post, parameters: jsonParams, headers: authHeaders)
                 let decoder = JSONDecoder()
@@ -167,6 +192,10 @@ public actor A2AClient {
                                 if let messageData = try? JSONSerialization.data(withJSONObject: result),
                                    let message = try? decoder.decode(A2AMessage.self, from: messageData) {
                                     let messageResult = MessageResult.message(message)
+                                    streamLogger.debug(
+                                        "Streaming message chunk received",
+                                        metadata: metadataForMessageResult(message)
+                                    )
                                     let response = SendStreamingMessageSuccessResponse(
                                         jsonrpc: jsonrpc,
                                         id: id,
@@ -178,6 +207,10 @@ public actor A2AClient {
                                 if let taskData = try? JSONSerialization.data(withJSONObject: result),
                                    let task = try? decoder.decode(A2ATask.self, from: taskData) {
                                     let messageResult = MessageResult.task(task)
+                                    streamLogger.debug(
+                                        "Streaming task snapshot received",
+                                        metadata: metadataForTask(task)
+                                    )
                                     let response = SendStreamingMessageSuccessResponse(
                                         jsonrpc: jsonrpc,
                                         id: id,
@@ -189,6 +222,10 @@ public actor A2AClient {
                                 if let statusData = try? JSONSerialization.data(withJSONObject: result),
                                    let statusEvent = try? decoder.decode(TaskStatusUpdateEvent.self, from: statusData) {
                                     let messageResult = MessageResult.taskStatusUpdate(statusEvent)
+                                    streamLogger.debug(
+                                        "Streaming task status update",
+                                        metadata: metadataForStatus(statusEvent)
+                                    )
                                     let response = SendStreamingMessageSuccessResponse(
                                         jsonrpc: jsonrpc,
                                         id: id,
@@ -200,6 +237,10 @@ public actor A2AClient {
                                 if let artifactData = try? JSONSerialization.data(withJSONObject: result),
                                    let artifactEvent = try? decoder.decode(TaskArtifactUpdateEvent.self, from: artifactData) {
                                     let messageResult = MessageResult.taskArtifactUpdate(artifactEvent)
+                                    streamLogger.debug(
+                                        "Streaming task artifact update",
+                                        metadata: metadataForArtifact(artifactEvent)
+                                    )
                                     let response = SendStreamingMessageSuccessResponse(
                                         jsonrpc: jsonrpc,
                                         id: id,
@@ -208,11 +249,19 @@ public actor A2AClient {
                                     continuation.yield(response)
                                 }
                             default:
+                                streamLogger.debug(
+                                    "Streaming payload skipped",
+                                    metadata: SwiftAgentKitLogging.metadata(
+                                        ("kind", .string(kind)),
+                                        ("keys", .string(result.keys.sorted().joined(separator: ",")))
+                                    )
+                                )
                                 break
                             }
                         }
                     }
                 }
+                streamLogger.debug("Message stream closed")
                 continuation.finish()
             }
         }
@@ -279,9 +328,14 @@ public actor A2AClient {
         }
         
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Sendable] ?? [:]
+        let streamLogger = logger
         
         return AsyncStream { continuation in
             Task {
+                streamLogger.debug(
+                    "Resubscribing to task stream",
+                    metadata: SwiftAgentKitLogging.metadata(("taskId", .string(params.taskId)))
+                )
                 let sseStream = await apiManager.sseRequest("tasks/resubscribe", method: HTTPMethod.post, parameters: jsonParams, headers: authHeaders)
                 let decoder = JSONDecoder()
                 decoder.dateDecodingStrategy = .iso8601
@@ -299,6 +353,10 @@ public actor A2AClient {
                                 if let messageData = try? JSONSerialization.data(withJSONObject: result),
                                    let message = try? decoder.decode(A2AMessage.self, from: messageData) {
                                     let messageResult = MessageResult.message(message)
+                                    streamLogger.debug(
+                                        "Resubscribe stream message chunk",
+                                        metadata: metadataForMessageResult(message)
+                                    )
                                     let response = SendStreamingMessageSuccessResponse(
                                         jsonrpc: jsonrpc,
                                         id: id,
@@ -310,6 +368,10 @@ public actor A2AClient {
                                 if let taskData = try? JSONSerialization.data(withJSONObject: result),
                                    let task = try? decoder.decode(A2ATask.self, from: taskData) {
                                     let messageResult = MessageResult.task(task)
+                                    streamLogger.debug(
+                                        "Resubscribe stream task snapshot",
+                                        metadata: metadataForTask(task)
+                                    )
                                     let response = SendStreamingMessageSuccessResponse(
                                         jsonrpc: jsonrpc,
                                         id: id,
@@ -321,6 +383,10 @@ public actor A2AClient {
                                 if let statusData = try? JSONSerialization.data(withJSONObject: result),
                                    let statusEvent = try? decoder.decode(TaskStatusUpdateEvent.self, from: statusData) {
                                     let messageResult = MessageResult.taskStatusUpdate(statusEvent)
+                                    streamLogger.debug(
+                                        "Resubscribe stream status update",
+                                        metadata: metadataForStatus(statusEvent)
+                                    )
                                     let response = SendStreamingMessageSuccessResponse(
                                         jsonrpc: jsonrpc,
                                         id: id,
@@ -332,6 +398,10 @@ public actor A2AClient {
                                 if let artifactData = try? JSONSerialization.data(withJSONObject: result),
                                    let artifactEvent = try? decoder.decode(TaskArtifactUpdateEvent.self, from: artifactData) {
                                     let messageResult = MessageResult.taskArtifactUpdate(artifactEvent)
+                                    streamLogger.debug(
+                                        "Resubscribe stream artifact update",
+                                        metadata: metadataForArtifact(artifactEvent)
+                                    )
                                     let response = SendStreamingMessageSuccessResponse(
                                         jsonrpc: jsonrpc,
                                         id: id,
@@ -340,11 +410,19 @@ public actor A2AClient {
                                     continuation.yield(response)
                                 }
                             default:
+                                streamLogger.debug(
+                                    "Resubscribe stream payload skipped",
+                                    metadata: SwiftAgentKitLogging.metadata(
+                                        ("kind", .string(kind)),
+                                        ("keys", .string(result.keys.sorted().joined(separator: ",")))
+                                    )
+                                )
                                 break
                             }
                         }
                     }
                 }
+                streamLogger.debug("Task resubscribe stream closed")
                 continuation.finish()
             }
         }
@@ -393,6 +471,99 @@ public actor A2AClient {
 }
 
 // MARK: - Extensions
+
+private extension A2AClient {
+    nonisolated func metadataForMessageSend(params: MessageSendParams, stream: Bool = false) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("messageId", .string(params.message.messageId)),
+            ("role", .string(params.message.role)),
+            ("partCount", .stringConvertible(params.message.parts.count)),
+            ("stream", .string(stream ? "true" : "false"))
+        )
+        if let metadataJSON = params.metadata,
+           case .object(let object) = metadataJSON,
+           let requestId = object["requestId"],
+           case .integer(let idValue) = requestId {
+            metadata["requestId"] = .stringConvertible(idValue)
+        }
+        if let preview = previewText(from: params.message.parts) {
+            metadata["preview"] = .string(preview)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForMessageResult(_ message: A2AMessage) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("messageId", .string(message.messageId)),
+            ("role", .string(message.role)),
+            ("partCount", .stringConvertible(message.parts.count))
+        )
+        if let preview = previewText(from: message.parts) {
+            metadata["preview"] = .string(preview)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForTask(_ task: A2ATask) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("taskId", .string(task.id)),
+            ("contextId", .string(task.contextId)),
+            ("status", .string(task.status.state.rawValue))
+        )
+        if let lastMessage = task.history?.last,
+           let preview = previewText(from: lastMessage.parts) {
+            metadata["lastMessagePreview"] = .string(preview)
+        }
+        metadata["artifactCount"] = .stringConvertible(task.artifacts?.count ?? 0)
+        return metadata
+    }
+    
+    nonisolated func metadataForStatus(_ event: TaskStatusUpdateEvent) -> Logger.Metadata {
+        SwiftAgentKitLogging.metadata(
+            ("taskId", .string(event.taskId)),
+            ("contextId", .string(event.contextId)),
+            ("state", .string(event.status.state.rawValue)),
+            ("final", .string(event.final == true ? "true" : "false"))
+        )
+    }
+    
+    nonisolated func metadataForArtifact(_ event: TaskArtifactUpdateEvent) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("taskId", .string(event.taskId)),
+            ("contextId", .string(event.contextId)),
+            ("append", .string(event.append == true ? "true" : "false")),
+            ("lastChunk", .string(event.lastChunk == true ? "true" : "false"))
+        )
+        if let preview = previewText(from: event.artifact.parts) {
+            metadata["preview"] = .string(preview)
+        }
+        return metadata
+    }
+    
+    nonisolated func previewText(from parts: [A2AMessagePart]) -> String? {
+        let raw = parts.compactMap { part -> String? in
+            switch part {
+            case .text(let text):
+                return text
+            case .file(let data, let url):
+                if let url {
+                    return "[file:url:\(url.absoluteString)]"
+                }
+                if let data {
+                    return "[file:data:\(data.count)B]"
+                }
+                return "[file:empty]"
+            case .data(let data):
+                return "[data:\(data.count)B]"
+            }
+        }.joined(separator: " ")
+        guard !raw.isEmpty else { return nil }
+        let trimmed = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        if trimmed.count <= 200 { return trimmed }
+        let prefix = trimmed.prefix(197)
+        return "\(prefix)…"
+    }
+}
 
 extension JSON {
     

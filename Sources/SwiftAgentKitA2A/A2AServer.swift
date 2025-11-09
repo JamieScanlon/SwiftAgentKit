@@ -161,6 +161,10 @@ public actor A2AServer {
         }
         let params = rpcRequest.params
         let requestId = rpcRequest.id
+        logger.debug(
+            "Decoded message/send request",
+            metadata: metadataForMessageSend(params: params, requestId: requestId)
+        )
         
         // Ask adapter what type of response it will return
         let responseType = adapter.responseType(for: params)
@@ -169,7 +173,10 @@ public actor A2AServer {
         case .message:
             // Handle as a simple message (no task created)
             let message = try await adapter.handleMessageSend(params)
-            logger.debug("Returning message response")
+            logger.debug(
+                "Returning message response",
+                metadata: metadataForMessage(message: message, requestId: requestId)
+            )
             return try jsonRPCSuccessResponse(id: requestId, result: message)
             
         case .task:
@@ -198,7 +205,7 @@ public actor A2AServer {
             }
             logger.debug(
                 "Returning task response",
-                metadata: SwiftAgentKitLogging.metadata(("taskId", .string(taskId)))
+                metadata: metadataForTask(task: updatedTask, requestId: requestId)
             )
             return try jsonRPCSuccessResponse(id: requestId, result: updatedTask)
         }
@@ -223,6 +230,10 @@ public actor A2AServer {
         }
         let params = rpcRequest.params
         let requestId = rpcRequest.id
+        logger.debug(
+            "Decoded message/stream request",
+            metadata: metadataForMessageSend(params: params, requestId: requestId, stream: true)
+        )
         let adapter = self.adapter  // Capture adapter before the task
         let res = Response(status:.ok)
         let store = taskStore
@@ -305,12 +316,17 @@ public actor A2AServer {
         }
         
         // Create streaming body (unified for both message and task responses)
+        let streamLogger = logger
         let bodyStream = AsyncStream<ByteBuffer> { cont in
             Task.detached {
                 do {
                     try await adapter.handleStream(updatedParams, taskId: taskId, contextId: contextId, store: taskId != nil ? store : nil) { ev in
                         if let data = try? self.encoder.encode(ev),
                             let jsonString = String(data: data, encoding:.utf8) {
+                            streamLogger.debug(
+                                "Streaming A2A event",
+                                metadata: self.metadataForEventJSONString(jsonString)
+                            )
                             var buf = ByteBufferAllocator().buffer(capacity: jsonString.count+8)
                             buf.writeString("data: \(jsonString)\n\n")
                             cont.yield(buf)
@@ -318,6 +334,13 @@ public actor A2AServer {
                     }
                 } catch {
                     // Ensure the stream finishes even if the adapter throws
+                    streamLogger.error(
+                        "Adapter stream failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("error", .string(String(describing: error))),
+                            ("requestId", .stringConvertible(requestId))
+                        )
+                    )
                 }
                 cont.finish()
             }
@@ -471,6 +494,13 @@ public actor A2AServer {
         let rpcRequest = try req.content.decode(JSONRPCRequest<TaskIdParams>.self)
         let taskIdParams = rpcRequest.params
         let requestId = rpcRequest.id
+        logger.debug(
+            "Handling tasks/resubscribe request",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("taskId", .string(taskIdParams.taskId)),
+                ("requestId", .stringConvertible(requestId))
+            )
+        )
         guard let task = await self.taskStore.getTask(id: taskIdParams.taskId) else {
             return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
         }
@@ -480,6 +510,10 @@ public actor A2AServer {
             func send<T: Encodable>(_ obj: T) {
                 if let data = try? encoder.encode(obj),
                    let jsonString = String(data: data, encoding: .utf8) {
+                    logger.debug(
+                        "tasks/resubscribe event",
+                        metadata: self.metadataForEventJSONString(jsonString)
+                    )
                     var buffer = ByteBufferAllocator().buffer(capacity: jsonString.count + 8)
                     buffer.writeString("data: \(jsonString)\n\n")
                     continuation.yield(buffer)
@@ -571,5 +605,97 @@ extension A2AServer {
         response.body = .init(data: data)
         response.headers.replaceOrAdd(name: .contentType, value: "application/json")
         return response
+    }
+}
+
+// MARK: - Logging Helpers
+
+private extension A2AServer {
+    nonisolated func metadataForMessageSend(params: MessageSendParams, requestId: Int, stream: Bool = false) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("requestId", .stringConvertible(requestId)),
+            ("messageId", .string(params.message.messageId)),
+            ("role", .string(params.message.role)),
+            ("partCount", .stringConvertible(params.message.parts.count)),
+            ("stream", .string(stream ? "true" : "false"))
+        )
+        if let preview = previewText(from: params.message.parts) {
+            metadata["preview"] = .string(preview)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForMessage(message: A2AMessage, requestId: Int) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("requestId", .stringConvertible(requestId)),
+            ("messageId", .string(message.messageId)),
+            ("role", .string(message.role)),
+            ("partCount", .stringConvertible(message.parts.count))
+        )
+        if let preview = previewText(from: message.parts) {
+            metadata["preview"] = .string(preview)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForTask(task: A2ATask, requestId: Int) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("requestId", .stringConvertible(requestId)),
+            ("taskId", .string(task.id)),
+            ("contextId", .string(task.contextId)),
+            ("status", .string(task.status.state.rawValue)),
+            ("artifactCount", .stringConvertible(task.artifacts?.count ?? 0))
+        )
+        if let lastMessage = task.history?.last,
+           let preview = previewText(from: lastMessage.parts) {
+            metadata["lastMessagePreview"] = .string(preview)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForEventJSONString(_ json: String) -> Logger.Metadata {
+        var kind = "unknown"
+        if let data = json.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let result = object["result"] as? [String: Any],
+               let resultKind = result["kind"] as? String {
+                kind = resultKind
+            } else if let method = object["method"] as? String {
+                kind = method
+            }
+        }
+        let preview: String
+        if json.count <= 200 {
+            preview = json
+        } else {
+            preview = "\(json.prefix(197))…"
+        }
+        return SwiftAgentKitLogging.metadata(
+            ("eventKind", .string(kind)),
+            ("payloadPreview", .string(preview))
+        )
+    }
+    
+    nonisolated func previewText(from parts: [A2AMessagePart]) -> String? {
+        let raw = parts.compactMap { part -> String? in
+            switch part {
+            case .text(let text):
+                return text
+            case .file(let data, let url):
+                if let url {
+                    return "[file:url:\(url.absoluteString)]"
+                }
+                if let data {
+                    return "[file:data:\(data.count)B]"
+                }
+                return "[file:empty]"
+            case .data(let data):
+                return "[data:\(data.count)B]"
+            }
+        }.joined(separator: " ")
+        guard !raw.isEmpty else { return nil }
+        let trimmed = raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+        if trimmed.count <= 200 { return trimmed }
+        return "\(trimmed.prefix(197))…"
     }
 }
