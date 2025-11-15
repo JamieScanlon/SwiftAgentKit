@@ -5,9 +5,19 @@ import EasyJSON
 public struct SSEClient: Sendable {
     private let baseURL: URL
     private let logger: Logger
+    private let session: URLSession
+    private let timeoutInterval: TimeInterval
     
-    public init(baseURL: URL, logger: Logger?) {
+    /// Initialize SSEClient with configurable timeout
+    /// - Parameters:
+    ///   - baseURL: The base URL for SSE requests
+    ///   - session: Optional custom URLSession. If nil, a session with the specified timeout will be created
+    ///   - timeoutInterval: Timeout interval in seconds for SSE connections (default: 600 seconds / 10 minutes)
+    ///   - logger: Optional logger instance
+    public init(baseURL: URL, session: URLSession? = nil, timeoutInterval: TimeInterval = 600.0, logger: Logger? = nil) {
         self.baseURL = baseURL
+        self.timeoutInterval = timeoutInterval
+        
         if let logger {
             self.logger = logger
         } else {
@@ -17,10 +27,20 @@ public struct SSEClient: Sendable {
                 metadata: metadata
             )
         }
+        
+        // Create a session with configured timeouts for SSE streams if not provided
+        if let session = session {
+            self.session = session
+        } else {
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = timeoutInterval
+            config.timeoutIntervalForResource = timeoutInterval
+            self.session = URLSession(configuration: config)
+        }
     }
     
     public init(baseURL: URL) {
-        self.init(baseURL: baseURL, logger: nil)
+        self.init(baseURL: baseURL, session: nil, timeoutInterval: 600.0, logger: nil)
     }
     
     public func sseRequest(_ endpoint: String,
@@ -68,9 +88,11 @@ public struct SSEClient: Sendable {
                     return
                 }
             }
-            let session = URLSession.shared
+            // Set timeout on the request itself as well (though session config takes precedence)
+            request.timeoutInterval = self.timeoutInterval
+            
             let logger = self.logger
-            let task = session.dataTask(with: request) { data, response, error in
+            let task = self.session.dataTask(with: request) { data, response, error in
                 if let error = error {
                     logger.error(
                         "SSE request failed",
@@ -164,9 +186,11 @@ public struct SSEClient: Sendable {
                     return
                 }
             }
-            let session = URLSession.shared
+            // Set timeout on the request itself as well (though session config takes precedence)
+            request.timeoutInterval = self.timeoutInterval
+            
             let logger = self.logger
-            let task = session.dataTask(with: request) { data, response, error in
+            let task = self.session.dataTask(with: request) { data, response, error in
                 if let error = error {
                     logger.error(
                         "SSE request failed",

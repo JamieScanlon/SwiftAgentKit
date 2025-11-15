@@ -21,7 +21,13 @@ public actor RestAPIManager {
     private let logger: Logger
     
     // MARK: - Initialization
-    public init(baseURL: URL, configuration: URLSessionConfiguration = .default, logger: Logger? = nil) {
+    /// Initialize RestAPIManager with configurable timeouts
+    /// - Parameters:
+    ///   - baseURL: The base URL for API requests
+    ///   - configuration: URLSessionConfiguration for regular requests (default: .default)
+    ///   - sseTimeoutInterval: Timeout interval in seconds for SSE connections (default: 600 seconds / 10 minutes)
+    ///   - logger: Optional logger instance
+    public init(baseURL: URL, configuration: URLSessionConfiguration = .default, sseTimeoutInterval: TimeInterval = 600.0, logger: Logger? = nil) {
         self.baseURL = baseURL
         self.session = URLSession(configuration: configuration)
         let metadata: Logger.Metadata = ["baseURL": .string(baseURL.absoluteString)]
@@ -50,8 +56,11 @@ public actor RestAPIManager {
                 metadata: metadata
             )
         )
+        
         self.sseClient = SSEClient(
             baseURL: baseURL,
+            session: nil,
+            timeoutInterval: sseTimeoutInterval,
             logger: SwiftAgentKitLogging.logger(
                 for: .networking("SSEClient"),
                 metadata: metadata

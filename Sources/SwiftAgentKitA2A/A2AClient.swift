@@ -63,7 +63,12 @@ public actor A2AClient {
             }
         }
         
-        apiManager = RestAPIManager(baseURL: server.url)
+        // Configure RestAPIManager with extended timeout for long-running LLM responses
+        // Using 1 year (31536000 seconds) as effectively infinite for A2A connections
+        apiManager = RestAPIManager(
+            baseURL: server.url,
+            sseTimeoutInterval: 31536000.0 // 1 year in seconds
+        )
         logger.info(
             "Initializing A2A client",
             metadata: SwiftAgentKitLogging.metadata(
