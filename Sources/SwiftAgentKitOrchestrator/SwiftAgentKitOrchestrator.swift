@@ -176,7 +176,7 @@ public actor SwiftAgentKitOrchestrator {
                     )
 
                     // Convert LLMResponse to Message for conversation history
-                    let responseMessage = Message(id: UUID(), role: .assistant, content: response.content)
+                    let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: response.toolCalls)
                     updatedMessages.append(responseMessage)
                     // Publish the message
                     publishMessage(responseMessage)
@@ -202,7 +202,7 @@ public actor SwiftAgentKitOrchestrator {
                                 ("responseCount", .stringConvertible(toolResponses.count))
                             )
                         )
-                        let toolResponseMessages = toolResponses.map({ Message(id: UUID(), role: .tool, content: $0.content) })
+                        let toolResponseMessages = toolResponses.map({ Message(id: UUID(), role: .tool, content: $0.content, toolCalls: $0.toolCalls) })
                         updatedMessages.append(contentsOf: toolResponseMessages)
                         toolResponseMessages.forEach { publishMessage($0) }
                         
@@ -228,7 +228,7 @@ public actor SwiftAgentKitOrchestrator {
                 )
             )
             // Convert LLMResponse to Message for conversation history
-            let responseMessage = Message(id: UUID(), role: .assistant, content: response.content)
+            let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: response.toolCalls)
             updatedMessages.append(responseMessage)
             // Publish the final conversation history
             publishMessage(responseMessage)
@@ -254,7 +254,7 @@ public actor SwiftAgentKitOrchestrator {
                         ("responseCount", .stringConvertible(toolResponses.count))
                     )
                 )
-                let toolResponseMessages = toolResponses.map({ Message(id: UUID(), role: .tool, content: $0.content) })
+                let toolResponseMessages = toolResponses.map({ Message(id: UUID(), role: .tool, content: $0.content, toolCalls: $0.toolCalls) })
                 updatedMessages.append(contentsOf: toolResponseMessages)
                 toolResponseMessages.forEach { publishMessage($0) }
                 
