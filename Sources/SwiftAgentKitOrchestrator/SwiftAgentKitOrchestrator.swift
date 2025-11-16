@@ -194,7 +194,7 @@ public actor SwiftAgentKitOrchestrator {
                         
                         guard !toolResponses.isEmpty else { continue }
                         
-                        // Pubilsh the tool calll Messages
+                        // Create tool response messages with proper toolCallId mapping
                         // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
                         logger.info(
                             "Sending tool responses back to LLM",
@@ -202,7 +202,15 @@ public actor SwiftAgentKitOrchestrator {
                                 ("responseCount", .stringConvertible(toolResponses.count))
                             )
                         )
-                        let toolResponseMessages = toolResponses.map({ Message(id: UUID(), role: .tool, content: $0.content, toolCalls: $0.toolCalls) })
+                        let toolResponseMessages = toolResponses.map { response in
+                            Message(
+                                id: UUID(),
+                                role: .tool,
+                                content: response.content,
+                                toolCalls: response.toolCalls,
+                                toolCallId: response.toolCallId
+                            )
+                        }
                         updatedMessages.append(contentsOf: toolResponseMessages)
                         toolResponseMessages.forEach { publishMessage($0) }
                         
@@ -246,7 +254,7 @@ public actor SwiftAgentKitOrchestrator {
                 
                 guard !toolResponses.isEmpty else { return }
                 
-                // Pubilsh the tool calll Messages
+                // Create tool response messages with proper toolCallId mapping
                 // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
                 logger.info(
                     "Sending tool responses back to LLM",
@@ -254,7 +262,15 @@ public actor SwiftAgentKitOrchestrator {
                         ("responseCount", .stringConvertible(toolResponses.count))
                     )
                 )
-                let toolResponseMessages = toolResponses.map({ Message(id: UUID(), role: .tool, content: $0.content, toolCalls: $0.toolCalls) })
+                let toolResponseMessages = toolResponses.map { response in
+                    Message(
+                        id: UUID(),
+                        role: .tool,
+                        content: response.content,
+                        toolCalls: response.toolCalls,
+                        toolCallId: response.toolCallId
+                    )
+                }
                 updatedMessages.append(contentsOf: toolResponseMessages)
                 toolResponseMessages.forEach { publishMessage($0) }
                 
@@ -355,7 +371,17 @@ public actor SwiftAgentKitOrchestrator {
                                 "MCP tool call responses received",
                                 metadata: metadataForResponses(mcpResponses, provider: "mcp")
                             )
-                            callResponses.append(contentsOf: mcpResponses)
+                            // Set toolCallId on each response
+                            let responsesWithId = mcpResponses.map { response in
+                                LLMResponse(
+                                    content: response.content,
+                                    toolCalls: response.toolCalls,
+                                    metadata: response.metadata,
+                                    isComplete: response.isComplete,
+                                    toolCallId: toolCall.id
+                                )
+                            }
+                            callResponses.append(contentsOf: responsesWithId)
                         }
                     } else {
                         logger.debug(
@@ -381,7 +407,17 @@ public actor SwiftAgentKitOrchestrator {
                                 "A2A agent call responses received",
                                 metadata: metadataForResponses(a2aResponses, provider: "a2a")
                             )
-                            callResponses.append(contentsOf: a2aResponses)
+                            // Set toolCallId on each response
+                            let responsesWithId = a2aResponses.map { response in
+                                LLMResponse(
+                                    content: response.content,
+                                    toolCalls: response.toolCalls,
+                                    metadata: response.metadata,
+                                    isComplete: response.isComplete,
+                                    toolCallId: toolCall.id
+                                )
+                            }
+                            callResponses.append(contentsOf: responsesWithId)
                         }
                     } else {
                         logger.debug(

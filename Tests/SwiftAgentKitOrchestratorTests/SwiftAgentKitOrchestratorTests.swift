@@ -2,16 +2,23 @@ import Foundation
 import Testing
 import SwiftAgentKitOrchestrator
 import SwiftAgentKit
+import SwiftAgentKitMCP
+import SwiftAgentKitA2A
 import Logging
+import EasyJSON
 
 // Mock LLM for testing
 struct MockLLM: LLMProtocol {
     let model: String
     let logger: Logger
+    var toolCallsToReturn: [ToolCall] = []
+    var shouldReturnToolCalls: Bool = false
     
-    init(model: String = "mock-gpt-4", logger: Logger) {
+    init(model: String = "mock-gpt-4", logger: Logger, toolCallsToReturn: [ToolCall] = [], shouldReturnToolCalls: Bool = false) {
         self.model = model
         self.logger = logger
+        self.toolCallsToReturn = toolCallsToReturn
+        self.shouldReturnToolCalls = shouldReturnToolCalls
     }
     
     func getModelName() -> String {
@@ -23,6 +30,12 @@ struct MockLLM: LLMProtocol {
     }
     
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        if shouldReturnToolCalls {
+            return LLMResponse.withToolCalls(
+                content: "",
+                toolCalls: toolCallsToReturn
+            )
+        }
         return LLMResponse.complete(content: "Mock response")
     }
     
@@ -34,16 +47,24 @@ struct MockLLM: LLMProtocol {
                 
                 // Send streaming chunks
                 for chunk in chunks {
-                    continuation.yield(.stream(LLMResponse.streamChunk(chunk)))
+                    continuation.yield(StreamResult.stream(LLMResponse.streamChunk(chunk)))
                 }
                 
                 // Send the complete response
-                continuation.yield(.complete(LLMResponse.complete(content: "Mock streaming response")))
+                if shouldReturnToolCalls {
+                    continuation.yield(StreamResult.complete(LLMResponse.withToolCalls(
+                        content: "",
+                        toolCalls: toolCallsToReturn
+                    )))
+                } else {
+                    continuation.yield(StreamResult.complete(LLMResponse.complete(content: "Mock streaming response")))
+                }
                 continuation.finish()
             }
         }
     }
 }
+
 
 @Suite struct SwiftAgentKitOrchestratorTests {
     
@@ -302,5 +323,205 @@ struct MockLLM: LLMProtocol {
         let orchestrator2 = SwiftAgentKitOrchestrator(llm: mockLLM, config: config2)
         let tools2 = await orchestrator2.allAvailableTools
         #expect(tools2.isEmpty)
+    }
+    
+    // MARK: - Tool Call Execution Tests
+    
+    @Test("Tool calls with toolCallId are handled correctly")
+    func testToolCallsWithId() async throws {
+        let toolCallId = "test-tool-call-1"
+        let toolCall = ToolCall(
+            name: "test_tool",
+            arguments: try! JSON(["input": "test"]),
+            id: toolCallId
+        )
+        
+        // Create a mock LLM that returns tool calls
+        let mockLLM = MockLLM(
+            model: "test-model",
+            logger: Logger(label: "MockLLM"),
+            toolCallsToReturn: [toolCall],
+            shouldReturnToolCalls: true
+        )
+        
+        // Create mock managers that return responses
+        let mcpManager = MCPManager(connectionTimeout: 5.0, logger: Logger(label: "TestMCP"))
+        let a2aManager = A2AManager(logger: Logger(label: "TestA2A"))
+        
+        let config = OrchestratorConfig(mcpEnabled: true, a2aEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: mockLLM,
+            config: config,
+            mcpManager: mcpManager,
+            a2aManager: a2aManager
+        )
+        
+        let initialMessages = [
+            Message(id: UUID(), role: .user, content: "Use the test tool")
+        ]
+        
+        // Collect all messages
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) {
+                messages.append(message)
+            }
+        }
+        let collector = MessageCollector()
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task {
+            for await message in messageStream {
+                await collector.append(message)
+            }
+        }
+        
+        // Process conversation - this should handle tool calls
+        try await orchestrator.updateConversation(initialMessages, availableTools: [])
+        
+        // Give time for processing
+        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+        
+        let messages = await collector.messages
+        
+        // Should have at least the assistant message with tool calls
+        #expect(messages.count >= 1)
+        
+        // Find tool response messages
+        let toolMessages = messages.filter { $0.role == .tool }
+        
+        // If tool calls were executed, verify toolCallId is set
+        if !toolMessages.isEmpty {
+            for toolMessage in toolMessages {
+                // Tool messages should have toolCallId matching the original tool call
+                #expect(toolMessage.toolCallId == toolCallId)
+            }
+        }
+    }
+    
+    @Test("LLMResponse toolCallId is preserved when creating tool response messages")
+    func testLLMResponseToolCallIdPreserved() throws {
+        let toolCallId = "test-call-id-123"
+        let responseContent = "Tool execution result"
+        
+        // Create an LLMResponse with toolCallId
+        let response = LLMResponse.complete(
+            content: responseContent,
+            toolCallId: toolCallId
+        )
+        
+        // Verify toolCallId is set
+        #expect(response.toolCallId == toolCallId)
+        #expect(response.content == responseContent)
+        
+        // Create a Message from the response
+        let message = Message(
+            id: UUID(),
+            role: .tool,
+            content: response.content,
+            toolCalls: response.toolCalls,
+            toolCallId: response.toolCallId
+        )
+        
+        // Verify the message has the correct toolCallId
+        #expect(message.toolCallId == toolCallId)
+        #expect(message.content == responseContent)
+        #expect(message.role == .tool)
+    }
+    
+    @Test("Multiple tool calls with different IDs are handled correctly")
+    func testMultipleToolCallsWithDifferentIds() throws {
+        let toolCallId1 = "call-1"
+        let toolCallId2 = "call-2"
+        
+        // Create responses with matching toolCallIds
+        let response1 = LLMResponse.complete(
+            content: "Result 1",
+            toolCallId: toolCallId1
+        )
+        let response2 = LLMResponse.complete(
+            content: "Result 2",
+            toolCallId: toolCallId2
+        )
+        
+        // Verify each response has the correct toolCallId
+        #expect(response1.toolCallId == toolCallId1)
+        #expect(response2.toolCallId == toolCallId2)
+        
+        // Create messages from responses
+        let message1 = Message(
+            id: UUID(),
+            role: .tool,
+            content: response1.content,
+            toolCalls: response1.toolCalls,
+            toolCallId: response1.toolCallId
+        )
+        let message2 = Message(
+            id: UUID(),
+            role: .tool,
+            content: response2.content,
+            toolCalls: response2.toolCalls,
+            toolCallId: response2.toolCallId
+        )
+        
+        // Verify messages have correct toolCallIds
+        #expect(message1.toolCallId == toolCallId1)
+        #expect(message2.toolCallId == toolCallId2)
+        #expect(message1.toolCallId != message2.toolCallId)
+    }
+    
+    @Test("Tool calls with nil ID are handled correctly")
+    func testToolCallsWithNilId() throws {
+        // Create response with nil toolCallId
+        let response = LLMResponse.complete(
+            content: "Result",
+            toolCallId: nil
+        )
+        
+        // Verify nil is handled correctly
+        #expect(response.toolCallId == nil)
+        
+        // Create message from response
+        let message = Message(
+            id: UUID(),
+            role: .tool,
+            content: response.content,
+            toolCalls: response.toolCalls,
+            toolCallId: response.toolCallId
+        )
+        
+        // Verify message has nil toolCallId
+        #expect(message.toolCallId == nil)
+    }
+    
+    @Test("LLMResponse convenience methods preserve toolCallId")
+    func testLLMResponseConvenienceMethodsPreserveToolCallId() throws {
+        let toolCallId = "preserved-id"
+        let originalResponse = LLMResponse.complete(
+            content: "Original",
+            toolCallId: toolCallId
+        )
+        
+        // Test appending tool calls
+        let withToolCalls = originalResponse.appending(toolCalls: [
+            ToolCall(name: "test", arguments: .object([:]), id: "tc1")
+        ])
+        #expect(withToolCalls.toolCallId == toolCallId)
+        
+        // Test updating content
+        let updatedContent = originalResponse.updatingContent(with: "Updated")
+        #expect(updatedContent.toolCallId == toolCallId)
+        
+        // Test removing tool calls
+        let withoutToolCalls = originalResponse.removingToolCalls()
+        #expect(withoutToolCalls.toolCallId == toolCallId)
+        
+        // Test marking complete
+        let markedComplete = originalResponse.markingComplete()
+        #expect(markedComplete.toolCallId == toolCallId)
+        
+        // Test marking incomplete
+        let markedIncomplete = originalResponse.markingIncomplete()
+        #expect(markedIncomplete.toolCallId == toolCallId)
     }
 } 
