@@ -175,8 +175,11 @@ public actor SwiftAgentKitOrchestrator {
                         )
                     )
 
+                    // Ensure all tool calls have IDs (some models don't provide them)
+                    let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
+                    
                     // Convert LLMResponse to Message for conversation history
-                    let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: response.toolCalls)
+                    let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
                     updatedMessages.append(responseMessage)
                     // Publish the message
                     publishMessage(responseMessage)
@@ -187,10 +190,10 @@ public actor SwiftAgentKitOrchestrator {
                         logger.info(
                             "Response contains tool calls",
                             metadata: SwiftAgentKitLogging.metadata(
-                                ("toolCallCount", .stringConvertible(response.toolCalls.count))
+                                ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
                             )
                         )
-                        let toolResponses = await executeToolCalls(response.toolCalls)
+                        let toolResponses = await executeToolCalls(toolCallsWithIds)
                         
                         guard !toolResponses.isEmpty else { continue }
                         
@@ -235,8 +238,11 @@ public actor SwiftAgentKitOrchestrator {
                     ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
                 )
             )
+            // Ensure all tool calls have IDs (some models don't provide them)
+            let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
+            
             // Convert LLMResponse to Message for conversation history
-            let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: response.toolCalls)
+            let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
             updatedMessages.append(responseMessage)
             // Publish the final conversation history
             publishMessage(responseMessage)
@@ -247,10 +253,10 @@ public actor SwiftAgentKitOrchestrator {
                 logger.info(
                     "Response contains tool calls",
                     metadata: SwiftAgentKitLogging.metadata(
-                        ("toolCallCount", .stringConvertible(response.toolCalls.count))
+                        ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
                     )
                 )
-                let toolResponses = await executeToolCalls(response.toolCalls)
+                let toolResponses = await executeToolCalls(toolCallsWithIds)
                 
                 guard !toolResponses.isEmpty else { return }
                 
@@ -340,6 +346,27 @@ public actor SwiftAgentKitOrchestrator {
         self.currentPartialContentStream = stream
         logger.debug("Created partial content stream")
         return stream
+    }
+    
+    /// Ensures all tool calls have IDs, generating them if missing
+    /// Some LLM models don't provide tool call IDs, so we generate them here
+    /// - Parameter toolCalls: Array of tool calls that may or may not have IDs
+    /// - Returns: Array of tool calls with guaranteed IDs
+    private func ensureToolCallsHaveIds(_ toolCalls: [ToolCall]) -> [ToolCall] {
+        return toolCalls.map { toolCall in
+            if toolCall.id != nil {
+                return toolCall
+            }
+            // Generate a unique ID for tool calls without one
+            // Format: "call_" followed by a short UUID (first 8 characters)
+            let generatedId = "call_\(UUID().uuidString.prefix(8))"
+            return ToolCall(
+                name: toolCall.name,
+                arguments: toolCall.arguments,
+                instructions: toolCall.instructions,
+                id: generatedId
+            )
+        }
     }
     
     /// Execute tool calls using available managers

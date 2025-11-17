@@ -524,4 +524,83 @@ struct MockLLM: LLMProtocol {
         let markedIncomplete = originalResponse.markingIncomplete()
         #expect(markedIncomplete.toolCallId == toolCallId)
     }
+    
+    @Test("Tool calls without IDs get IDs generated automatically")
+    func testToolCallsWithoutIdsGetGenerated() async throws {
+        // Create a tool call without an ID (simulating models like llama4:scout)
+        let toolCallWithoutId = ToolCall(
+            name: "test_tool",
+            arguments: try! JSON(["input": "test"]),
+            id: nil
+        )
+        
+        // Create a mock LLM that returns tool calls without IDs
+        let mockLLM = MockLLM(
+            model: "test-model",
+            logger: Logger(label: "MockLLM"),
+            toolCallsToReturn: [toolCallWithoutId],
+            shouldReturnToolCalls: true
+        )
+        
+        let config = OrchestratorConfig(streamingEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config)
+        
+        let initialMessages = [
+            Message(id: UUID(), role: .user, content: "Use the test tool")
+        ]
+        
+        // Collect all messages
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) {
+                messages.append(message)
+            }
+        }
+        let collector = MessageCollector()
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task {
+            for await message in messageStream {
+                await collector.append(message)
+            }
+        }
+        
+        // Process conversation
+        try await orchestrator.updateConversation(initialMessages, availableTools: [])
+        
+        // Give time for processing
+        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
+        
+        let messages = await collector.messages
+        
+        // Find the assistant message with tool calls
+        let assistantMessages = messages.filter { $0.role == .assistant && !$0.toolCalls.isEmpty }
+        #expect(!assistantMessages.isEmpty)
+        
+        // Verify that tool calls now have IDs
+        let toolCalls = assistantMessages.first?.toolCalls ?? []
+        #expect(!toolCalls.isEmpty)
+        for toolCall in toolCalls {
+            // All tool calls should have IDs now (even if they didn't originally)
+            #expect(toolCall.id != nil)
+            // Generated IDs should follow the "call_" prefix pattern
+            if let id = toolCall.id {
+                #expect(id.hasPrefix("call_"))
+            }
+        }
+        
+        // Find tool response messages
+        let toolMessages = messages.filter { $0.role == .tool }
+        
+        // If tool calls were executed, verify toolCallId is set
+        if !toolMessages.isEmpty {
+            for toolMessage in toolMessages {
+                // Tool messages should have toolCallId matching the generated tool call ID
+                #expect(toolMessage.toolCallId != nil)
+                if let toolCallId = toolMessage.toolCallId {
+                    #expect(toolCallId.hasPrefix("call_"))
+                }
+            }
+        }
+    }
 } 
