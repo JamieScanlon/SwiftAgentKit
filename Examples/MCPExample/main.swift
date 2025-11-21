@@ -5,11 +5,25 @@ import SwiftAgentKitMCP
 import EasyJSON
 
 private func configureLogging() {
+    // Example: Configure logging with optional filters
+    // Uncomment the filter to see filtering in action:
+    
+    // Filter example: Only show MCP-related logs with "error" or "connection" keywords
+    // let filter = SwiftAgentKitLogging.LogFilter(
+    //     level: .minimum(.info),
+    //     allowedScopes: [.mcp("Client"), .mcp("Server")],
+    //     keywords: ["error", "connection", "connected"]
+    // )
+    
     SwiftAgentKitLogging.bootstrap(
         logger: Logger(label: "com.example.swiftagentkit.mcp"),
         level: .info,
         metadata: SwiftAgentKitLogging.metadata(("example", .string("MCP")))
+        // filter: filter  // Uncomment to enable filtering
     )
+    
+    // You can also set filters dynamically:
+    // SwiftAgentKitLogging.setFilter(filter)
 }
 
 // Example: New MCP Architecture with MCPServerManager and MCPClient

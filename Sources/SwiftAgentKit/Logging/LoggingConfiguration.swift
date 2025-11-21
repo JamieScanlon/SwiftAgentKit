@@ -32,9 +32,11 @@ import Logging
 public enum SwiftAgentKitLogging {
     private struct LoggingState: Sendable {
         var baseLogger: Logger
+        var baseHandlerFactory: @Sendable (String) -> LogHandler
         var defaultMetadata: Logger.Metadata
         var currentLevel: Logger.Level
         var overrideStack: [ScopedOverride]
+        var activeFilter: LogFilter?
     }
     
     private struct ScopedOverride: Sendable {
@@ -66,9 +68,11 @@ public enum SwiftAgentKitLogging {
     private static let state = LockProtected(
         LoggingState(
             baseLogger: SwiftAgentKitLogging.makeNullLogger(),
+            baseHandlerFactory: { _ in NullLogHandler() },
             defaultMetadata: [:],
             currentLevel: .info,
-            overrideStack: []
+            overrideStack: [],
+            activeFilter: nil
         )
     )
     
@@ -103,6 +107,49 @@ public enum SwiftAgentKitLogging {
             case .error, .critical:
                 self = .error
             }
+        }
+    }
+    
+    /// Filter configuration for controlling which log entries are emitted.
+    ///
+    /// All specified filter criteria must match for a log entry to pass through (AND logic).
+    /// If a filter criterion is `nil`, it is not applied.
+    public struct LogFilter: Sendable {
+        /// Minimum log level to allow, or specific set of allowed levels.
+        /// If `nil`, level filtering is not applied.
+        public let level: LevelFilter?
+        
+        /// Set of allowed scopes. Log entries must match at least one scope.
+        /// If `nil`, scope filtering is not applied.
+        public let allowedScopes: Set<LoggingScope>?
+        
+        /// Set of metadata keys that must be present in the log entry.
+        /// If `nil`, metadata key filtering is not applied.
+        public let requiredMetadataKeys: Set<String>?
+        
+        /// Set of keywords that must appear in the message text or metadata values.
+        /// Keywords are matched case-insensitively.
+        /// If `nil`, keyword filtering is not applied.
+        public let keywords: Set<String>?
+        
+        /// Level filtering options.
+        public enum LevelFilter: Sendable {
+            /// Minimum level - allows this level and all higher severity levels.
+            case minimum(AgentLogLevel)
+            /// Specific set of allowed levels.
+            case allowed(Set<AgentLogLevel>)
+        }
+        
+        public init(
+            level: LevelFilter? = nil,
+            allowedScopes: Set<LoggingScope>? = nil,
+            requiredMetadataKeys: Set<String>? = nil,
+            keywords: Set<String>? = nil
+        ) {
+            self.level = level
+            self.allowedScopes = allowedScopes
+            self.requiredMetadataKeys = requiredMetadataKeys
+            self.keywords = keywords
         }
     }
     
@@ -185,10 +232,12 @@ public enum SwiftAgentKitLogging {
     ///   - logger: The root `Logger` to wrap. Pass `nil` to adopt a no-op logger that suppresses output.
     ///   - level: The initial log level for all SwiftAgentKit loggers (default `.info`).
     ///   - metadata: Default metadata merged into every logger produced by this utility.
+    ///   - filter: Optional filter configuration to apply to all log entries.
     public static func bootstrap(
         logger: Logger?,
         level: AgentLogLevel = .info,
-        metadata: Logger.Metadata = [:]
+        metadata: Logger.Metadata = [:],
+        filter: LogFilter? = nil
     ) {
         state.withValue { state in
             let callSite = Thread.callStackSymbols.dropFirst().first ?? "unknown"
@@ -202,10 +251,16 @@ public enum SwiftAgentKitLogging {
                     "callSite": .string(callSite)
                 ]
             )
-            state.baseLogger = logger ?? makeNullLogger()
+            state.baseLogger = targetLogger
+            // Store a factory that creates handlers wrapping the base logger
+            let loggerToWrap = targetLogger
+            state.baseHandlerFactory = { _ in
+                BaseLoggerHandler(baseLogger: loggerToWrap)
+            }
             state.defaultMetadata = metadata
             state.currentLevel = level.swiftLogLevel
             state.baseLogger.logLevel = state.currentLevel
+            state.activeFilter = filter
         }
     }
     
@@ -255,15 +310,52 @@ public enum SwiftAgentKitLogging {
         metadata additionalMetadata: Logger.Metadata = [:]
     ) -> Logger {
         let snapshot = state.readValue { state in state }
-        var configured = snapshot.baseLogger
-        configured.logLevel = snapshot.currentLevel
         
         let mergedMetadata = mergeMetadata(snapshot.defaultMetadata, scope.metadata, additionalMetadata)
+        
+        // If a filter is active, create a logger with FilteringLogHandler
+        if let filter = snapshot.activeFilter {
+            return Logger(label: snapshot.baseLogger.label) { _ in
+                let baseHandler = snapshot.baseHandlerFactory(snapshot.baseLogger.label)
+                var filteringHandler = FilteringLogHandler(
+                    wrapped: baseHandler,
+                    filter: filter,
+                    scope: scope
+                )
+                filteringHandler.logLevel = snapshot.currentLevel
+                // Apply merged metadata to the filtering handler
+                for (key, value) in mergedMetadata {
+                    filteringHandler[metadataKey: key] = value
+                }
+                return filteringHandler
+            }
+        }
+        
+        // No filter: create logger normally
+        var configured = snapshot.baseLogger
+        configured.logLevel = snapshot.currentLevel
         for (key, value) in mergedMetadata {
             configured[metadataKey: key] = value
         }
-        
         return configured
+    }
+    
+    /// Set or clear the active log filter.
+    ///
+    /// - Parameter filter: The filter configuration to apply, or `nil` to clear filtering.
+    public static func setFilter(_ filter: LogFilter?) {
+        state.withValue { state in
+            state.activeFilter = filter
+        }
+    }
+    
+    /// Retrieve the currently configured log filter.
+    ///
+    /// - Returns: The active `LogFilter`, or `nil` if no filter is configured.
+    public static func filter() -> LogFilter? {
+        state.readValue { state in
+            state.activeFilter
+        }
     }
     
     /// Produce a null logger that discards all messages.
@@ -277,10 +369,12 @@ public enum SwiftAgentKitLogging {
     internal static func resetForTesting() {
         state.withValue { state in
             state.baseLogger = makeNullLogger()
+            state.baseHandlerFactory = { _ in NullLogHandler() }
             state.defaultMetadata = [:]
             state.currentLevel = .info
             state.baseLogger.logLevel = state.currentLevel
             state.overrideStack.removeAll()
+            state.activeFilter = nil
         }
     }
     
@@ -367,6 +461,240 @@ public enum SwiftAgentKitLogging {
     /// Convenience helper to build metadata dictionaries.
     public static func metadata(_ pairs: (String, Logger.MetadataValue)...) -> Logger.Metadata {
         Dictionary(uniqueKeysWithValues: pairs)
+    }
+}
+
+/// Handler that forwards log calls to a base Logger.
+/// This is used to wrap a Logger when we need to apply filtering.
+struct BaseLoggerHandler: LogHandler {
+    private let baseLogger: Logger
+    var metadata: Logger.Metadata = [:]
+    var logLevel: Logger.Level
+    
+    init(baseLogger: Logger) {
+        self.baseLogger = baseLogger
+        self.logLevel = baseLogger.logLevel
+        // Note: We can't directly access Logger's metadata, so we start empty
+        // The metadata will be set via subscript when the logger is configured
+        self.metadata = [:]
+    }
+    
+    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get { metadata[key] }
+        set { metadata[key] = newValue }
+    }
+    
+    func log(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata additionalMetadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt
+    ) {
+        // Forward to base logger by setting metadata and calling log
+        var tempLogger = baseLogger
+        tempLogger.logLevel = self.logLevel
+        // Apply our metadata
+        for (key, value) in self.metadata {
+            tempLogger[metadataKey: key] = value
+        }
+        // Apply additional metadata
+        if let additionalMetadata {
+            for (key, value) in additionalMetadata {
+                tempLogger[metadataKey: key] = value
+            }
+        }
+        // Call the appropriate log method based on level
+        switch level {
+        case .trace:
+            tempLogger.trace(message, metadata: nil, source: source, file: file, function: function, line: line)
+        case .debug:
+            tempLogger.debug(message, metadata: nil, source: source, file: file, function: function, line: line)
+        case .info:
+            tempLogger.info(message, metadata: nil, source: source, file: file, function: function, line: line)
+        case .notice:
+            tempLogger.notice(message, metadata: nil, source: source, file: file, function: function, line: line)
+        case .warning:
+            tempLogger.warning(message, metadata: nil, source: source, file: file, function: function, line: line)
+        case .error:
+            tempLogger.error(message, metadata: nil, source: source, file: file, function: function, line: line)
+        case .critical:
+            tempLogger.critical(message, metadata: nil, source: source, file: file, function: function, line: line)
+        }
+    }
+}
+
+/// Log handler that applies filtering criteria before forwarding log entries.
+struct FilteringLogHandler: LogHandler {
+    private let wrapped: LogHandler
+    private let filter: SwiftAgentKitLogging.LogFilter
+    private let scope: SwiftAgentKitLogging.LoggingScope
+    private var _metadata: Logger.Metadata = [:]
+    private var _logLevel: Logger.Level
+    
+    var metadata: Logger.Metadata {
+        get { _metadata }
+        set { _metadata = newValue }
+    }
+    
+    var logLevel: Logger.Level {
+        get { _logLevel }
+        set { _logLevel = newValue }
+    }
+    
+    init(wrapped: LogHandler, filter: SwiftAgentKitLogging.LogFilter, scope: SwiftAgentKitLogging.LoggingScope) {
+        self.wrapped = wrapped
+        self.filter = filter
+        self.scope = scope
+        self._metadata = wrapped.metadata
+        self._logLevel = wrapped.logLevel
+    }
+    
+    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get { _metadata[key] }
+        set { _metadata[key] = newValue }
+    }
+    
+    func log(
+        level: Logger.Level,
+        message: Logger.Message,
+        metadata additionalMetadata: Logger.Metadata?,
+        source: String,
+        file: String,
+        function: String,
+        line: UInt
+    ) {
+        // Combine handler metadata with additional metadata
+        var combinedMetadata = metadata
+        if let additionalMetadata {
+            for (key, value) in additionalMetadata {
+                combinedMetadata[key] = value
+            }
+        }
+        
+        // Apply filters with AND logic - all must pass
+        guard shouldAllowLog(
+            level: level,
+            message: message.description,
+            metadata: combinedMetadata
+        ) else {
+            return
+        }
+        
+        // Forward to wrapped handler
+        wrapped.log(
+            level: level,
+            message: message,
+            metadata: additionalMetadata,
+            source: source,
+            file: file,
+            function: function,
+            line: line
+        )
+    }
+    
+    private func shouldAllowLog(
+        level: Logger.Level,
+        message: String,
+        metadata: Logger.Metadata
+    ) -> Bool {
+        // Level filter
+        if let levelFilter = filter.level {
+            let agentLevel = SwiftAgentKitLogging.AgentLogLevel(swiftLogLevel: level)
+            switch levelFilter {
+            case .minimum(let minLevel):
+                let levelOrder: [SwiftAgentKitLogging.AgentLogLevel] = [.debug, .info, .warning, .error]
+                guard let minIndex = levelOrder.firstIndex(of: minLevel),
+                      let currentIndex = levelOrder.firstIndex(of: agentLevel),
+                      currentIndex >= minIndex else {
+                    return false
+                }
+            case .allowed(let allowedLevels):
+                guard allowedLevels.contains(agentLevel) else {
+                    return false
+                }
+            }
+        }
+        
+        // Scope filter
+        if let allowedScopes = filter.allowedScopes {
+            guard allowedScopes.contains(scope) else {
+                return false
+            }
+        }
+        
+        // Metadata key filter
+        if let requiredKeys = filter.requiredMetadataKeys {
+            for key in requiredKeys {
+                guard metadata[key] != nil else {
+                    return false
+                }
+            }
+        }
+        
+        // Keyword filter
+        if let keywords = filter.keywords {
+            let lowercasedMessage = message.lowercased()
+            var foundKeywords = Set<String>()
+            
+            // Check message text
+            for keyword in keywords {
+                if lowercasedMessage.contains(keyword.lowercased()) {
+                    foundKeywords.insert(keyword.lowercased())
+                }
+            }
+            
+            // Check metadata values recursively
+            let metadataStrings = extractStrings(from: metadata)
+            for keyword in keywords {
+                let lowercasedKeyword = keyword.lowercased()
+                for metadataString in metadataStrings {
+                    if metadataString.lowercased().contains(lowercasedKeyword) {
+                        foundKeywords.insert(lowercasedKeyword)
+                        break
+                    }
+                }
+            }
+            
+            // All keywords must be found
+            guard foundKeywords.count == keywords.count else {
+                return false
+            }
+        }
+        
+        return true
+    }
+    
+    /// Recursively extract all string values from metadata.
+    private func extractStrings(from metadata: Logger.Metadata) -> [String] {
+        var strings: [String] = []
+        for (_, value) in metadata {
+            switch value {
+            case .string(let str):
+                strings.append(str)
+            case .stringConvertible(let convertible):
+                strings.append(String(describing: convertible))
+            case .dictionary(let dict):
+                strings.append(contentsOf: extractStrings(from: dict))
+            case .array(let arr):
+                for item in arr {
+                    switch item {
+                    case .string(let str):
+                        strings.append(str)
+                    case .stringConvertible(let convertible):
+                        strings.append(String(describing: convertible))
+                    case .dictionary(let dict):
+                        strings.append(contentsOf: extractStrings(from: dict))
+                    case .array:
+                        // Nested arrays not supported by swift-log, but handle gracefully
+                        break
+                    }
+                }
+            }
+        }
+        return strings
     }
 }
 

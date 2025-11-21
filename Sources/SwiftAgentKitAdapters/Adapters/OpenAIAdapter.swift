@@ -449,7 +449,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         if let taskHistory = taskHistory {
             for message in taskHistory {
                 let content = extractTextFromParts(message.parts)
-                let role: ChatQuery.ChatCompletionMessageParam.Role = message.role == "user" ? .user : .assistant
+                let role = convertA2ARoleToMessageRole(message.role)
                 if let messageParam = ChatQuery.ChatCompletionMessageParam(role: role, content: content) {
                     history.append(messageParam)
                 }

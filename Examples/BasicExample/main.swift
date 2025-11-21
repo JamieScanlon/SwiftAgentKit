@@ -3,10 +3,20 @@ import SwiftAgentKit
 import Logging
 
 private func configureLogging() {
+    // Example: Bootstrap with optional filter
+    // You can filter logs by level, scope, metadata keys, or keywords
+    // Uncomment the filter parameter to enable filtering:
+    
+    // let filter = SwiftAgentKitLogging.LogFilter(
+    //     level: .minimum(.info),  // Only show info and above
+    //     keywords: ["error", "warning"]  // Only show logs containing these keywords
+    // )
+    
     SwiftAgentKitLogging.bootstrap(
         logger: Logger(label: "com.example.swiftagentkit.basic"),
         level: .info,
         metadata: SwiftAgentKitLogging.metadata(("example", .string("Basic")))
+        // filter: filter  // Uncomment to enable filtering
     )
 }
 
