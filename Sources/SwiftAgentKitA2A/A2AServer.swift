@@ -27,11 +27,16 @@ public actor A2AServer {
     /**
      * Initializes a new APILayer instance.
      *
-     * - Parameter port: The port number that the server will listen on. Defaults to `4245` standing for A2AS(erver).
+     * - Parameters:
+     *   - port: The port number that the server will listen on. Defaults to `4245` standing for A2AS(erver).
+     *   - adapter: The agent adapter that handles message processing.
+     *   - filterReasoningBlocks: Whether to filter out `<think>...</think>` blocks from responses. Defaults to `true`.
+     *   - logger: Optional logger instance. If not provided, a default logger will be created.
      */
-    public init(port: Int = 4245, adapter: AgentAdapter, logger: Logger? = nil) {
+    public init(port: Int = 4245, adapter: AgentAdapter, filterReasoningBlocks: Bool = true, logger: Logger? = nil) {
         self.port = port
         self.adapter = adapter
+        self.filterReasoningBlocks = filterReasoningBlocks
         // derive AgentCard from adapter metadata
         self.agentCard = AgentCard(
             name: adapter.agentName,
@@ -103,6 +108,8 @@ public actor A2AServer {
     /// Agent Card Definition
     private let agentCard: AgentCard
     private let encoder = JSONEncoder()
+    /// Whether to filter out reasoning blocks from responses
+    private let filterReasoningBlocks: Bool
     
     private func setupRoutes(app: Application) {
         
@@ -185,7 +192,11 @@ public actor A2AServer {
         switch responseType {
         case .message:
             // Handle as a simple message (no task created)
-            let message = try await adapter.handleMessageSend(params)
+            var message = try await adapter.handleMessageSend(params)
+            // Filter reasoning blocks if configured
+            if filterReasoningBlocks {
+                message = filterReasoningBlocks(from: message)
+            }
             logger.debug(
                 "Returning message response",
                 metadata: metadataForMessage(message: message, requestId: requestId)
@@ -213,8 +224,12 @@ public actor A2AServer {
             try await adapter.handleTaskSend(params, taskId: taskId, contextId: contextId, store: taskStore)
             
             // Return the updated task
-            guard let updatedTask = await taskStore.getTask(id: taskId) else {
+            guard var updatedTask = await taskStore.getTask(id: taskId) else {
                 return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after processing", status: .internalServerError)
+            }
+            // Filter reasoning blocks if configured
+            if filterReasoningBlocks {
+                updatedTask = filterReasoningBlocks(from: updatedTask)
             }
             logger.debug(
                 "Returning task response",
@@ -343,11 +358,15 @@ public actor A2AServer {
         
         // Create streaming body (unified for both message and task responses)
         let streamLogger = logger
+        let shouldFilter = filterReasoningBlocks
         let bodyStream = AsyncStream<ByteBuffer> { cont in
             Task.detached {
                 do {
                     try await adapter.handleStream(updatedParams, taskId: taskId, contextId: contextId, store: taskId != nil ? store : nil) { ev in
-                        if let data = try? self.encoder.encode(ev),
+                        // Filter reasoning blocks from events if configured
+                        let filteredEvent: Encodable = shouldFilter ? self.filterReasoningBlocks(from: ev) : ev
+                        
+                        if let data = try? self.encoder.encode(filteredEvent),
                             let jsonString = String(data: data, encoding:.utf8) {
                             streamLogger.debug(
                                 "Streaming A2A event",
@@ -408,6 +427,11 @@ public actor A2AServer {
         } else {
             let hist = task.history ?? []
             task.history = hist.suffix(historyLength)
+        }
+        
+        // Filter reasoning blocks if configured
+        if filterReasoningBlocks {
+            task = filterReasoningBlocks(from: task)
         }
         
         // Encode the task and create JSON-RPC response
@@ -527,14 +551,23 @@ public actor A2AServer {
                 ("requestId", .stringConvertible(requestId))
             )
         )
-        guard let task = await self.taskStore.getTask(id: taskIdParams.taskId) else {
+        guard var task = await self.taskStore.getTask(id: taskIdParams.taskId) else {
             return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
+        }
+        
+        // Filter reasoning blocks if configured
+        let shouldFilter = filterReasoningBlocks
+        if shouldFilter {
+            task = filterReasoningBlocks(from: task)
         }
         
         let now = ISO8601DateFormatter().string(from: Date())
         let stream = AsyncStream<ByteBuffer> { continuation in
             func send<T: Encodable>(_ obj: T) {
-                if let data = try? encoder.encode(obj),
+                // Apply filtering if configured
+                let filteredObj: Encodable = shouldFilter ? self.filterReasoningBlocks(from: obj) : obj
+                
+                if let data = try? encoder.encode(filteredObj),
                    let jsonString = String(data: data, encoding: .utf8) {
                     logger.debug(
                         "tasks/resubscribe event",
@@ -586,6 +619,163 @@ public actor A2AServer {
             }
         })
         return response
+    }
+    
+    // MARK: - Reasoning Block Filtering
+    
+    /// Filters out reasoning blocks from text content
+    /// Removes `<think>...</think>`, `<think>...</think>`, and similar reasoning blocks
+    nonisolated private func filterReasoningBlocks(from text: String) -> String {
+        // Pattern to match various reasoning block formats
+        // Matches: <think>...</think>, <think>...</think>, <reasoning>...</reasoning>, etc.
+        let pattern = #"<(?:think|redacted_reasoning|reasoning|thinking)[^>]*>.*?</(?:think|redacted_reasoning|reasoning|thinking)>"#
+        
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return text
+        }
+        
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let filtered = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+        
+        // Clean up any extra whitespace that might be left
+        return filtered.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    /// Filters reasoning blocks from A2AMessage parts
+    private func filterReasoningBlocks(from message: A2AMessage) -> A2AMessage {
+        let filteredParts = message.parts.map { part -> A2AMessagePart in
+            switch part {
+            case .text(let text):
+                let filtered = filterReasoningBlocks(from: text)
+                return .text(text: filtered)
+            case .file, .data:
+                return part
+            }
+        }
+        
+        return A2AMessage(
+            role: message.role,
+            parts: filteredParts,
+            messageId: message.messageId,
+            metadata: message.metadata,
+            extensions: message.extensions,
+            referenceTaskIds: message.referenceTaskIds,
+            taskId: message.taskId,
+            contextId: message.contextId,
+            kind: message.kind
+        )
+    }
+    
+    /// Filters reasoning blocks from Artifact parts
+    private func filterReasoningBlocks(from artifact: Artifact) -> Artifact {
+        let filteredParts = artifact.parts.map { part -> A2AMessagePart in
+            switch part {
+            case .text(let text):
+                let filtered = filterReasoningBlocks(from: text)
+                return .text(text: filtered)
+            case .file, .data:
+                return part
+            }
+        }
+        
+        return Artifact(
+            artifactId: artifact.artifactId,
+            parts: filteredParts,
+            name: artifact.name,
+            description: artifact.description,
+            metadata: artifact.metadata,
+            extensions: artifact.extensions
+        )
+    }
+    
+    /// Filters reasoning blocks from A2ATask (including artifacts and status messages)
+    private func filterReasoningBlocks(from task: A2ATask) -> A2ATask {
+        var filteredTask = task
+        
+        // Filter artifacts
+        if let artifacts = task.artifacts {
+            filteredTask.artifacts = artifacts.map { filterReasoningBlocks(from: $0) }
+        }
+        
+        // Filter history messages
+        if let history = task.history {
+            filteredTask.history = history.map { filterReasoningBlocks(from: $0) }
+        }
+        
+        // Filter status message
+        if let statusMessage = task.status.message {
+            filteredTask.status.message = filterReasoningBlocks(from: statusMessage)
+        }
+        
+        return filteredTask
+    }
+    
+    /// Filters reasoning blocks from streaming events by decoding to JSON, filtering, and re-encoding
+    /// This approach works with any Encodable event type without needing to know the specific type
+    nonisolated private func filterReasoningBlocks(from event: Encodable) -> Encodable {
+        // Create a local encoder (nonisolated)
+        let localEncoder = JSONEncoder()
+        localEncoder.dateEncodingStrategy = .iso8601
+        
+        // Encode the event to JSON data
+        guard let jsonData = try? localEncoder.encode(event),
+              var jsonObject = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            // If encoding/decoding fails, return original event
+            return event
+        }
+        
+        // Recursively filter reasoning blocks from the JSON structure
+        filterReasoningBlocksFromJSON(&jsonObject)
+        
+        // Return a wrapper that encodes the filtered JSON
+        return FilteredJSONEncodable(jsonObject: jsonObject)
+    }
+    
+    /// Helper to recursively filter reasoning blocks from JSON structures
+    nonisolated private func filterReasoningBlocksFromJSON(_ json: inout [String: Any]) {
+        for (key, value) in json {
+            if let stringValue = value as? String {
+                // Filter reasoning blocks from string values
+                json[key] = filterReasoningBlocks(from: stringValue)
+            } else if var dictValue = value as? [String: Any] {
+                // Recursively process dictionaries
+                filterReasoningBlocksFromJSON(&dictValue)
+                json[key] = dictValue
+            } else if var arrayValue = value as? [[String: Any]] {
+                // Recursively process arrays of dictionaries
+                for i in 0..<arrayValue.count {
+                    filterReasoningBlocksFromJSON(&arrayValue[i])
+                }
+                json[key] = arrayValue
+            } else if var arrayValue = value as? [Any] {
+                // Handle arrays of mixed types
+                for i in 0..<arrayValue.count {
+                    if var dictItem = arrayValue[i] as? [String: Any] {
+                        filterReasoningBlocksFromJSON(&dictItem)
+                        arrayValue[i] = dictItem
+                    } else if let stringItem = arrayValue[i] as? String {
+                        arrayValue[i] = filterReasoningBlocks(from: stringItem)
+                    }
+                }
+                json[key] = arrayValue
+            }
+        }
+    }
+    
+    /// A wrapper that encodes a JSON dictionary as-is
+    /// This preserves the exact JSON structure while allowing us to filter content
+    private struct FilteredJSONEncodable: Encodable {
+        let jsonObject: [String: Any]
+        
+        func encode(to encoder: Encoder) throws {
+            // Use JSONSerialization to encode the dictionary directly
+            // This preserves the exact structure
+            let jsonData = try JSONSerialization.data(withJSONObject: jsonObject, options: [])
+            // Decode as EasyJSON JSON and encode through the encoder
+            let json = try JSONDecoder().decode(JSON.self, from: jsonData)
+            var container = encoder.singleValueContainer()
+            try container.encode(json)
+        }
     }
     
     // MARK: - Validation Helpers
