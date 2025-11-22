@@ -68,6 +68,7 @@ public actor A2AManager {
         guard case .object(let argsDict) = toolCall.arguments,
               case .string(let instructions) = argsDict["instructions"] else { return nil }
         
+        // A2A messages take the role of 'user' for the purpose of communicating with other agents.
         let a2aMessage = A2AMessage(role: "user", parts: [.text(text: instructions)], messageId: UUID().uuidString)
         let params: MessageSendParams = .init(message: a2aMessage, metadata: try? .init(["toolCallId": toolCall.id]))
         let contents = try await client.streamMessage(params: params)

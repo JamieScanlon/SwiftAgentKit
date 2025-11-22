@@ -161,6 +161,19 @@ public actor A2AServer {
         }
         let params = rpcRequest.params
         let requestId = rpcRequest.id
+        
+        // Validate instructions parameter
+        if let validationError = validateInstructions(message: params.message) {
+            logger.warning(
+                "Invalid instructions in message/send request",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("requestId", .stringConvertible(requestId)),
+                    ("error", .string(validationError))
+                )
+            )
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.invalidParams.rawValue, message: validationError, status: .badRequest)
+        }
+        
         logger.debug(
             "Decoded message/send request",
             metadata: metadataForMessageSend(params: params, requestId: requestId)
@@ -230,6 +243,19 @@ public actor A2AServer {
         }
         let params = rpcRequest.params
         let requestId = rpcRequest.id
+        
+        // Validate instructions parameter
+        if let validationError = validateInstructions(message: params.message) {
+            logger.warning(
+                "Invalid instructions in message/stream request",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("requestId", .stringConvertible(requestId)),
+                    ("error", .string(validationError))
+                )
+            )
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.invalidParams.rawValue, message: validationError, status: .badRequest)
+        }
+        
         logger.debug(
             "Decoded message/stream request",
             metadata: metadataForMessageSend(params: params, requestId: requestId, stream: true)
@@ -560,6 +586,32 @@ public actor A2AServer {
             }
         })
         return response
+    }
+    
+    // MARK: - Validation Helpers
+    
+    /// Validates that the message contains non-empty text instructions
+    /// - Parameter message: The A2A message to validate
+    /// - Returns: An error message if validation fails, nil if validation passes
+    private func validateInstructions(message: A2AMessage) -> String? {
+        // Check if message has any parts
+        guard !message.parts.isEmpty else {
+            return "Message must contain at least one part with instructions"
+        }
+        
+        // Check if there's at least one text part with non-empty content
+        let hasValidTextPart = message.parts.contains { part in
+            if case .text(let text) = part {
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            return false
+        }
+        
+        guard hasValidTextPart else {
+            return "Message must contain at least one non-empty text part with instructions"
+        }
+        
+        return nil
     }
     
     // MARK: - Basic Authentication Helper
