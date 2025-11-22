@@ -35,6 +35,54 @@ public struct StreamClient {
             let delegate = StreamDelegate(continuation: continuation, logger: logging)
             let streamSession = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
             let request = try requestBuilder.createRequest(endpoint: endpoint, method: method, parameters: parameters, headers: headers)
+            
+            // Log full request payload at debug level
+            var fullRequestMetadata: Logger.Metadata = [
+                "endpoint": .string(endpoint),
+                "method": .string(method.rawValue),
+                "fullURL": .string(request.url?.absoluteString ?? "")
+            ]
+            
+            // Log all headers
+            if let allHeaders = request.allHTTPHeaderFields, !allHeaders.isEmpty {
+                let sortedHeaders = allHeaders.sorted { $0.key < $1.key }
+                let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+                fullRequestMetadata["headers"] = .string(headerStrings.joined(separator: "\n"))
+            }
+            
+            // Log query parameters for GET/DELETE
+            if let parameters = parameters, (method == .get || method == .delete) {
+                do {
+                    if JSONSerialization.isValidJSONObject(parameters) {
+                        let data = try JSONSerialization.data(withJSONObject: parameters, options: [.prettyPrinted, .sortedKeys])
+                        if let jsonString = String(data: data, encoding: .utf8) {
+                            fullRequestMetadata["queryParameters"] = .string(jsonString)
+                        }
+                    } else {
+                        fullRequestMetadata["queryParameters"] = .string(String(describing: parameters))
+                    }
+                } catch {
+                    fullRequestMetadata["queryParameters"] = .string(String(describing: parameters))
+                }
+            }
+            
+            // Log request body
+            if let body = request.httpBody, !body.isEmpty {
+                if let string = String(data: body, encoding: .utf8) {
+                    if let json = try? JSONSerialization.jsonObject(with: body),
+                       let prettyData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
+                       let prettyString = String(data: prettyData, encoding: .utf8) {
+                        fullRequestMetadata["body"] = .string(prettyString)
+                    } else {
+                        fullRequestMetadata["body"] = .string(string)
+                    }
+                } else {
+                    fullRequestMetadata["body"] = .string(body.base64EncodedString())
+                }
+            }
+            
+            logging.debug("Full streaming request payload", metadata: fullRequestMetadata)
+            
             let dataTask = streamSession.dataTask(with: request)
             dataTask.resume()
             continuation.onTermination = { @Sendable _ in

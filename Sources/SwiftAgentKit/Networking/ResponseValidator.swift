@@ -25,6 +25,44 @@ public struct ResponseValidator {
     
     public func validateResponse(_ response: HTTPURLResponse, data: Data) throws {
         let statusCode = response.statusCode
+        
+        // Log full response payload at debug level
+        var responseMetadata: Logger.Metadata = [
+            "status": .stringConvertible(statusCode),
+            "responseBytes": .stringConvertible(data.count)
+        ]
+        
+        // Log response headers
+        let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: response.allHeaderFields.compactMap { key, value in
+            guard let keyString = key as? String, let valueString = value as? String else { return nil }
+            return (keyString, valueString)
+        })
+        if !responseHeaders.isEmpty {
+            let sortedHeaders = responseHeaders.sorted { $0.key < $1.key }
+            let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+            responseMetadata["headers"] = .string(headerStrings.joined(separator: "\n"))
+        }
+        
+        // Log response body
+        if !data.isEmpty {
+            // Try to decode as UTF-8 string first
+            if let string = String(data: data, encoding: .utf8) {
+                // Try to parse as JSON and pretty-print it
+                if let json = try? JSONSerialization.jsonObject(with: data),
+                   let prettyData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
+                   let prettyString = String(data: prettyData, encoding: .utf8) {
+                    responseMetadata["body"] = .string(prettyString)
+                } else {
+                    responseMetadata["body"] = .string(string)
+                }
+            } else {
+                // If not UTF-8, return base64 encoded
+                responseMetadata["body"] = .string(data.base64EncodedString())
+            }
+        }
+        
+        logger.debug("Full response payload", metadata: responseMetadata)
+        
         guard (200...299).contains(statusCode) else {
             // Try to parse error message from response
             var errorMessage: String?

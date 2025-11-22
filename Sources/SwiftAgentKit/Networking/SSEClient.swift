@@ -88,6 +88,37 @@ public struct SSEClient: Sendable {
                     return
                 }
             }
+            
+            // Log full request payload at debug level
+            var fullRequestMetadata: Logger.Metadata = [
+                "endpoint": .string(endpoint),
+                "method": .string(method.rawValue),
+                "fullURL": .string(request.url?.absoluteString ?? url.absoluteString)
+            ]
+            
+            // Log all headers
+            if let allHeaders = request.allHTTPHeaderFields, !allHeaders.isEmpty {
+                let sortedHeaders = allHeaders.sorted { $0.key < $1.key }
+                let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+                fullRequestMetadata["headers"] = .string(headerStrings.joined(separator: "\n"))
+            }
+            
+            // Log request body
+            if let body = request.httpBody, !body.isEmpty {
+                if let string = String(data: body, encoding: .utf8) {
+                    if let json = try? JSONSerialization.jsonObject(with: body),
+                       let prettyData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
+                       let prettyString = String(data: prettyData, encoding: .utf8) {
+                        fullRequestMetadata["body"] = .string(prettyString)
+                    } else {
+                        fullRequestMetadata["body"] = .string(string)
+                    }
+                } else {
+                    fullRequestMetadata["body"] = .string(body.base64EncodedString())
+                }
+            }
+            
+            logger.debug("Full SSE request payload", metadata: fullRequestMetadata)
             // Set timeout on the request itself as well (though session config takes precedence)
             request.timeoutInterval = self.timeoutInterval
             
@@ -113,6 +144,44 @@ public struct SSEClient: Sendable {
                     continuation.finish()
                     return
                 }
+                
+                // Log full response payload at debug level
+                var responseMetadata: Logger.Metadata = [
+                    "endpoint": .string(endpoint),
+                    "responseBytes": .stringConvertible(data.count)
+                ]
+                if let httpResponse = response as? HTTPURLResponse {
+                    responseMetadata["status"] = .stringConvertible(httpResponse.statusCode)
+                    
+                    // Log response headers
+                    let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                        guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                        return (keyString, valueString)
+                    })
+                    if !responseHeaders.isEmpty {
+                        let sortedHeaders = responseHeaders.sorted { $0.key < $1.key }
+                        let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+                        responseMetadata["headers"] = .string(headerStrings.joined(separator: "\n"))
+                    }
+                }
+                
+                // Log response body (first 10KB to avoid huge logs)
+                let previewLength = min(data.count, 10240)
+                if previewLength > 0 {
+                    let previewData = data.prefix(previewLength)
+                    if let previewString = String(data: previewData, encoding: .utf8) {
+                        responseMetadata["bodyPreview"] = .string(previewString)
+                        if data.count > previewLength {
+                            responseMetadata["bodyTruncated"] = .string("true")
+                            responseMetadata["totalBytes"] = .stringConvertible(data.count)
+                        }
+                    } else {
+                        responseMetadata["bodyPreview"] = .string(previewData.base64EncodedString())
+                    }
+                }
+                
+                logger.debug("Full SSE response payload", metadata: responseMetadata)
+                
                 let lines = responseString.components(separatedBy: "\n")
                 for line in lines {
                     if line.hasPrefix("data: ") {
@@ -186,6 +255,37 @@ public struct SSEClient: Sendable {
                     return
                 }
             }
+            
+            // Log full request payload at debug level
+            var fullRequestMetadata: Logger.Metadata = [
+                "endpoint": .string(endpoint),
+                "method": .string(method.rawValue),
+                "fullURL": .string(request.url?.absoluteString ?? url.absoluteString)
+            ]
+            
+            // Log all headers
+            if let allHeaders = request.allHTTPHeaderFields, !allHeaders.isEmpty {
+                let sortedHeaders = allHeaders.sorted { $0.key < $1.key }
+                let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+                fullRequestMetadata["headers"] = .string(headerStrings.joined(separator: "\n"))
+            }
+            
+            // Log request body
+            if let body = request.httpBody, !body.isEmpty {
+                if let string = String(data: body, encoding: .utf8) {
+                    if let json = try? JSONSerialization.jsonObject(with: body),
+                       let prettyData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
+                       let prettyString = String(data: prettyData, encoding: .utf8) {
+                        fullRequestMetadata["body"] = .string(prettyString)
+                    } else {
+                        fullRequestMetadata["body"] = .string(string)
+                    }
+                } else {
+                    fullRequestMetadata["body"] = .string(body.base64EncodedString())
+                }
+            }
+            
+            logger.debug("Full SSE request payload", metadata: fullRequestMetadata)
             // Set timeout on the request itself as well (though session config takes precedence)
             request.timeoutInterval = self.timeoutInterval
             
@@ -211,6 +311,44 @@ public struct SSEClient: Sendable {
                     continuation.finish()
                     return
                 }
+                
+                // Log full response payload at debug level
+                var responseMetadata: Logger.Metadata = [
+                    "endpoint": .string(endpoint),
+                    "responseBytes": .stringConvertible(data.count)
+                ]
+                if let httpResponse = response as? HTTPURLResponse {
+                    responseMetadata["status"] = .stringConvertible(httpResponse.statusCode)
+                    
+                    // Log response headers
+                    let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                        guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                        return (keyString, valueString)
+                    })
+                    if !responseHeaders.isEmpty {
+                        let sortedHeaders = responseHeaders.sorted { $0.key < $1.key }
+                        let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+                        responseMetadata["headers"] = .string(headerStrings.joined(separator: "\n"))
+                    }
+                }
+                
+                // Log response body (first 10KB to avoid huge logs)
+                let previewLength = min(data.count, 10240)
+                if previewLength > 0 {
+                    let previewData = data.prefix(previewLength)
+                    if let previewString = String(data: previewData, encoding: .utf8) {
+                        responseMetadata["bodyPreview"] = .string(previewString)
+                        if data.count > previewLength {
+                            responseMetadata["bodyTruncated"] = .string("true")
+                            responseMetadata["totalBytes"] = .stringConvertible(data.count)
+                        }
+                    } else {
+                        responseMetadata["bodyPreview"] = .string(previewData.base64EncodedString())
+                    }
+                }
+                
+                logger.debug("Full SSE response payload", metadata: responseMetadata)
+                
                 let lines = responseString.components(separatedBy: "\n")
                 for line in lines {
                     if line.hasPrefix("data: ") {
