@@ -2,6 +2,166 @@ import Foundation
 import Logging
 import EasyJSON
 
+/// URLSession delegate for handling SSE streaming
+final class SSEDelegate: NSObject, URLSessionDataDelegate {
+    private let continuation: AsyncStream<[String: Sendable]>.Continuation
+    private let parser = SSEParser()
+    private let logger: Logger
+    private let endpoint: String
+    private var session: URLSession? // Retain session to keep delegate alive
+    
+    init(continuation: AsyncStream<[String: Sendable]>.Continuation, logger: Logger, endpoint: String) {
+        self.continuation = continuation
+        self.logger = logger
+        self.endpoint = endpoint
+        super.init()
+    }
+    
+    func setSession(_ session: URLSession) {
+        self.session = session
+    }
+    
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        Task {
+            let messages = await parser.appendChunk(data)
+            for message in messages {
+                continuation.yield(message)
+            }
+        }
+    }
+    
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        Task {
+            if let error = error {
+                logger.error(
+                    "SSE request failed",
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "error": .string(String(describing: error))
+                    ]
+                )
+            } else {
+                // Process any remaining messages
+                let finalMessages = await parser.finalize()
+                for message in finalMessages {
+                    continuation.yield(message)
+                }
+                logger.info(
+                    "SSE request completed",
+                    metadata: ["endpoint": .string(endpoint)]
+                )
+            }
+            continuation.finish()
+        }
+    }
+    
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        // Log response headers
+        if let httpResponse = response as? HTTPURLResponse {
+            let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                return (keyString, valueString)
+            })
+            
+            if !responseHeaders.isEmpty {
+                let sortedHeaders = responseHeaders.sorted { $0.key < $1.key }
+                let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+                logger.debug(
+                    "SSE response headers",
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "status": .stringConvertible(httpResponse.statusCode),
+                        "headers": .string(headerStrings.joined(separator: "\n"))
+                    ]
+                )
+            }
+        }
+        
+        // Continue receiving data
+        completionHandler(.allow)
+    }
+}
+
+/// URLSession delegate for handling SSE streaming with EasyJSON
+final class SSEJSONDelegate: NSObject, URLSessionDataDelegate {
+    private let continuation: AsyncStream<JSON>.Continuation
+    private let parser = SSEJSONParser()
+    private let logger: Logger
+    private let endpoint: String
+    private var session: URLSession? // Retain session to keep delegate alive
+    
+    init(continuation: AsyncStream<JSON>.Continuation, logger: Logger, endpoint: String) {
+        self.continuation = continuation
+        self.logger = logger
+        self.endpoint = endpoint
+        super.init()
+    }
+    
+    func setSession(_ session: URLSession) {
+        self.session = session
+    }
+    
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        Task {
+            let messages = await parser.appendChunk(data)
+            for message in messages {
+                continuation.yield(message)
+            }
+        }
+    }
+    
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        Task {
+            if let error = error {
+                logger.error(
+                    "SSE request failed",
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "error": .string(String(describing: error))
+                    ]
+                )
+            } else {
+                // Process any remaining messages
+                let finalMessages = await parser.finalize()
+                for message in finalMessages {
+                    continuation.yield(message)
+                }
+                logger.info(
+                    "SSE request completed",
+                    metadata: ["endpoint": .string(endpoint)]
+                )
+            }
+            continuation.finish()
+        }
+    }
+    
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        // Log response headers
+        if let httpResponse = response as? HTTPURLResponse {
+            let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                return (keyString, valueString)
+            })
+            
+            if !responseHeaders.isEmpty {
+                let sortedHeaders = responseHeaders.sorted { $0.key < $1.key }
+                let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+                logger.debug(
+                    "SSE response headers",
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "status": .stringConvertible(httpResponse.statusCode),
+                        "headers": .string(headerStrings.joined(separator: "\n"))
+                    ]
+                )
+            }
+        }
+        
+        // Continue receiving data
+        completionHandler(.allow)
+    }
+}
+
 public struct SSEClient: Sendable {
     private let baseURL: URL
     private let logger: Logger
@@ -122,86 +282,20 @@ public struct SSEClient: Sendable {
             // Set timeout on the request itself as well (though session config takes precedence)
             request.timeoutInterval = self.timeoutInterval
             
-            let logger = self.logger
-            let task = self.session.dataTask(with: request) { data, response, error in
-                if let error = error {
-                    logger.error(
-                        "SSE request failed",
-                        metadata: [
-                            "endpoint": .string(endpoint),
-                            "error": .string(String(describing: error))
-                        ]
-                    )
-                    continuation.finish()
-                    return
-                }
-                guard let data = data,
-                      let responseString = String(data: data, encoding: .utf8) else {
-                    logger.warning(
-                        "SSE request returned empty response",
-                        metadata: ["endpoint": .string(endpoint)]
-                    )
-                    continuation.finish()
-                    return
-                }
-                
-                // Log full response payload at debug level
-                var responseMetadata: Logger.Metadata = [
-                    "endpoint": .string(endpoint),
-                    "responseBytes": .stringConvertible(data.count)
-                ]
-                if let httpResponse = response as? HTTPURLResponse {
-                    responseMetadata["status"] = .stringConvertible(httpResponse.statusCode)
-                    
-                    // Log response headers
-                    let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
-                        guard let keyString = key as? String, let valueString = value as? String else { return nil }
-                        return (keyString, valueString)
-                    })
-                    if !responseHeaders.isEmpty {
-                        let sortedHeaders = responseHeaders.sorted { $0.key < $1.key }
-                        let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
-                        responseMetadata["headers"] = .string(headerStrings.joined(separator: "\n"))
-                    }
-                }
-                
-                // Log response body (first 10KB to avoid huge logs)
-                let previewLength = min(data.count, 10240)
-                if previewLength > 0 {
-                    let previewData = data.prefix(previewLength)
-                    if let previewString = String(data: previewData, encoding: .utf8) {
-                        responseMetadata["bodyPreview"] = .string(previewString)
-                        if data.count > previewLength {
-                            responseMetadata["bodyTruncated"] = .string("true")
-                            responseMetadata["totalBytes"] = .stringConvertible(data.count)
-                        }
-                    } else {
-                        responseMetadata["bodyPreview"] = .string(previewData.base64EncodedString())
-                    }
-                }
-                
-                logger.debug("Full SSE response payload", metadata: responseMetadata)
-                
-                let lines = responseString.components(separatedBy: "\n")
-                for line in lines {
-                    if line.hasPrefix("data: ") {
-                        let jsonString = String(line.dropFirst(6))
-                        if let data = jsonString.data(using: .utf8),
-                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Sendable] {
-                            continuation.yield(json)
-                        }
-                    }
-                }
-                logger.info(
-                    "SSE request completed",
-                    metadata: ["endpoint": .string(endpoint)]
-                )
-                continuation.finish()
-            }
+            // Use streaming delegate for incremental SSE parsing
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = self.timeoutInterval
+            config.timeoutIntervalForResource = self.timeoutInterval
+            let delegate = SSEDelegate(continuation: continuation, logger: self.logger, endpoint: endpoint)
+            // Create session with delegate (delegate retains session to keep it alive)
+            let delegateSession = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+            delegate.setSession(delegateSession)
+            let task = delegateSession.dataTask(with: request)
             task.resume()
+            
             continuation.onTermination = { _ in
                 task.cancel()
-                logger.debug(
+                self.logger.debug(
                     "SSE request cancelled",
                     metadata: ["endpoint": .string(endpoint)]
                 )
@@ -289,87 +383,20 @@ public struct SSEClient: Sendable {
             // Set timeout on the request itself as well (though session config takes precedence)
             request.timeoutInterval = self.timeoutInterval
             
-            let logger = self.logger
-            let task = self.session.dataTask(with: request) { data, response, error in
-                if let error = error {
-                    logger.error(
-                        "SSE request failed",
-                        metadata: [
-                            "endpoint": .string(endpoint),
-                            "error": .string(String(describing: error))
-                        ]
-                    )
-                    continuation.finish()
-                    return
-                }
-                guard let data = data,
-                      let responseString = String(data: data, encoding: .utf8) else {
-                    logger.warning(
-                        "SSE request returned empty response",
-                        metadata: ["endpoint": .string(endpoint)]
-                    )
-                    continuation.finish()
-                    return
-                }
-                
-                // Log full response payload at debug level
-                var responseMetadata: Logger.Metadata = [
-                    "endpoint": .string(endpoint),
-                    "responseBytes": .stringConvertible(data.count)
-                ]
-                if let httpResponse = response as? HTTPURLResponse {
-                    responseMetadata["status"] = .stringConvertible(httpResponse.statusCode)
-                    
-                    // Log response headers
-                    let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
-                        guard let keyString = key as? String, let valueString = value as? String else { return nil }
-                        return (keyString, valueString)
-                    })
-                    if !responseHeaders.isEmpty {
-                        let sortedHeaders = responseHeaders.sorted { $0.key < $1.key }
-                        let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
-                        responseMetadata["headers"] = .string(headerStrings.joined(separator: "\n"))
-                    }
-                }
-                
-                // Log response body (first 10KB to avoid huge logs)
-                let previewLength = min(data.count, 10240)
-                if previewLength > 0 {
-                    let previewData = data.prefix(previewLength)
-                    if let previewString = String(data: previewData, encoding: .utf8) {
-                        responseMetadata["bodyPreview"] = .string(previewString)
-                        if data.count > previewLength {
-                            responseMetadata["bodyTruncated"] = .string("true")
-                            responseMetadata["totalBytes"] = .stringConvertible(data.count)
-                        }
-                    } else {
-                        responseMetadata["bodyPreview"] = .string(previewData.base64EncodedString())
-                    }
-                }
-                
-                logger.debug("Full SSE response payload", metadata: responseMetadata)
-                
-                let lines = responseString.components(separatedBy: "\n")
-                for line in lines {
-                    if line.hasPrefix("data: ") {
-                        let jsonString = String(line.dropFirst(6))
-                        if let data = jsonString.data(using: .utf8),
-                           let jsonObject = try? JSONSerialization.jsonObject(with: data) {
-                            let json = self.convertToJSON(jsonObject)
-                            continuation.yield(json)
-                        }
-                    }
-                }
-                logger.info(
-                    "SSE request completed",
-                    metadata: ["endpoint": .string(endpoint)]
-                )
-                continuation.finish()
-            }
+            // Use streaming delegate for incremental SSE parsing
+            let config = URLSessionConfiguration.default
+            config.timeoutIntervalForRequest = self.timeoutInterval
+            config.timeoutIntervalForResource = self.timeoutInterval
+            let delegate = SSEJSONDelegate(continuation: continuation, logger: self.logger, endpoint: endpoint)
+            // Create session with delegate (delegate retains session to keep it alive)
+            let delegateSession = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
+            delegate.setSession(delegateSession)
+            let task = delegateSession.dataTask(with: request)
             task.resume()
+            
             continuation.onTermination = { _ in
                 task.cancel()
-                logger.debug(
+                self.logger.debug(
                     "SSE request cancelled",
                     metadata: ["endpoint": .string(endpoint)]
                 )
