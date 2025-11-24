@@ -23,8 +23,69 @@ final class SSEDelegate: NSObject, URLSessionDataDelegate {
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         Task {
+            // Log raw data chunk at debug level
+            logger.debug(
+                "SSE data chunk received",
+                metadata: [
+                    "endpoint": .string(endpoint),
+                    "chunkBytes": .stringConvertible(data.count)
+                ]
+            )
+            
+            // Log raw data content (first 1KB to avoid huge logs)
+            if !data.isEmpty {
+                let previewLength = min(data.count, 1024)
+                let previewData = data.prefix(previewLength)
+                if let previewString = String(data: previewData, encoding: .utf8) {
+                    var chunkMetadata: Logger.Metadata = [
+                        "endpoint": .string(endpoint),
+                        "chunkPreview": .string(previewString)
+                    ]
+                    if data.count > previewLength {
+                        chunkMetadata["chunkTruncated"] = .string("true")
+                        chunkMetadata["totalChunkBytes"] = .stringConvertible(data.count)
+                    }
+                    logger.debug("SSE raw data chunk", metadata: chunkMetadata)
+                } else {
+                    logger.debug(
+                        "SSE raw data chunk (binary)",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "chunkBase64": .string(previewData.base64EncodedString())
+                        ]
+                    )
+                }
+            }
+            
             let messages = await parser.appendChunk(data)
-            for message in messages {
+            
+            // Log parsed messages at debug level
+            for (index, message) in messages.enumerated() {
+                // Serialize message for logging
+                do {
+                    let messageData = try JSONSerialization.data(withJSONObject: message, options: [.prettyPrinted, .sortedKeys])
+                    if let messageString = String(data: messageData, encoding: .utf8) {
+                        logger.debug(
+                            "SSE message parsed and yielded",
+                            metadata: [
+                                "endpoint": .string(endpoint),
+                                "messageIndex": .stringConvertible(index),
+                                "messageCount": .stringConvertible(messages.count),
+                                "message": .string(messageString)
+                            ]
+                        )
+                    }
+                } catch {
+                    logger.debug(
+                        "SSE message parsed and yielded (serialization failed)",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "messageIndex": .stringConvertible(index),
+                            "messageCount": .stringConvertible(messages.count),
+                            "messageKeys": .string(message.keys.sorted().joined(separator: ","))
+                        ]
+                    )
+                }
                 continuation.yield(message)
             }
         }
@@ -43,12 +104,51 @@ final class SSEDelegate: NSObject, URLSessionDataDelegate {
             } else {
                 // Process any remaining messages
                 let finalMessages = await parser.finalize()
-                for message in finalMessages {
-                    continuation.yield(message)
+                
+                // Log final messages at debug level
+                if !finalMessages.isEmpty {
+                    logger.debug(
+                        "SSE finalizing with remaining messages",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "finalMessageCount": .stringConvertible(finalMessages.count)
+                        ]
+                    )
+                    
+                    for (index, message) in finalMessages.enumerated() {
+                        // Serialize message for logging
+                        do {
+                            let messageData = try JSONSerialization.data(withJSONObject: message, options: [.prettyPrinted, .sortedKeys])
+                            if let messageString = String(data: messageData, encoding: .utf8) {
+                                logger.debug(
+                                    "SSE final message parsed and yielded",
+                                    metadata: [
+                                        "endpoint": .string(endpoint),
+                                        "messageIndex": .stringConvertible(index),
+                                        "message": .string(messageString)
+                                    ]
+                                )
+                            }
+                        } catch {
+                            logger.debug(
+                                "SSE final message parsed and yielded (serialization failed)",
+                                metadata: [
+                                    "endpoint": .string(endpoint),
+                                    "messageIndex": .stringConvertible(index),
+                                    "messageKeys": .string(message.keys.sorted().joined(separator: ","))
+                                ]
+                            )
+                        }
+                        continuation.yield(message)
+                    }
                 }
+                
                 logger.info(
                     "SSE request completed",
-                    metadata: ["endpoint": .string(endpoint)]
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "totalFinalMessages": .stringConvertible(finalMessages.count)
+                    ]
                 )
             }
             continuation.finish()
@@ -103,8 +203,55 @@ final class SSEJSONDelegate: NSObject, URLSessionDataDelegate {
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
         Task {
+            // Log raw data chunk at debug level
+            logger.debug(
+                "SSE data chunk received",
+                metadata: [
+                    "endpoint": .string(endpoint),
+                    "chunkBytes": .stringConvertible(data.count)
+                ]
+            )
+            
+            // Log raw data content (first 1KB to avoid huge logs)
+            if !data.isEmpty {
+                let previewLength = min(data.count, 1024)
+                let previewData = data.prefix(previewLength)
+                if let previewString = String(data: previewData, encoding: .utf8) {
+                    var chunkMetadata: Logger.Metadata = [
+                        "endpoint": .string(endpoint),
+                        "chunkPreview": .string(previewString)
+                    ]
+                    if data.count > previewLength {
+                        chunkMetadata["chunkTruncated"] = .string("true")
+                        chunkMetadata["totalChunkBytes"] = .stringConvertible(data.count)
+                    }
+                    logger.debug("SSE raw data chunk", metadata: chunkMetadata)
+                } else {
+                    logger.debug(
+                        "SSE raw data chunk (binary)",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "chunkBase64": .string(previewData.base64EncodedString())
+                        ]
+                    )
+                }
+            }
+            
             let messages = await parser.appendChunk(data)
-            for message in messages {
+            
+            // Log parsed messages at debug level
+            for (index, message) in messages.enumerated() {
+                // Serialize JSON message for logging
+                let messageString = serializeJSONMessage(message)
+                logger.debug(
+                    "SSE message parsed and yielded",
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "messageIndex": .stringConvertible(index),
+                        "messageCount": .stringConvertible(messages.count),
+                        "message": .string(messageString)
+                    ]
+                )
                 continuation.yield(message)
             }
         }
@@ -123,15 +270,89 @@ final class SSEJSONDelegate: NSObject, URLSessionDataDelegate {
             } else {
                 // Process any remaining messages
                 let finalMessages = await parser.finalize()
-                for message in finalMessages {
-                    continuation.yield(message)
+                
+                // Log final messages at debug level
+                if !finalMessages.isEmpty {
+                    logger.debug(
+                        "SSE finalizing with remaining messages",
+                        metadata: [
+                            "endpoint": .string(endpoint),
+                            "finalMessageCount": .stringConvertible(finalMessages.count)
+                        ]
+                    )
+                    
+                    for (index, message) in finalMessages.enumerated() {
+                        // Serialize JSON message for logging
+                        let messageString = serializeJSONMessage(message)
+                        logger.debug(
+                            "SSE final message parsed and yielded",
+                            metadata: [
+                                "endpoint": .string(endpoint),
+                                "messageIndex": .stringConvertible(index),
+                                "message": .string(messageString)
+                            ]
+                        )
+                        continuation.yield(message)
+                    }
                 }
+                
                 logger.info(
                     "SSE request completed",
-                    metadata: ["endpoint": .string(endpoint)]
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "totalFinalMessages": .stringConvertible(finalMessages.count)
+                    ]
                 )
             }
             continuation.finish()
+        }
+    }
+    
+    /// Serialize JSON message for logging
+    private func serializeJSONMessage(_ json: JSON) -> String {
+        switch json {
+        case .object(let dict):
+            // Convert to dictionary for JSONSerialization
+            var jsonDict: [String: Any] = [:]
+            for (key, value) in dict {
+                jsonDict[key] = jsonValueToAny(value)
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: jsonDict, options: [.prettyPrinted, .sortedKeys]),
+               let string = String(data: data, encoding: .utf8) {
+                return string
+            }
+            return String(describing: json)
+        case .array(let array):
+            let arrayAny = array.map { jsonValueToAny($0) }
+            if let data = try? JSONSerialization.data(withJSONObject: arrayAny, options: [.prettyPrinted, .sortedKeys]),
+               let string = String(data: data, encoding: .utf8) {
+                return string
+            }
+            return String(describing: json)
+        default:
+            return String(describing: json)
+        }
+    }
+    
+    /// Convert JSON value to Any for JSONSerialization
+    private func jsonValueToAny(_ json: JSON) -> Any {
+        switch json {
+        case .object(let dict):
+            var result: [String: Any] = [:]
+            for (key, value) in dict {
+                result[key] = jsonValueToAny(value)
+            }
+            return result
+        case .array(let array):
+            return array.map { jsonValueToAny($0) }
+        case .string(let string):
+            return string
+        case .integer(let int):
+            return int
+        case .double(let double):
+            return double
+        case .boolean(let bool):
+            return bool
         }
     }
     
