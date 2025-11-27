@@ -10,15 +10,23 @@ import SwiftAgentKit
 import SwiftAgentKitMCP
 import Logging
 
-// Configure logging
-LoggingSystem.bootstrap { label in
-    StreamLogHandler.standardOutput(label: label)
+private var didConfigureLogging = false
+private func configureLogging() {
+    guard !didConfigureLogging else { return }
+    didConfigureLogging = true
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.oauthdiscovery"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("OAuthDiscovery")))
+    )
 }
-
-let logger = Logger(label: "OAuthDiscoveryExample")
 
 @main
 struct OAuthDiscoveryExample {
+    private static let logger: Logger = {
+        configureLogging()
+        return SwiftAgentKitLogging.logger(for: .examples("OAuthDiscoveryExample"))
+    }()
     
     static func main() async {
         logger.info("Starting OAuth Discovery Example")

@@ -3,15 +3,20 @@ import Logging
 import SwiftAgentKitMCP
 import SwiftAgentKit
 
+private func configureFilteringLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.mcp.filtering"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("MCPMessageFiltering")))
+    )
+}
+
 /// Example demonstrating MCP message filtering to handle log interference
 struct MessageFilteringExample {
     static func run() async throws {
-        // Configure logging
-        LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardOutput(label: label)
-            handler.logLevel = .info
-            return handler
-        }
+        configureFilteringLogging()
+        let logger = SwiftAgentKitLogging.logger(for: .examples("MCPMessageFilteringExample"))
+        logger.info("Starting MCP message filtering example")
         
         print("=== MCP Message Filtering Example ===")
         print("This example demonstrates how MCP message filtering prevents log interference")

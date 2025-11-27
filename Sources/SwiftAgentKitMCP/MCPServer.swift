@@ -37,7 +37,7 @@ public enum TransportType {
 
 /// MCP Server implementation that leverages the MCP library for protocol handling
 public actor MCPServer {
-    private let logger = Logger(label: "MCPServer")
+    private let logger: Logger
     
     // MARK: - Configuration
     public let name: String
@@ -60,11 +60,29 @@ public actor MCPServer {
     ///   - name: The name of the server
     ///   - version: The version of the server (defaults to "1.0.0")
     ///   - transportType: The type of transport to use (defaults to stdio)
-    public init(name: String, version: String = "1.0.0", transportType: TransportType = .stdio) {
+    public init(
+        name: String,
+        version: String = "1.0.0",
+        transportType: TransportType = .stdio,
+        logger: Logger? = nil
+    ) {
         self.name = name
         self.version = version
         self.transportType = transportType
-        self.toolRegistry = ToolRegistry()
+        let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("MCPServer"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(name)),
+                ("version", .string(version))
+            )
+        )
+        self.logger = resolvedLogger
+        self.toolRegistry = ToolRegistry(
+            logger: SwiftAgentKitLogging.logger(
+                for: .mcp("ToolRegistry"),
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(name)))
+            )
+        )
         self.environment = ProcessInfo.processInfo.environment
     }
     
@@ -89,7 +107,10 @@ public actor MCPServer {
             inputSchema: inputSchema,
             handler: handler
         )
-        logger.info("Registered tool: \(toolDefinition.name)")
+        logger.info(
+            "Registered tool",
+            metadata: SwiftAgentKitLogging.metadata(("tool", .string(toolDefinition.name)))
+        )
     }
     
     /// Get the current environment variables (useful for custom authentication)
@@ -108,7 +129,13 @@ public actor MCPServer {
             throw MCPServerError.alreadyRunning
         }
         
-        logger.info("Starting MCP server: \(name) v\(version)")
+        logger.info(
+            "Starting MCP server",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(name)),
+                ("version", .string(version))
+            )
+        )
         
         // Store the provided transport
         self.transport = transport
@@ -161,7 +188,13 @@ public actor MCPServer {
         try await mcpServer?.start(transport: transport)
         
         isRunning = true
-        logger.info("MCP server started successfully")
+        logger.info(
+            "MCP server started successfully",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(name)),
+                ("version", .string(version))
+            )
+        )
 
         await mcpServer?.waitUntilCompleted()
     }
@@ -170,7 +203,13 @@ public actor MCPServer {
     public func stop() async {
         guard isRunning else { return }
         
-        logger.info("Stopping MCP server: \(name)")
+        logger.info(
+            "Stopping MCP server",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(name)),
+                ("version", .string(version))
+            )
+        )
         
         // Stop MCP server
         await mcpServer?.stop()
@@ -181,7 +220,13 @@ public actor MCPServer {
         transport = nil
         
         isRunning = false
-        logger.info("MCP server stopped")
+        logger.info(
+            "MCP server stopped",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(name)),
+                ("version", .string(version))
+            )
+        )
     }
     
     /// Diagnostic method to test if the server is properly configured

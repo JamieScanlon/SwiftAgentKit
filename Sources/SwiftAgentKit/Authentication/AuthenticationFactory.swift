@@ -11,8 +11,12 @@ import Logging
 
 /// Factory for creating authentication providers based on configuration
 public struct AuthenticationFactory {
-    
-    private static let logger = Logger(label: "AuthenticationFactory")
+    private static func makeLogger(metadata: Logger.Metadata = [:]) -> Logger {
+        SwiftAgentKitLogging.logger(
+            for: .authentication("AuthenticationFactory"),
+            metadata: metadata
+        )
+    }
     
     /// Creates an authentication provider based on the configuration
     /// - Parameters:
@@ -25,10 +29,15 @@ public struct AuthenticationFactory {
         config: JSON
     ) throws -> any AuthenticationProvider {
         
-        logger.info("Creating authentication provider for type: \(authType)")
+        let metadata: Logger.Metadata = [
+            "authType": .string(authType),
+            "configKeys": .string(configKeysString(config))
+        ]
+        let logger = makeLogger(metadata: metadata)
+        logger.debug("Creating authentication provider")
         
         guard let scheme = AuthenticationScheme(rawValue: authType) else {
-            logger.error("Unsupported authentication type: \(authType)")
+            logger.error("Unsupported authentication type")
             throw AuthenticationError.unsupportedAuthScheme(authType)
         }
         
@@ -48,10 +57,16 @@ public struct AuthenticationFactory {
         serverURL: String
     ) throws -> any AuthenticationProvider {
         
-        logger.info("Creating authentication provider for type: \(authType) with server URL: \(serverURL)")
+        let metadata: Logger.Metadata = [
+            "authType": .string(authType),
+            "serverURL": .string(serverURL),
+            "configKeys": .string(configKeysString(config))
+        ]
+        let logger = makeLogger(metadata: metadata)
+        logger.debug("Creating authentication provider with server context")
         
         guard let scheme = AuthenticationScheme(rawValue: authType) else {
-            logger.error("Unsupported authentication type: \(authType)")
+            logger.error("Unsupported authentication type")
             throw AuthenticationError.unsupportedAuthScheme(authType)
         }
         
@@ -75,37 +90,63 @@ public struct AuthenticationFactory {
         config: JSON
     ) throws -> any AuthenticationProvider {
         
-        logger.info("Creating authentication provider for scheme: \(scheme.rawValue)")
+        let metadata: Logger.Metadata = [
+            "scheme": .string(scheme.rawValue),
+            "configKeys": .string(configKeysString(config))
+        ]
+        let logger = makeLogger(metadata: metadata)
         
-        switch scheme {
-        case .bearer:
-            return try createBearerTokenProvider(config: config)
+        do {
+            let provider: any AuthenticationProvider
             
-        case .apiKey:
-            return try createAPIKeyProvider(config: config)
-            
-        case .basic:
-            return try createBasicAuthProvider(config: config)
-            
-        case .oauth:
-            // Check if this is a Dynamic Client Registration configuration
-            if isDynamicClientRegistrationConfig(config: config) {
-                return try createDynamicClientRegistrationProvider(config: config)
+            switch scheme {
+            case .bearer:
+                provider = try createBearerTokenProvider(config: config)
+                
+            case .apiKey:
+                provider = try createAPIKeyProvider(config: config)
+                
+            case .basic:
+                provider = try createBasicAuthProvider(config: config)
+                
+            case .oauth:
+                if isDynamicClientRegistrationConfig(config: config) {
+                    provider = try createDynamicClientRegistrationProvider(config: config)
+                } else if isPKCEOAuthConfig(config: config) {
+                    provider = try createPKCEOAuthProvider(config: config)
+                } else if isOAuthDiscoveryConfig(config: config) {
+                    provider = try createOAuthDiscoveryProvider(config: config)
+                } else if isDirectOAuthConfig(config: config) {
+                    provider = try createDirectOAuthProvider(config: config)
+                } else {
+                    provider = try createOAuthProvider(config: config)
+                }
+                
+            case .custom(let customScheme):
+                logger.error(
+                    "Custom authentication scheme not supported by factory",
+                    metadata: ["scheme": .string(customScheme)]
+                )
+                throw AuthenticationError.unsupportedAuthScheme(customScheme)
             }
-            // Check if this is a PKCE OAuth configuration
-            else if isPKCEOAuthConfig(config: config) {
-                return try createPKCEOAuthProvider(config: config)
-            } else if isOAuthDiscoveryConfig(config: config) {
-                return try createOAuthDiscoveryProvider(config: config)
-            } else if isDirectOAuthConfig(config: config) {
-                return try createDirectOAuthProvider(config: config)
-            } else {
-                return try createOAuthProvider(config: config)
-            }
             
-        case .custom(let customScheme):
-            logger.error("Custom authentication scheme not supported by factory: \(customScheme)")
-            throw AuthenticationError.unsupportedAuthScheme(customScheme)
+            logger.info(
+                "Authentication provider created",
+                metadata: [
+                    "providerType": .string(String(describing: type(of: provider))),
+                    "configKeys": .string(configKeysString(config))
+                ]
+            )
+            return provider
+        } catch {
+            logger.warning(
+                "Failed to create authentication provider",
+                metadata: [
+                    "error": .string(String(describing: error)),
+                    "configKeys": .string(configKeysString(config))
+                ]
+            )
+            throw error
         }
     }
     
@@ -117,11 +158,12 @@ public struct AuthenticationFactory {
     ) -> (any AuthenticationProvider)? {
         
         let envPrefix = "\(serverName.uppercased())_"
+        let serverMetadata: Logger.Metadata = ["server": .string(serverName)]
         
         // Check for Bearer token
         if let token = ProcessInfo.processInfo.environment["\(envPrefix)TOKEN"] ?? 
                        ProcessInfo.processInfo.environment["\(envPrefix)BEARER_TOKEN"] {
-            logger.info("Creating Bearer token provider from environment for server: \(serverName)")
+            makeLogger(metadata: serverMetadata).debug("Creating Bearer token provider from environment")
             return BearerTokenAuthProvider(token: token)
         }
         
@@ -129,14 +171,14 @@ public struct AuthenticationFactory {
         if let apiKey = ProcessInfo.processInfo.environment["\(envPrefix)API_KEY"] {
             let headerName = ProcessInfo.processInfo.environment["\(envPrefix)API_HEADER"] ?? "X-API-Key"
             let prefix = ProcessInfo.processInfo.environment["\(envPrefix)API_PREFIX"]
-            logger.info("Creating API key provider from environment for server: \(serverName)")
+            makeLogger(metadata: serverMetadata).debug("Creating API key provider from environment")
             return APIKeyAuthProvider(apiKey: apiKey, headerName: headerName, prefix: prefix)
         }
         
         // Check for Basic auth
         if let username = ProcessInfo.processInfo.environment["\(envPrefix)USERNAME"],
            let password = ProcessInfo.processInfo.environment["\(envPrefix)PASSWORD"] {
-            logger.info("Creating Basic auth provider from environment for server: \(serverName)")
+            makeLogger(metadata: serverMetadata).debug("Creating Basic auth provider from environment")
             return BasicAuthProvider(username: username, password: password)
         }
         
@@ -173,10 +215,13 @@ public struct AuthenticationFactory {
                     resourceURI: resourceURI
                 )
                 
-                logger.info("Creating PKCE OAuth provider from environment for server: \(serverName)")
+                makeLogger(metadata: serverMetadata).debug("Creating PKCE OAuth provider from environment")
                 return PKCEOAuthAuthProvider(config: pkceConfig)
             } catch {
-                logger.error("Failed to create PKCE OAuth provider from environment: \(error)")
+                makeLogger(metadata: serverMetadata).error(
+                    "Failed to create PKCE OAuth provider from environment",
+                    metadata: ["error": .string(String(describing: error))]
+                )
                 return nil
             }
         }
@@ -207,15 +252,18 @@ public struct AuthenticationFactory {
                     scope: scope
                 )
                 
-                logger.info("Creating OAuth provider from environment for server: \(serverName)")
+                makeLogger(metadata: serverMetadata).debug("Creating OAuth provider from environment")
                 return OAuthAuthProvider(tokens: tokens, config: oauthConfig)
             } catch {
-                logger.error("Failed to create OAuth config from environment: \(error)")
+                makeLogger(metadata: serverMetadata).error(
+                    "Failed to create OAuth config from environment",
+                    metadata: ["error": .string(String(describing: error))]
+                )
                 return nil
             }
         }
         
-        logger.debug("No authentication configuration found in environment for server: \(serverName)")
+        makeLogger(metadata: serverMetadata).debug("No authentication configuration found in environment")
         return nil
     }
     
@@ -229,6 +277,7 @@ public struct AuthenticationFactory {
         guard let serverURLObject = URL(string: serverURL) else {
             throw AuthenticationError.authenticationFailed("Invalid server URL: \(serverURL)")
         }
+        let logger = makeLogger(metadata: ["serverURL": .string(serverURL)])
         
         // Extract canonical resource URI from server URL
         var uriString = serverURLObject.absoluteString
@@ -242,13 +291,19 @@ public struct AuthenticationFactory {
         if case .object(var configDict) = config {
             if configDict["resourceURI"] == nil {
                 configDict["resourceURI"] = .string(canonicalResourceURI)
-                logger.info("Added resource parameter: \(canonicalResourceURI)")
+                logger.info(
+                    "Added resource parameter",
+                    metadata: ["resourceURI": .string(canonicalResourceURI)]
+                )
             }
             
             // Add resourceServerURL for direct OAuth configurations
             if configDict["resourceServerURL"] == nil {
                 configDict["resourceServerURL"] = .string(uriString)
-                logger.info("Added resourceServerURL: \(uriString)")
+                logger.info(
+                    "Added resourceServerURL",
+                    metadata: ["resourceServerURL": .string(uriString)]
+                )
             }
             
             return .object(configDict)
@@ -806,5 +861,12 @@ public struct AuthenticationFactory {
             softwareStatement: softwareStatement,
             credentialStorage: credentialStorage
         )
+    }
+    
+    private static func configKeysString(_ config: JSON) -> String {
+        guard case .object(let dict) = config else {
+            return "non-object"
+        }
+        return dict.keys.sorted().joined(separator: ",")
     }
 }

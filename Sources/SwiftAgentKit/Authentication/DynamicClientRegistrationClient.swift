@@ -11,11 +11,11 @@ import Logging
 /// Client for performing OAuth 2.0 Dynamic Client Registration as per RFC 7591
 public actor DynamicClientRegistrationClient {
     
-    private let logger = Logger(label: "DynamicClientRegistrationClient")
+    private let logger: Logger
     private let session: URLSession
     private let config: DynamicClientRegistrationConfig
     
-    public init(config: DynamicClientRegistrationConfig) {
+    public init(config: DynamicClientRegistrationConfig, logger: Logger?) {
         self.config = config
         
         // Create URL session with custom configuration
@@ -24,6 +24,17 @@ public actor DynamicClientRegistrationClient {
         sessionConfig.timeoutIntervalForResource = (config.requestTimeout ?? 30.0) * 2
         
         self.session = URLSession(configuration: sessionConfig)
+        let metadata: Logger.Metadata = [
+            "registrationEndpoint": .string(config.registrationEndpoint.absoluteString)
+        ]
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .authentication("DynamicClientRegistrationClient"),
+            metadata: metadata
+        )
+    }
+    
+    public init(config: DynamicClientRegistrationConfig) {
+        self.init(config: config, logger: nil)
     }
     
     /// Registers a client with the authorization server
@@ -37,7 +48,13 @@ public actor DynamicClientRegistrationClient {
         softwareStatement: String? = nil
     ) async throws -> DynamicClientRegistration.ClientRegistrationResponse {
         
-        logger.info("Starting client registration with endpoint: \(config.registrationEndpoint)")
+        logger.info(
+            "Starting client registration",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("clientName", .string(request.clientName ?? "unknown")),
+                ("redirectCount", .stringConvertible(request.redirectUris.count))
+            )
+        )
         
         // Create registration request
         var registrationRequest = request
@@ -94,10 +111,16 @@ public actor DynamicClientRegistrationClient {
             
             // Log the JSON being sent for debugging
             if let jsonString = String(data: requestData, encoding: .utf8) {
-                logger.debug("Registration request JSON: \(jsonString)")
+                logger.debug(
+                    "Registration request JSON",
+                    metadata: SwiftAgentKitLogging.metadata(("payload", .string(jsonString)))
+                )
             }
         } catch {
-            logger.error("Failed to encode registration request: \(error)")
+            logger.error(
+                "Failed to encode registration request",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             throw DynamicClientRegistrationError.encodingError(error)
         }
         
@@ -109,11 +132,17 @@ public actor DynamicClientRegistrationClient {
                 throw DynamicClientRegistrationError.invalidResponse("Invalid HTTP response")
             }
             
-            logger.info("Received registration response with status: \(httpResponse.statusCode)")
+            logger.info(
+                "Received registration response",
+                metadata: SwiftAgentKitLogging.metadata(("status", .stringConvertible(httpResponse.statusCode)))
+            )
             
             // Log response body for debugging on errors
             if httpResponse.statusCode >= 400, let responseBody = String(data: data, encoding: .utf8) {
-                logger.error("Registration response body: \(responseBody)")
+                logger.error(
+                    "Registration response body",
+                    metadata: SwiftAgentKitLogging.metadata(("payload", .string(responseBody)))
+                )
             }
             
             // Handle response based on status code
@@ -140,7 +169,10 @@ public actor DynamicClientRegistrationClient {
         } catch let error as DynamicClientRegistrationError {
             throw error
         } catch {
-            logger.error("Network error during client registration: \(error)")
+            logger.error(
+                "Network error during client registration",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             throw DynamicClientRegistrationError.networkError(error)
         }
     }
@@ -158,7 +190,10 @@ public actor DynamicClientRegistrationClient {
         accessToken: String
     ) async throws -> DynamicClientRegistration.ClientRegistrationResponse {
         
-        logger.info("Updating client registration for client ID: \(clientId)")
+        logger.info(
+            "Updating client registration",
+            metadata: SwiftAgentKitLogging.metadata(("clientId", .string(clientId)))
+        )
         
         // Create update URL (typically the same as registration endpoint with client ID)
         let updateURL = config.registrationEndpoint.appendingPathComponent(clientId)
@@ -183,7 +218,10 @@ public actor DynamicClientRegistrationClient {
             encoder.dateEncodingStrategy = .iso8601
             urlRequest.httpBody = try encoder.encode(request)
         } catch {
-            logger.error("Failed to encode update request: \(error)")
+            logger.error(
+                "Failed to encode update request",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             throw DynamicClientRegistrationError.encodingError(error)
         }
         
@@ -195,7 +233,10 @@ public actor DynamicClientRegistrationClient {
                 throw DynamicClientRegistrationError.invalidResponse("Invalid HTTP response")
             }
             
-            logger.info("Received update response with status: \(httpResponse.statusCode)")
+            logger.info(
+                "Received update response",
+                metadata: SwiftAgentKitLogging.metadata(("status", .stringConvertible(httpResponse.statusCode)))
+            )
             
             // Handle response based on status code
             switch httpResponse.statusCode {
@@ -221,7 +262,13 @@ public actor DynamicClientRegistrationClient {
         } catch let error as DynamicClientRegistrationError {
             throw error
         } catch {
-            logger.error("Network error during client update: \(error)")
+            logger.error(
+                "Network error during client update",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("clientId", .string(clientId)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             throw DynamicClientRegistrationError.networkError(error)
         }
     }
@@ -237,7 +284,10 @@ public actor DynamicClientRegistrationClient {
         accessToken: String
     ) async throws -> DynamicClientRegistration.ClientRegistrationResponse {
         
-        logger.info("Retrieving client registration for client ID: \(clientId)")
+        logger.info(
+            "Retrieving client registration",
+            metadata: SwiftAgentKitLogging.metadata(("clientId", .string(clientId)))
+        )
         
         // Create retrieval URL (typically the same as registration endpoint with client ID)
         let retrievalURL = config.registrationEndpoint.appendingPathComponent(clientId)
@@ -263,7 +313,13 @@ public actor DynamicClientRegistrationClient {
                 throw DynamicClientRegistrationError.invalidResponse("Invalid HTTP response")
             }
             
-            logger.info("Received retrieval response with status: \(httpResponse.statusCode)")
+            logger.info(
+                "Received retrieval response",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("clientId", .string(clientId)),
+                    ("status", .stringConvertible(httpResponse.statusCode))
+                )
+            )
             
             // Handle response based on status code
             switch httpResponse.statusCode {
@@ -286,7 +342,13 @@ public actor DynamicClientRegistrationClient {
         } catch let error as DynamicClientRegistrationError {
             throw error
         } catch {
-            logger.error("Network error during client retrieval: \(error)")
+            logger.error(
+                "Network error during client retrieval",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("clientId", .string(clientId)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             throw DynamicClientRegistrationError.networkError(error)
         }
     }
@@ -301,7 +363,10 @@ public actor DynamicClientRegistrationClient {
         accessToken: String
     ) async throws {
         
-        logger.info("Deleting client registration for client ID: \(clientId)")
+        logger.info(
+            "Deleting client registration",
+            metadata: SwiftAgentKitLogging.metadata(("clientId", .string(clientId)))
+        )
         
         // Create deletion URL (typically the same as registration endpoint with client ID)
         let deletionURL = config.registrationEndpoint.appendingPathComponent(clientId)
@@ -326,7 +391,13 @@ public actor DynamicClientRegistrationClient {
                 throw DynamicClientRegistrationError.invalidResponse("Invalid HTTP response")
             }
             
-            logger.info("Received deletion response with status: \(httpResponse.statusCode)")
+            logger.info(
+                "Received deletion response",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("clientId", .string(clientId)),
+                    ("status", .stringConvertible(httpResponse.statusCode))
+                )
+            )
             
             // Handle response based on status code
             switch httpResponse.statusCode {
@@ -349,7 +420,13 @@ public actor DynamicClientRegistrationClient {
         } catch let error as DynamicClientRegistrationError {
             throw error
         } catch {
-            logger.error("Network error during client deletion: \(error)")
+            logger.error(
+                "Network error during client deletion",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("clientId", .string(clientId)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             throw DynamicClientRegistrationError.networkError(error)
         }
     }
@@ -366,11 +443,17 @@ public actor DynamicClientRegistrationClient {
             decoder.dateDecodingStrategy = .iso8601
             let response = try decoder.decode(DynamicClientRegistration.ClientRegistrationResponse.self, from: data)
             
-            logger.info("Successfully registered client with ID: \(response.clientId)")
+            logger.info(
+                "Successfully registered client",
+                metadata: SwiftAgentKitLogging.metadata(("clientId", .string(response.clientId)))
+            )
             return response
             
         } catch {
-            logger.error("Failed to decode registration response: \(error)")
+            logger.error(
+                "Failed to decode registration response",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             throw DynamicClientRegistrationError.decodingError(error)
         }
     }
@@ -384,13 +467,22 @@ public actor DynamicClientRegistrationClient {
             let decoder = JSONDecoder()
             let error = try decoder.decode(DynamicClientRegistration.ClientRegistrationError.self, from: data)
             
-            logger.error("Registration failed with error: \(error.error) - \(error.errorDescription ?? "No description")")
+            logger.error(
+                "Registration failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("error", .string(error.error)),
+                    ("description", .string(error.errorDescription ?? "No description"))
+                )
+            )
             throw DynamicClientRegistrationError.registrationError(error)
             
         } catch let dynamicError as DynamicClientRegistrationError {
             throw dynamicError
         } catch {
-            logger.error("Failed to decode registration error response: \(error)")
+            logger.error(
+                "Failed to decode registration error response",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             throw DynamicClientRegistrationError.decodingError(error)
         }
     }

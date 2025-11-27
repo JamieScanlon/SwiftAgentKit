@@ -351,11 +351,21 @@ public struct WWWAuthenticateParser {
 /// Protected resource metadata discovery client
 public actor ProtectedResourceMetadataClient {
     
-    private let logger = Logger(label: "ProtectedResourceMetadataClient")
+    private let logger: Logger
     private let urlSession: URLSession
     
-    public init(urlSession: URLSession = .shared) {
+    public init(
+        urlSession: URLSession,
+        logger: Logger?
+    ) {
         self.urlSession = urlSession
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .authentication("ProtectedResourceMetadataClient")
+        )
+    }
+    
+    public init(urlSession: URLSession = .shared) {
+        self.init(urlSession: urlSession, logger: nil)
     }
     
     /// Discover protected resource metadata from WWW-Authenticate header
@@ -369,7 +379,7 @@ public actor ProtectedResourceMetadataClient {
                                   challenge.headers["www-authenticate"]
         
         guard let wwwAuthenticateHeader = wwwAuthenticateHeader else {
-            logger.debug("No WWW-Authenticate header found in challenge")
+        logger.debug("No WWW-Authenticate header found in challenge")
             return nil
         }
         
@@ -387,7 +397,10 @@ public actor ProtectedResourceMetadataClient {
             throw ProtectedResourceMetadataError.invalidURL("Invalid resource_metadata URL: \(resourceMetadataURLString)")
         }
         
-        logger.info("Found resource_metadata URL: \(resourceMetadataURL)")
+        logger.info(
+            "Found resource_metadata URL",
+            metadata: ["resourceMetadataURL": .string(resourceMetadataURL.absoluteString)]
+        )
         
         return try await fetchProtectedResourceMetadata(from: resourceMetadataURL)
     }
@@ -412,24 +425,42 @@ public actor ProtectedResourceMetadataClient {
         let rootPathURL = baseURL.appendingPathComponent(".well-known/oauth-protected-resource")
         urlsToTry.append(rootPathURL)
         
-        logger.info("Attempting well-known URI discovery for base URL: \(baseURL)")
+        logger.info(
+            "Attempting well-known URI discovery",
+            metadata: ["baseURL": .string(baseURL.absoluteString)]
+        )
         
         for url in urlsToTry {
-            logger.debug("Trying well-known URI: \(url)")
+            logger.debug(
+                "Trying well-known URI",
+                metadata: ["url": .string(url.absoluteString)]
+            )
             
             do {
                 let metadata = try await fetchProtectedResourceMetadata(from: url)
-                logger.info("Successfully discovered protected resource metadata from: \(url)")
+                logger.info(
+                    "Successfully discovered protected resource metadata",
+                    metadata: ["url": .string(url.absoluteString)]
+                )
                 return metadata
             } catch let error as ProtectedResourceMetadataError {
                 if case .httpError(let statusCode, _) = error, statusCode == 404 {
-                    logger.debug("Well-known URI not found: \(url) (404)")
+                    logger.debug(
+                        "Well-known URI not found",
+                        metadata: ["url": .string(url.absoluteString)]
+                    )
                     continue // Try next URL
                 } else {
                     throw error
                 }
             } catch {
-                logger.debug("Failed to fetch from well-known URI \(url): \(error)")
+                logger.debug(
+                    "Failed to fetch from well-known URI",
+                    metadata: [
+                        "url": .string(url.absoluteString),
+                        "error": .string(String(describing: error))
+                    ]
+                )
                 continue // Try next URL
             }
         }
@@ -443,7 +474,10 @@ public actor ProtectedResourceMetadataClient {
     /// - Returns: Protected resource metadata
     /// - Throws: ProtectedResourceMetadataError if fetch fails
     private func fetchProtectedResourceMetadata(from url: URL) async throws -> ProtectedResourceMetadata {
-        logger.debug("Fetching protected resource metadata from: \(url)")
+        logger.debug(
+            "Fetching protected resource metadata",
+            metadata: ["url": .string(url.absoluteString)]
+        )
         
         do {
             let (data, response) = try await urlSession.data(from: url)
@@ -464,7 +498,10 @@ public actor ProtectedResourceMetadataClient {
         } catch let error as ProtectedResourceMetadataError {
             throw error
         } catch {
-            logger.error("Failed to fetch protected resource metadata: \(error)")
+            logger.error(
+                "Failed to fetch protected resource metadata",
+                metadata: ["error": .string(String(describing: error))]
+            )
             throw ProtectedResourceMetadataError.discoveryFailed(error.localizedDescription)
         }
     }

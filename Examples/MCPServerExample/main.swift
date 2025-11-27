@@ -4,14 +4,19 @@ import SwiftAgentKitMCP
 import EasyJSON
 import SwiftAgentKit
 
+private func configureServerLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.mcp.server"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("MCPServer")))
+    )
+}
+
 struct MCPServerExample {
     static func main() async throws {
-        // Configure logging
-        LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardOutput(label: label)
-            handler.logLevel = .info
-            return handler
-        }
+        configureServerLogging()
+        let logger = SwiftAgentKitLogging.logger(for: .examples("MCPServerExample"))
+        logger.info("Starting MCP Server Example")
         
         print("=== SwiftAgentKit MCP Server Example ===")
         
@@ -19,7 +24,7 @@ struct MCPServerExample {
         let stdioServer = MCPServer(name: "example-tool-server", version: "1.0.0")
         
         // Example 2: HTTP client transport (for connecting to remote MCP servers)
-        let httpServer = MCPServer(
+        _ = MCPServer(
             name: "http-example-server", 
             version: "1.0.0",
             transportType: .httpClient(

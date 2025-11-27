@@ -12,15 +12,38 @@ import Logging
 /// Implements the flow described in the MCP Auth specification
 public actor OAuthDiscoveryManager {
     
-    private let logger = Logger(label: "OAuthDiscoveryManager")
+    private let logger: Logger
     private let urlSession: URLSession
     private let protectedResourceClient: ProtectedResourceMetadataClient
     private let oauthServerClient: OAuthServerMetadataClient
     
-    public init(urlSession: URLSession = .shared) {
+    public init(
+        urlSession: URLSession,
+        logger: Logger?
+    ) {
         self.urlSession = urlSession
-        self.protectedResourceClient = ProtectedResourceMetadataClient(urlSession: urlSession)
-        self.oauthServerClient = OAuthServerMetadataClient(urlSession: urlSession)
+        let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
+            for: .authentication("OAuthDiscoveryManager")
+        )
+        self.logger = resolvedLogger
+        self.protectedResourceClient = ProtectedResourceMetadataClient(
+            urlSession: urlSession,
+            logger: SwiftAgentKitLogging.logger(
+                for: .authentication("ProtectedResourceMetadataClient"),
+                metadata: ["manager": .string("OAuthDiscovery")]
+            )
+        )
+        self.oauthServerClient = OAuthServerMetadataClient(
+            urlSession: urlSession,
+            logger: SwiftAgentKitLogging.logger(
+                for: .authentication("OAuthServerMetadataClient"),
+                metadata: ["manager": .string("OAuthDiscovery")]
+            )
+        )
+    }
+    
+    public init(urlSession: URLSession = .shared) {
+        self.init(urlSession: urlSession, logger: nil)
     }
     
     /// Discover authorization server metadata following the complete MCP Auth flow
@@ -37,17 +60,26 @@ public actor OAuthDiscoveryManager {
         preConfiguredAuthServerURL: URL? = nil
     ) async throws -> OAuthServerMetadata {
         
-        logger.info("Starting OAuth discovery process for resource server: \(resourceServerURL)")
+        logger.info(
+            "Starting OAuth discovery process",
+            metadata: ["resourceServerURL": .string(resourceServerURL.absoluteString)]
+        )
         
         // Step 1: Try pre-configured authorization server URL first
         if let preConfiguredURL = preConfiguredAuthServerURL {
-            logger.info("Using pre-configured authorization server URL: \(preConfiguredURL)")
+            logger.info(
+                "Using pre-configured authorization server URL",
+                metadata: ["authorizationServerURL": .string(preConfiguredURL.absoluteString)]
+            )
             do {
                 let metadata = try await oauthServerClient.discoverAuthorizationServerMetadata(issuerURL: preConfiguredURL)
                 logger.info("Successfully discovered authorization server metadata using pre-configured URL")
                 return metadata
             } catch {
-                logger.warning("Pre-configured authorization server URL failed: \(error)")
+                logger.warning(
+                    "Pre-configured authorization server URL failed",
+                    metadata: ["error": .string(String(describing: error))]
+                )
                 // Continue with discovery process
             }
         }
@@ -74,7 +106,10 @@ public actor OAuthDiscoveryManager {
     /// - Returns: Authentication challenge with 401 response
     /// - Throws: OAuthDiscoveryError if request fails
     private func makeUnauthenticatedRequest(to resourceServerURL: URL) async throws -> AuthenticationChallenge {
-        logger.info("Making unauthenticated request to trigger discovery: \(resourceServerURL)")
+        logger.info(
+            "Making unauthenticated request to trigger discovery",
+            metadata: ["resourceServerURL": .string(resourceServerURL.absoluteString)]
+        )
         
         // Create a simple request that should trigger authentication
         var request = URLRequest(url: resourceServerURL)
@@ -117,7 +152,10 @@ public actor OAuthDiscoveryManager {
         } catch let error as OAuthDiscoveryError {
             throw error
         } catch {
-            logger.error("Failed to make unauthenticated request: \(error)")
+            logger.error(
+                "Failed to make unauthenticated request",
+                metadata: ["error": .string(String(describing: error))]
+            )
             throw OAuthDiscoveryError.networkError(error.localizedDescription)
         }
     }
@@ -174,10 +212,16 @@ public actor OAuthDiscoveryManager {
         do {
             return try await oauthServerClient.discoverFromProtectedResourceMetadata(protectedResourceMetadata)
         } catch {
-            logger.warning("Failed to discover from protected resource metadata: \(error)")
+            logger.warning(
+                "Failed to discover from protected resource metadata",
+                metadata: ["error": .string(String(describing: error))]
+            )
             
             if let fallbackURL = fallbackAuthServerURL {
-                logger.info("Attempting fallback to pre-configured authorization server URL: \(fallbackURL)")
+                logger.debug(
+                    "Attempting fallback to pre-configured authorization server URL",
+                    metadata: ["authorizationServerURL": .string(fallbackURL.absoluteString)]
+                )
                 return try await oauthServerClient.discoverAuthorizationServerMetadata(issuerURL: fallbackURL)
             } else {
                 throw OAuthDiscoveryError.authorizationServerDiscoveryFailed(

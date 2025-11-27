@@ -8,6 +8,7 @@
 import Foundation
 import Logging
 import MCP
+import SwiftAgentKit
 import System
 
 /// An adaptive stdio transport that automatically handles both plain JSON-RPC and chunked messages
@@ -28,8 +29,16 @@ public actor AdaptiveStdioTransport: Transport {
     private var messageContinuation: AsyncThrowingStream<Data, Swift.Error>.Continuation?
     
     public init(logger: Logger? = nil) {
-        self.logger = logger ?? Logger(label: "mcp.transport.adaptive-stdio")
-        self.chunker = MessageChunker(logger: self.logger)
+        let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("AdaptiveStdioTransport")
+        )
+        self.logger = resolvedLogger
+        self.chunker = MessageChunker(
+            logger: SwiftAgentKitLogging.logger(
+                for: .mcp("MessageChunker"),
+                metadata: SwiftAgentKitLogging.metadata(("transport", .string("adaptive-stdio")))
+            )
+        )
         self.stdioTransport = MCP.StdioTransport()
     }
     

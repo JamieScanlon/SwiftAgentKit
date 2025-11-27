@@ -1,4 +1,5 @@
 import Foundation
+import Logging
 import EasyJSON
 
 public enum MessageRole: String, Codable, Sendable {
@@ -30,20 +31,52 @@ public struct Message: Identifiable, Codable, Sendable {
             self.thumbData = thumbData
         }
         public init(from: [String: Sendable]) {
+            let payloadKeys = from.keys.sorted().joined(separator: ",")
             if let aName = from["name"] as? String {
                 self.name = aName
             } else {
-                print("WARNING: Image name not provided, generating UUID")
+                SwiftAgentKitLogging.logger(
+                    for: .core("Message.Image"),
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("reason", .string("dictionary-missing-name")),
+                        ("payloadKeys", .string(payloadKeys)),
+                        ("generatedUUID", .string("true"))
+                    )
+                ).warning("Image name not provided; generating UUID")
                 self.name = UUID().uuidString
             }
             self.path = from["path"] as? String
             if let base64String = from["imageData"] as? String {
-                self.imageData = Data(base64Encoded: base64String)
+                if let decoded = Data(base64Encoded: base64String) {
+                    self.imageData = decoded
+                } else {
+                    self.imageData = nil
+                    SwiftAgentKitLogging.logger(
+                        for: .core("Message.Image"),
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("field", .string("imageData")),
+                            ("source", .string("dictionary")),
+                            ("encodedLength", .stringConvertible(base64String.count))
+                        )
+                    ).debug("Failed to decode base64 image data")
+                }
             } else {
                 self.imageData = nil
             }
             if let base64String = from["thumbData"] as? String {
-                self.thumbData = Data(base64Encoded: base64String)
+                if let decoded = Data(base64Encoded: base64String) {
+                    self.thumbData = decoded
+                } else {
+                    self.thumbData = nil
+                    SwiftAgentKitLogging.logger(
+                        for: .core("Message.Image"),
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("field", .string("thumbData")),
+                            ("source", .string("dictionary")),
+                            ("encodedLength", .stringConvertible(base64String.count))
+                        )
+                    ).debug("Failed to decode base64 image data")
+                }
             } else {
                 self.thumbData = nil
             }
@@ -51,7 +84,13 @@ public struct Message: Identifiable, Codable, Sendable {
         
         public init(from json: JSON) {
             guard case .object(let dict) = json else {
-                print("WARNING: Invalid JSON format, generating UUID")
+                SwiftAgentKitLogging.logger(
+                    for: .core("Message.Image"),
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("reason", .string("invalid-json")),
+                        ("generatedUUID", .string("true"))
+                    )
+                ).warning("Invalid JSON format; generating UUID")
                 self.name = UUID().uuidString
                 self.path = nil
                 self.imageData = nil
@@ -62,7 +101,15 @@ public struct Message: Identifiable, Codable, Sendable {
             if case .string(let aName) = dict["name"] {
                 self.name = aName
             } else {
-                print("WARNING: Image name not provided, generating UUID")
+                let jsonKeys = dict.keys.sorted().joined(separator: ",")
+                SwiftAgentKitLogging.logger(
+                    for: .core("Message.Image"),
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("reason", .string("json-missing-name")),
+                        ("payloadKeys", .string(jsonKeys)),
+                        ("generatedUUID", .string("true"))
+                    )
+                ).warning("Image name not provided; generating UUID")
                 self.name = UUID().uuidString
             }
             
@@ -73,13 +120,37 @@ public struct Message: Identifiable, Codable, Sendable {
             }
             
             if case .string(let base64String) = dict["imageData"] {
-                self.imageData = Data(base64Encoded: base64String)
+                if let decoded = Data(base64Encoded: base64String) {
+                    self.imageData = decoded
+                } else {
+                    self.imageData = nil
+                    SwiftAgentKitLogging.logger(
+                        for: .core("Message.Image"),
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("field", .string("imageData")),
+                            ("source", .string("json")),
+                            ("encodedLength", .stringConvertible(base64String.count))
+                        )
+                    ).debug("Failed to decode base64 image data")
+                }
             } else {
                 self.imageData = nil
             }
             
             if case .string(let base64String) = dict["thumbData"] {
-                self.thumbData = Data(base64Encoded: base64String)
+                if let decoded = Data(base64Encoded: base64String) {
+                    self.thumbData = decoded
+                } else {
+                    self.thumbData = nil
+                    SwiftAgentKitLogging.logger(
+                        for: .core("Message.Image"),
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("field", .string("thumbData")),
+                            ("source", .string("json")),
+                            ("encodedLength", .stringConvertible(base64String.count))
+                        )
+                    ).debug("Failed to decode base64 image data")
+                }
             } else {
                 self.thumbData = nil
             }

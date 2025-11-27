@@ -2,6 +2,21 @@
 
 The SwiftAgentKit module provides core networking capabilities and utilities that are shared across other modules. It includes a modular REST API manager with helper types for building requests, validating responses, and handling streaming connections.
 
+> ℹ️ **Logging**  
+> All library diagnostics now flow through the shared `SwiftAgentKitLogging` surface. Before issuing requests, bootstrap the logger you want SwiftAgentKit to use:
+> ```swift
+> import Logging
+> import SwiftAgentKit
+> 
+> let appLogger = Logger(label: "com.example.app")
+> SwiftAgentKitLogging.bootstrap(
+>     logger: appLogger,
+>     level: .info,
+>     metadata: ["deployment": .string("staging")]
+> )
+> ```
+> Once bootstrapped, every component (core, MCP, A2A, adapters, orchestrator) automatically derives scoped loggers with consistent metadata. The `print` calls in the snippets below represent **application output**; structured library logs are emitted via the logger you configure.
+
 ## Key Types
 
 ### Core Networking
@@ -134,7 +149,17 @@ for try await chunk in stream {
 
 ## Logging
 
-The SwiftAgentKit module uses Swift Logging for structured logging across all operations, providing cross-platform logging capabilities for debugging and monitoring.
+SwiftAgentKit uses the unified logging surface described in [`docs/logging-api-design.md`](logging-api-design.md). Retrieve a scoped logger whenever you need additional metadata:
+
+```swift
+let networkingLogger = SwiftAgentKitLogging.logger(
+    for: .networking("RestAPIManager"),
+    metadata: SwiftAgentKitLogging.metadata(("requestId", .string(uuid.uuidString)))
+)
+networkingLogger.debug("Issuing GET request")
+```
+
+You can raise or lower verbosity at runtime with `SwiftAgentKitLogging.setLevel(_:)`. Call `SwiftAgentKitLogging.level()` to inspect the current setting.
 
 ## Architecture
 

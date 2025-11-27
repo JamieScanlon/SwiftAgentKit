@@ -4,6 +4,14 @@ import SwiftAgentKit
 import Logging
 import EasyJSON
 
+private func configureLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.orchestrator"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("Orchestrator")))
+    )
+}
+
 // Mock LLM for demonstration
 struct MockLLM: LLMProtocol {
     let model: String
@@ -95,20 +103,16 @@ struct MockLLM: LLMProtocol {
 
 
 
-// Set up logging
-LoggingSystem.bootstrap { label in
-    var handler = StreamLogHandler.standardOutput(label: label)
-    handler.logLevel = .info
-    return handler
-}
-
-let logger = Logger(label: "OrchestratorExample")
-
 func main() async {
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("OrchestratorExample"))
     logger.info("Starting SwiftAgentKitOrchestrator Example")
     
     // Create a mock LLM for demonstration
-    let mockLLM = MockLLM(model: "mock-gpt-4", logger: logger)
+    let mockLLM = MockLLM(
+        model: "mock-gpt-4",
+        logger: SwiftAgentKitLogging.logger(for: .examples("OrchestratorExample.MockLLM"))
+    )
     
     // Create orchestrator configuration
     let config = OrchestratorConfig(

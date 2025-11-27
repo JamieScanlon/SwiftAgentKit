@@ -75,7 +75,7 @@ public struct OAuthConfig: Sendable {
 public actor OAuthAuthProvider: AuthenticationProvider {
     
     public let scheme: AuthenticationScheme = .oauth
-    private let logger = Logger(label: "OAuthAuthProvider")
+    private let logger: Logger
     
     private var tokens: OAuthTokens
     private let config: OAuthConfig
@@ -89,11 +89,28 @@ public actor OAuthAuthProvider: AuthenticationProvider {
     public init(
         tokens: OAuthTokens,
         config: OAuthConfig,
-        urlSession: URLSession = .shared
+        urlSession: URLSession,
+        logger: Logger?
     ) {
         self.tokens = tokens
         self.config = config
         self.urlSession = urlSession
+        let metadata: Logger.Metadata = [
+            "tokenEndpoint": .string(config.tokenEndpoint.absoluteString),
+            "clientId": .string(config.clientId)
+        ]
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .authentication("OAuthAuthProvider"),
+            metadata: metadata
+        )
+    }
+    
+    public init(
+        tokens: OAuthTokens,
+        config: OAuthConfig,
+        urlSession: URLSession = .shared
+    ) {
+        self.init(tokens: tokens, config: config, urlSession: urlSession, logger: nil)
     }
     
     public func authenticationHeaders() async throws -> [String: String] {
@@ -102,11 +119,29 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             try await refreshAccessToken()
         }
         
+        if let expiresAt = tokens.expiresAt {
+            logger.debug(
+                "Using OAuth access token",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("expiresIn", .stringConvertible(expiresAt.timeIntervalSinceNow)),
+                    ("hasRefreshToken", .string(tokens.refreshToken != nil ? "true" : "false"))
+                )
+            )
+        }
+        
         return ["Authorization": "\(tokens.tokenType) \(tokens.accessToken)"]
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info("Handling OAuth authentication challenge with status code: \(challenge.statusCode)")
+        let hasRefreshToken = tokens.refreshToken != nil
+        logger.warning(
+            "OAuth authentication challenge encountered",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("status", .stringConvertible(challenge.statusCode)),
+                ("refreshToken", .string(hasRefreshToken ? "present" : "missing")),
+                ("server", .string(challenge.serverInfo ?? "unknown"))
+            )
+        )
         
         guard challenge.statusCode == 401 else {
             throw AuthenticationError.authenticationFailed("Unexpected status code: \(challenge.statusCode)")
@@ -128,7 +163,7 @@ public actor OAuthAuthProvider: AuthenticationProvider {
     
     public func cleanup() async {
         // In a production app, you might want to revoke the tokens
-        logger.info("OAuth authentication cleaned up")
+        logger.debug("OAuth authentication cleaned up")
     }
     
     /// Get current access token (useful for debugging or logging)
@@ -144,7 +179,7 @@ public actor OAuthAuthProvider: AuthenticationProvider {
     /// Update tokens (useful when tokens are refreshed externally)
     public func updateTokens(_ newTokens: OAuthTokens) async {
         self.tokens = newTokens
-        logger.info("OAuth tokens updated")
+        logger.debug("OAuth tokens updated")
     }
     
     // MARK: - Private Methods
@@ -164,7 +199,13 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             throw AuthenticationError.authenticationExpired
         }
         
-        logger.info("Refreshing OAuth access token")
+        logger.info(
+            "Refreshing OAuth access token",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("tokenEndpoint", .string(config.tokenEndpoint.absoluteString)),
+                ("clientId", .string(config.clientId))
+            )
+        )
         
         // Prepare refresh token request
         var request = URLRequest(url: config.tokenEndpoint)
@@ -184,7 +225,10 @@ public actor OAuthAuthProvider: AuthenticationProvider {
         // Add resource parameter as required by RFC 8707 for MCP clients
         if let resourceURI = config.resourceURI {
             bodyComponents.append("resource=\(ResourceIndicatorUtilities.createResourceParameter(canonicalURI: resourceURI))")
-            logger.info("Added resource parameter to token refresh request: \(resourceURI)")
+            logger.debug(
+                "Added resource parameter to token refresh request",
+                metadata: SwiftAgentKitLogging.metadata(("resourceURI", .string(resourceURI)))
+            )
         }
         
         // Add client authentication
@@ -209,7 +253,13 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             
             guard 200...299 ~= httpResponse.statusCode else {
                 let errorMessage = String(data: data, encoding: .utf8) ?? "Unknown error"
-                logger.error("OAuth token refresh failed with status \(httpResponse.statusCode): \(errorMessage)")
+                logger.error(
+                    "OAuth token refresh failed",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("status", .stringConvertible(httpResponse.statusCode)),
+                        ("payload", .string(errorMessage))
+                    )
+                )
                 throw AuthenticationError.authenticationFailed("Token refresh failed: \(errorMessage)")
             }
             
@@ -217,10 +267,19 @@ public actor OAuthAuthProvider: AuthenticationProvider {
             let newTokens = try parseTokenResponse(data)
             self.tokens = newTokens
             
-            logger.info("Successfully refreshed OAuth access token")
+            logger.info(
+                "Successfully refreshed OAuth access token",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("expiresIn", .stringConvertible(newTokens.expiresAt?.timeIntervalSinceNow ?? 0)),
+                    ("scope", .string(newTokens.scope ?? "unspecified"))
+                )
+            )
             
         } catch {
-            logger.error("Failed to refresh OAuth token: \(error)")
+            logger.error(
+                "Failed to refresh OAuth token",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
             if error is AuthenticationError {
                 throw error
             } else {

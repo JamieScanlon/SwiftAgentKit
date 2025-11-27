@@ -7,6 +7,7 @@
 
 import Foundation
 import Logging
+import SwiftAgentKit
 
 /// Utility for filtering and validating MCP protocol messages
 public struct MessageFilter {
@@ -38,7 +39,12 @@ public struct MessageFilter {
     
     public init(configuration: Configuration = Configuration(), logger: Logger? = nil) {
         self.configuration = configuration
-        self.logger = logger ?? Logger(label: "MessageFilter")
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .mcp("MessageFilter"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("filteredLogLevel", .string(String(describing: configuration.filteredMessageLogLevel)))
+            )
+        )
     }
     
     /// Filters incoming data to extract only valid JSON-RPC protocol messages
@@ -51,7 +57,11 @@ public struct MessageFilter {
         
         guard let messageString = String(data: data, encoding: .utf8) else {
             if configuration.logFilteredMessages {
-                logger.log(level: configuration.filteredMessageLogLevel, "Filtered: Invalid UTF-8 data")
+                logger.log(
+                    level: configuration.filteredMessageLogLevel,
+                    "Filtered invalid data",
+                    metadata: SwiftAgentKitLogging.metadata(("reason", .string("invalid-utf8")))
+                )
             }
             return nil
         }
@@ -71,7 +81,11 @@ public struct MessageFilter {
                 validMessages.append(trimmedLine)
             } else {
                 if configuration.logFilteredMessages {
-                    logger.log(level: configuration.filteredMessageLogLevel, "Filtered: \(trimmedLine)")
+                    logger.log(
+                        level: configuration.filteredMessageLogLevel,
+                        "Filtered non-JSON-RPC line",
+                        metadata: SwiftAgentKitLogging.metadata(("line", .string(trimmedLine)))
+                    )
                 }
             }
         }

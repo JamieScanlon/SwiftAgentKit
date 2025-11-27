@@ -2,6 +2,19 @@
 
 The Adapters module provides pre-built implementations of the `AgentAdapter` protocol for popular AI providers, making it easy to create A2A-compliant servers that connect to external AI services.
 
+> ℹ️ **Logging tip**  
+> Adapters derive their diagnostics from `SwiftAgentKitLogging`. Bootstrap once before instantiating adapters so tool execution and agentic loop traces are captured:
+> ```swift
+> import Logging
+> import SwiftAgentKit
+> 
+> SwiftAgentKitLogging.bootstrap(
+>     logger: Logger(label: "com.example.adapters"),
+>     level: .info
+> )
+> ```
+> The `print` calls throughout this guide illustrate CLI output only; all internal logs honour the configuration above.
+
 ## Overview
 
 The `SwiftAgentKitAdapters` module includes adapters for:

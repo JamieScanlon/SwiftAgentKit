@@ -18,15 +18,54 @@ public actor RestAPIManager {
     private let responseValidator: ResponseValidator
     private let streamClient: StreamClient
     private let sseClient: SSEClient
+    private let logger: Logger
     
     // MARK: - Initialization
-    public init(baseURL: URL, configuration: URLSessionConfiguration = .default) {
+    /// Initialize RestAPIManager with configurable timeouts
+    /// - Parameters:
+    ///   - baseURL: The base URL for API requests
+    ///   - configuration: URLSessionConfiguration for regular requests (default: .default)
+    ///   - sseTimeoutInterval: Timeout interval in seconds for SSE connections (default: 600 seconds / 10 minutes)
+    ///   - logger: Optional logger instance
+    public init(baseURL: URL, configuration: URLSessionConfiguration = .default, sseTimeoutInterval: TimeInterval = 600.0, logger: Logger? = nil) {
         self.baseURL = baseURL
         self.session = URLSession(configuration: configuration)
-        self.requestBuilder = RequestBuilder(baseURL: baseURL)
-        self.responseValidator = ResponseValidator()
-        self.streamClient = StreamClient(requestBuilder: requestBuilder)
-        self.sseClient = SSEClient(baseURL: baseURL)
+        let metadata: Logger.Metadata = ["baseURL": .string(baseURL.absoluteString)]
+        if let logger {
+            self.logger = logger
+        } else {
+            self.logger = SwiftAgentKitLogging.logger(
+                for: .networking("RestAPIManager"),
+                metadata: metadata
+            )
+        }
+        let requestLogger = SwiftAgentKitLogging.logger(
+            for: .networking("RequestBuilder"),
+            metadata: metadata
+        )
+        let validatorLogger = SwiftAgentKitLogging.logger(
+            for: .networking("ResponseValidator"),
+            metadata: metadata
+        )
+        self.requestBuilder = RequestBuilder(baseURL: baseURL, logger: requestLogger)
+        self.responseValidator = ResponseValidator(logger: validatorLogger)
+        self.streamClient = StreamClient(
+            requestBuilder: requestBuilder,
+            logger: SwiftAgentKitLogging.logger(
+                for: .networking("StreamClient"),
+                metadata: metadata
+            )
+        )
+        
+        self.sseClient = SSEClient(
+            baseURL: baseURL,
+            session: nil,
+            timeoutInterval: sseTimeoutInterval,
+            logger: SwiftAgentKitLogging.logger(
+                for: .networking("SSEClient"),
+                metadata: metadata
+            )
+        )
     }
     
     // MARK: - Public Methods
@@ -38,18 +77,44 @@ public actor RestAPIManager {
                                headers: [String: String]? = nil) async throws {
         
         let request = try requestBuilder.createRequest(endpoint: endpoint, method: method, parameters: parameters, headers: headers)
+        logRequestStart(
+            endpoint: endpoint,
+            method: method,
+            headers: headers,
+            parametersCount: parameters?.count,
+            bodyBytes: request.httpBody?.count
+        )
+        logRequestDetails(parameters: parameters, headers: headers, body: nil, request: request)
         
         do {
             let (data, response) = try await session.data(for: request)
             
             // Validate response
             guard let httpResponse = response as? HTTPURLResponse else {
+                logRequestFailure(endpoint: endpoint, method: method, error: APIError.invalidResponse)
                 throw APIError.invalidResponse
             }
             try responseValidator.validateResponse(httpResponse, data: data)
+            
+            // Extract response headers
+            let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                return (keyString, valueString)
+            })
+            
+            logRequestSuccess(
+                endpoint: endpoint,
+                method: method,
+                statusCode: httpResponse.statusCode,
+                responseBytes: data.count,
+                responseData: data,
+                responseHeaders: responseHeaders
+            )
         } catch let error as APIError {
+            logRequestFailure(endpoint: endpoint, method: method, error: error)
             throw error
         } catch {
+            logRequestFailure(endpoint: endpoint, method: method, error: error)
             throw APIError.requestFailed(error)
         }
     }
@@ -62,19 +127,45 @@ public actor RestAPIManager {
                                                body: Data? = nil) async throws -> T {
         
         let request = try requestBuilder.createRequest(endpoint: endpoint, method: method, parameters: parameters, headers: headers, body: body)
+        logRequestStart(
+            endpoint: endpoint,
+            method: method,
+            headers: headers,
+            parametersCount: parameters?.count,
+            bodyBytes: request.httpBody?.count
+        )
+        logRequestDetails(parameters: parameters, headers: headers, body: body, request: request)
         
         do {
             let (data, response) = try await session.data(for: request)
             
             // Validate response
             guard let httpResponse = response as? HTTPURLResponse else {
+                logRequestFailure(endpoint: endpoint, method: method, error: APIError.invalidResponse)
                 throw APIError.invalidResponse
             }
             try responseValidator.validateResponse(httpResponse, data: data)
+            
+            // Extract response headers
+            let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                return (keyString, valueString)
+            })
+            
+            logRequestSuccess(
+                endpoint: endpoint,
+                method: method,
+                statusCode: httpResponse.statusCode,
+                responseBytes: data.count,
+                responseData: data,
+                responseHeaders: responseHeaders
+            )
             return try responseValidator.decode(T.self, from: data)
         } catch let error as APIError {
+            logRequestFailure(endpoint: endpoint, method: method, error: error)
             throw error
         } catch {
+            logRequestFailure(endpoint: endpoint, method: method, error: error)
             throw APIError.requestFailed(error)
         }
     }
@@ -86,19 +177,45 @@ public actor RestAPIManager {
                      headers: [String: String]? = nil) async throws -> [String: Sendable] {
         
         let request = try requestBuilder.createRequest(endpoint: endpoint, method: method, parameters: parameters, headers: headers)
+        logRequestStart(
+            endpoint: endpoint,
+            method: method,
+            headers: headers,
+            parametersCount: parameters?.count,
+            bodyBytes: request.httpBody?.count
+        )
+        logRequestDetails(parameters: parameters, headers: headers, body: nil, request: request)
         
         do {
             let (data, response) = try await session.data(for: request)
             
             // Validate response
             guard let httpResponse = response as? HTTPURLResponse else {
+                logRequestFailure(endpoint: endpoint, method: method, error: APIError.invalidResponse)
                 throw APIError.invalidResponse
             }
             try responseValidator.validateResponse(httpResponse, data: data)
+            
+            // Extract response headers
+            let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                return (keyString, valueString)
+            })
+            
+            logRequestSuccess(
+                endpoint: endpoint,
+                method: method,
+                statusCode: httpResponse.statusCode,
+                responseBytes: data.count,
+                responseData: data,
+                responseHeaders: responseHeaders
+            )
             return try responseValidator.decodeJSON(from: data)
         } catch let error as APIError {
+            logRequestFailure(endpoint: endpoint, method: method, error: error)
             throw error
         } catch {
+            logRequestFailure(endpoint: endpoint, method: method, error: error)
             throw APIError.requestFailed(error)
         }
     }
@@ -110,19 +227,45 @@ public actor RestAPIManager {
                                 headers: [String: String]? = nil) async throws -> JSON {
         
         let request = try requestBuilder.createRequest(endpoint: endpoint, method: method, parameters: parameters, headers: headers)
+        logRequestStart(
+            endpoint: endpoint,
+            method: method,
+            headers: headers,
+            parametersCount: parameters?.count,
+            bodyBytes: request.httpBody?.count
+        )
+        logRequestDetails(parameters: parameters, headers: headers, body: nil, request: request)
         
         do {
             let (data, response) = try await session.data(for: request)
             
             // Validate response
             guard let httpResponse = response as? HTTPURLResponse else {
+                logRequestFailure(endpoint: endpoint, method: method, error: APIError.invalidResponse)
                 throw APIError.invalidResponse
             }
             try responseValidator.validateResponse(httpResponse, data: data)
+            
+            // Extract response headers
+            let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                return (keyString, valueString)
+            })
+            
+            logRequestSuccess(
+                endpoint: endpoint,
+                method: method,
+                statusCode: httpResponse.statusCode,
+                responseBytes: data.count,
+                responseData: data,
+                responseHeaders: responseHeaders
+            )
             return try responseValidator.decodeEasyJSON(from: data)
         } catch let error as APIError {
+            logRequestFailure(endpoint: endpoint, method: method, error: error)
             throw error
         } catch {
+            logRequestFailure(endpoint: endpoint, method: method, error: error)
             throw APIError.requestFailed(error)
         }
     }
@@ -132,6 +275,15 @@ public actor RestAPIManager {
                                      method: HTTPMethod = .get,
                                      parameters: [String: Any]? = nil,
                                      headers: [String: String]? = nil) -> AsyncStream<StreamingDataBuffer> {
+        logger.info(
+            "Starting streaming request",
+            metadata: [
+                "endpoint": .string(endpoint),
+                "method": .string(method.rawValue),
+                "parameterCount": .stringConvertible(parameters?.count ?? 0),
+                "headerCount": .stringConvertible(headers?.count ?? 0)
+            ]
+        )
         return streamClient.streamRequest(endpoint, method: method, parameters: parameters, headers: headers)
     }
     
@@ -141,6 +293,15 @@ public actor RestAPIManager {
                           method: HTTPMethod = .post,
                           parameters: [String: Sendable]? = nil,
                           headers: [String: String]? = nil) -> AsyncStream<[String: Sendable]> {
+        logger.info(
+            "Starting SSE request",
+            metadata: [
+                "endpoint": .string(endpoint),
+                "method": .string(method.rawValue),
+                "parameterCount": .stringConvertible(parameters?.count ?? 0),
+                "headerCount": .stringConvertible(headers?.count ?? 0)
+            ]
+        )
         return sseClient.sseRequest(endpoint, method: method, parameters: parameters, headers: headers)
     }
     
@@ -152,6 +313,15 @@ public actor RestAPIManager {
                                method: HTTPMethod = .post,
                                parameters: JSON? = nil,
                                headers: [String: String]? = nil) -> AsyncStream<JSON> {
+        logger.info(
+            "Starting SSE request",
+            metadata: [
+                "endpoint": .string(endpoint),
+                "method": .string(method.rawValue),
+                "hasParameters": .string(parameters == nil ? "false" : "true"),
+                "headerCount": .stringConvertible(headers?.count ?? 0)
+            ]
+        )
         return sseClient.sseRequest(endpoint, method: method, parameters: parameters, headers: headers)
     }
     
@@ -161,19 +331,45 @@ public actor RestAPIManager {
                                     headers: [String: String]? = nil) async throws -> T {
         
         let request = try requestBuilder.createRequest(endpoint: endpoint, method: .post, parameters: nil, headers: headers, body: data)
+        logRequestStart(
+            endpoint: endpoint,
+            method: .post,
+            headers: headers,
+            parametersCount: nil,
+            bodyBytes: request.httpBody?.count
+        )
+        logRequestDetails(parameters: nil, headers: headers, body: data, request: request)
         
         do {
             let (responseData, response) = try await session.data(for: request)
             
             // Validate response
             guard let httpResponse = response as? HTTPURLResponse else {
+                logRequestFailure(endpoint: endpoint, method: .post, error: APIError.invalidResponse)
                 throw APIError.invalidResponse
             }
             try responseValidator.validateResponse(httpResponse, data: responseData)
+            
+            // Extract response headers
+            let responseHeaders: [String: String] = Dictionary(uniqueKeysWithValues: httpResponse.allHeaderFields.compactMap { key, value in
+                guard let keyString = key as? String, let valueString = value as? String else { return nil }
+                return (keyString, valueString)
+            })
+            
+            logRequestSuccess(
+                endpoint: endpoint,
+                method: .post,
+                statusCode: httpResponse.statusCode,
+                responseBytes: responseData.count,
+                responseData: responseData,
+                responseHeaders: responseHeaders
+            )
             return try responseValidator.decode(T.self, from: responseData)
         } catch let error as APIError {
+            logRequestFailure(endpoint: endpoint, method: .post, error: error)
             throw error
         } catch {
+            logRequestFailure(endpoint: endpoint, method: .post, error: error)
             throw APIError.requestFailed(error)
         }
     }
@@ -181,6 +377,219 @@ public actor RestAPIManager {
     // MARK: - Private
     
     // Remove the old validateResponse and decoder logic, now handled by ResponseValidator
+    
+    /// Safely serialize request body data for logging
+    private func serializeRequestBody(_ body: Data?) -> String? {
+        guard let body = body, !body.isEmpty else { return nil }
+        
+        // Try to decode as UTF-8 string first
+        if let string = String(data: body, encoding: .utf8) {
+            // Try to parse as JSON and pretty-print it
+            if let json = try? JSONSerialization.jsonObject(with: body),
+               let prettyData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
+               let prettyString = String(data: prettyData, encoding: .utf8) {
+                return prettyString
+            }
+            return string
+        }
+        
+        // If not UTF-8, return base64 encoded
+        return body.base64EncodedString()
+    }
+    
+    /// Safely serialize response body data for logging
+    private func serializeResponseBody(_ data: Data) -> String? {
+        guard !data.isEmpty else { return nil }
+        
+        // Try to decode as UTF-8 string first
+        if let string = String(data: data, encoding: .utf8) {
+            // Try to parse as JSON and pretty-print it
+            if let json = try? JSONSerialization.jsonObject(with: data),
+               let prettyData = try? JSONSerialization.data(withJSONObject: json, options: [.prettyPrinted, .sortedKeys]),
+               let prettyString = String(data: prettyData, encoding: .utf8) {
+                return prettyString
+            }
+            return string
+        }
+        
+        // If not UTF-8, return base64 encoded
+        return data.base64EncodedString()
+    }
+    
+    /// Safely serialize parameters dictionary for logging
+    private func serializeParameters(_ parameters: [String: Any]?) -> String? {
+        guard let parameters = parameters, !parameters.isEmpty else { return nil }
+        
+        do {
+            guard JSONSerialization.isValidJSONObject(parameters) else {
+                return String(describing: parameters)
+            }
+            let data = try JSONSerialization.data(withJSONObject: parameters, options: [.prettyPrinted, .sortedKeys])
+            return String(data: data, encoding: .utf8)
+        } catch {
+            return String(describing: parameters)
+        }
+    }
+    
+    /// Safely serialize headers dictionary for logging
+    private func serializeHeaders(_ headers: [String: String]?) -> String? {
+        guard let headers = headers, !headers.isEmpty else { return nil }
+        
+        // Sort headers for consistent logging
+        let sortedHeaders = headers.sorted { $0.key < $1.key }
+        let headerStrings = sortedHeaders.map { "\($0.key): \($0.value)" }
+        return headerStrings.joined(separator: "\n")
+    }
+    
+    private func logRequestStart(
+        endpoint: String,
+        method: HTTPMethod,
+        headers: [String: String]?,
+        parametersCount: Int?,
+        bodyBytes: Int?
+    ) {
+        var metadata: Logger.Metadata = [
+            "endpoint": .string(endpoint),
+            "method": .string(method.rawValue),
+            "headerCount": .stringConvertible(headers?.count ?? 0)
+        ]
+        if let parametersCount {
+            metadata["parameterCount"] = .stringConvertible(parametersCount)
+        }
+        if let bodyBytes {
+            metadata["bodyBytes"] = .stringConvertible(bodyBytes)
+        }
+        logger.info("Executing HTTP request", metadata: metadata)
+    }
+    
+    private func logRequestDetails(
+        parameters: [String: Any]?,
+        headers: [String: String]?,
+        body: Data? = nil,
+        request: URLRequest? = nil
+    ) {
+        // Log full request payload at debug level
+        var debugMetadata: Logger.Metadata = [:]
+        
+        // Log full headers
+        if let headersString = serializeHeaders(headers) {
+            debugMetadata["headers"] = .string(headersString)
+        }
+        
+        // Log full request headers from URLRequest if available
+        if let request = request, let allHeaders = request.allHTTPHeaderFields, !allHeaders.isEmpty {
+            let allHeadersString = serializeHeaders(allHeaders)
+            if let allHeadersString = allHeadersString {
+                debugMetadata["allRequestHeaders"] = .string(allHeadersString)
+            }
+        }
+        
+        // Log query parameters for GET/DELETE requests
+        if let parameters = parameters, !parameters.isEmpty {
+            if let parametersString = serializeParameters(parameters) {
+                debugMetadata["parameters"] = .string(parametersString)
+            }
+        }
+        
+        // Log request body
+        if let body = body {
+            if let bodyString = serializeRequestBody(body) {
+                debugMetadata["body"] = .string(bodyString)
+            } else {
+                debugMetadata["bodyBytes"] = .stringConvertible(body.count)
+            }
+        } else if let request = request, let requestBody = request.httpBody {
+            if let bodyString = serializeRequestBody(requestBody) {
+                debugMetadata["body"] = .string(bodyString)
+            } else {
+                debugMetadata["bodyBytes"] = .stringConvertible(requestBody.count)
+            }
+        }
+        
+        // Log full URL with query parameters if available
+        if let request = request, let url = request.url {
+            debugMetadata["fullURL"] = .string(url.absoluteString)
+        }
+        
+        if !debugMetadata.isEmpty {
+            logger.debug("Full request payload", metadata: debugMetadata)
+        }
+    }
+    
+    private func logRequestSuccess(
+        endpoint: String,
+        method: HTTPMethod,
+        statusCode: Int,
+        responseBytes: Int,
+        responseData: Data? = nil,
+        responseHeaders: [String: String]? = nil
+    ) {
+        let metadata: Logger.Metadata = [
+            "endpoint": .string(endpoint),
+            "method": .string(method.rawValue),
+            "status": .stringConvertible(statusCode),
+            "responseBytes": .stringConvertible(responseBytes)
+        ]
+        
+        // Log full response payload at debug level
+        if let responseData = responseData {
+            if let responseBodyString = serializeResponseBody(responseData) {
+                logger.debug(
+                    "Full response payload",
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "method": .string(method.rawValue),
+                        "status": .stringConvertible(statusCode),
+                        "body": .string(responseBodyString)
+                    ]
+                )
+            }
+        }
+        
+        // Log response headers at debug level
+        if let responseHeaders = responseHeaders, !responseHeaders.isEmpty {
+            if let headersString = serializeHeaders(responseHeaders) {
+                logger.debug(
+                    "Response headers",
+                    metadata: [
+                        "endpoint": .string(endpoint),
+                        "method": .string(method.rawValue),
+                        "status": .stringConvertible(statusCode),
+                        "headers": .string(headersString)
+                    ]
+                )
+            }
+        }
+        
+        logger.info("HTTP request succeeded", metadata: metadata)
+    }
+    
+    private func logRequestFailure(
+        endpoint: String,
+        method: HTTPMethod,
+        error: Error
+    ) {
+        var metadata: Logger.Metadata = [
+            "endpoint": .string(endpoint),
+            "method": .string(method.rawValue),
+            "error": .string(String(describing: error))
+        ]
+        if let apiError = error as? APIError {
+            switch apiError {
+            case .serverError(let status, _):
+                metadata["status"] = .stringConvertible(status)
+                logger.warning("HTTP request failed with server error", metadata: metadata)
+                return
+            case .invalidResponse:
+                logger.warning("HTTP request returned invalid response", metadata: metadata)
+                return
+            default:
+                logger.error("HTTP request failed", metadata: metadata)
+                return
+            }
+        }
+        logger.error("HTTP request failed", metadata: metadata)
+    }
 }
 
 

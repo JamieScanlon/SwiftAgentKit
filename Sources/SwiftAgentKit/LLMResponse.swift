@@ -15,16 +15,21 @@ public struct LLMResponse: Sendable {
     /// Whether this response is complete or a streaming chunk
     public let isComplete: Bool
     
+    /// The ID of the tool call this response is associated with (for tool role messages)
+    public let toolCallId: String?
+    
     public init(
         content: String,
         toolCalls: [ToolCall] = [],
         metadata: LLMMetadata? = nil,
-        isComplete: Bool = true
+        isComplete: Bool = true,
+        toolCallId: String? = nil
     ) {
         self.content = content
         self.toolCalls = toolCalls
         self.metadata = metadata
         self.isComplete = isComplete
+        self.toolCallId = toolCallId
     }
 }
 
@@ -73,13 +78,15 @@ public extension LLMResponse {
         content: String,
         toolCalls: [ToolCall],
         metadata: LLMMetadata? = nil,
-        isComplete: Bool = true
+        isComplete: Bool = true,
+        toolCallId: String? = nil
     ) -> LLMResponse {
         return LLMResponse(
             content: content,
             toolCalls: toolCalls,
             metadata: metadata,
-            isComplete: isComplete
+            isComplete: isComplete,
+            toolCallId: toolCallId
         )
     }
     
@@ -91,12 +98,14 @@ public extension LLMResponse {
     /// Create a complete response with metadata
     static func complete(
         content: String,
-        metadata: LLMMetadata? = nil
+        metadata: LLMMetadata? = nil,
+        toolCallId: String? = nil
     ) -> LLMResponse {
         return LLMResponse(
             content: content,
             metadata: metadata,
-            isComplete: true
+            isComplete: true,
+            toolCallId: toolCallId
         )
     }
     
@@ -107,7 +116,8 @@ public extension LLMResponse {
             content: content,
             toolCalls: updatedToolCalls,
             metadata: metadata,
-            isComplete: isComplete
+            isComplete: isComplete,
+            toolCallId: toolCallId
         )
     }
     
@@ -116,7 +126,8 @@ public extension LLMResponse {
             content: content,
             toolCalls: [],
             metadata: metadata,
-            isComplete: isComplete
+            isComplete: isComplete,
+            toolCallId: toolCallId
         )
     }
     
@@ -125,7 +136,8 @@ public extension LLMResponse {
             content: newContent,
             toolCalls: toolCalls,
             metadata: metadata,
-            isComplete: isComplete
+            isComplete: isComplete,
+            toolCallId: toolCallId
         )
     }
     
@@ -134,7 +146,8 @@ public extension LLMResponse {
             content: content,
             toolCalls: toolCalls,
             metadata: newMetadata,
-            isComplete: isComplete
+            isComplete: isComplete,
+            toolCallId: toolCallId
         )
     }
     
@@ -143,7 +156,8 @@ public extension LLMResponse {
             content: content,
             toolCalls: toolCalls,
             metadata: metadata,
-            isComplete: true
+            isComplete: true,
+            toolCallId: toolCallId
         )
     }
     
@@ -152,7 +166,8 @@ public extension LLMResponse {
             content: content,
             toolCalls: toolCalls,
             metadata: metadata,
-            isComplete: false
+            isComplete: false,
+            toolCallId: toolCallId
         )
     }
 }

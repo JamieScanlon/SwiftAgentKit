@@ -9,10 +9,15 @@ import Foundation
 import Logging
 import MCP
 import EasyJSON
+import SwiftAgentKit
 
 /// Manages tool registration and execution for MCP servers
 public actor ToolRegistry {
-    private let logger = Logger(label: "ToolRegistry")
+    private let logger: Logger
+    
+    public init(logger: Logger? = nil) {
+        self.logger = logger ?? SwiftAgentKitLogging.logger(for: .mcp("ToolRegistry"))
+    }
     
     // MARK: - Storage
     private var tools: [String: RegisteredTool] = [:]
@@ -44,7 +49,10 @@ public actor ToolRegistry {
         )
         
         tools[name] = tool
-        logger.info("Registered tool: \(name)")
+        logger.info(
+            "Registered tool",
+            metadata: SwiftAgentKitLogging.metadata(("tool", .string(name)))
+        )
     }
     
     /// List all registered tools in MCP format
@@ -67,17 +75,29 @@ public actor ToolRegistry {
             throw ToolRegistryError.toolNotFound(name)
         }
         
-        logger.info("Executing tool: \(name)")
+        logger.info(
+            "Executing tool",
+            metadata: SwiftAgentKitLogging.metadata(("tool", .string(name)))
+        )
         
         // Convert MCP.Value to JSON types for the handler
         let args = arguments.mapValues { convertMCPValueToJSON($0) }
         
         do {
             let result = try await tool.handler(args)
-            logger.info("Tool \(name) executed successfully")
+            logger.info(
+                "Tool executed successfully",
+                metadata: SwiftAgentKitLogging.metadata(("tool", .string(name)))
+            )
             return result
         } catch {
-            logger.error("Tool \(name) execution failed: \(error)")
+            logger.error(
+                "Tool execution failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("tool", .string(name)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             return .error("EXECUTION_ERROR", error.localizedDescription)
         }
     }
@@ -86,7 +106,10 @@ public actor ToolRegistry {
     /// - Parameter name: The name of the tool to unregister
     public func unregisterTool(name: String) {
         tools.removeValue(forKey: name)
-        logger.info("Unregistered tool: \(name)")
+        logger.info(
+            "Unregistered tool",
+            metadata: SwiftAgentKitLogging.metadata(("tool", .string(name)))
+        )
     }
     
     /// Clear all tools

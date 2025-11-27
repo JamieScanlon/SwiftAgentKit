@@ -20,7 +20,8 @@ struct RemoteTransportSimpleTests {
         let serverURL = URL(string: "https://api.example.com/mcp")!
         let transport = RemoteTransport(serverURL: serverURL)
         
-        #expect(transport.logger.label == "RemoteTransport")
+        #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+        #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
     }
     
     @Test("RemoteTransport should initialize with custom parameters")
@@ -36,7 +37,8 @@ struct RemoteTransportSimpleTests {
             maxRetries: 5
         )
         
-        #expect(transport.logger.label == "RemoteTransport")
+        #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+        #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
     }
     
     // MARK: - Error Type Tests
@@ -143,7 +145,8 @@ struct RemoteTransportSimpleTests {
             )
             
             // Should initialize without errors
-            #expect(transport.logger.label == "RemoteTransport")
+            #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+            #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
             
             // Test that auth headers can be retrieved
             let headers = try await authProvider.authenticationHeaders()
@@ -187,7 +190,8 @@ struct RemoteTransportSimpleTests {
                 maxRetries: config.retries
             )
             
-            #expect(transport.logger.label == "RemoteTransport")
+            #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+            #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
         }
     }
     
@@ -203,7 +207,8 @@ struct RemoteTransportSimpleTests {
         for urlString in validURLs {
             let url = URL(string: urlString)!
             let transport = RemoteTransport(serverURL: url)
-            #expect(transport.logger.label == "RemoteTransport")
+            #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+            #expect(transport.logger[metadataKey: "serverURL"] == .string(url.absoluteString))
         }
     }
     
@@ -231,7 +236,8 @@ struct RemoteTransportSimpleTests {
             authProvider: authProvider
         )
         
-        #expect(transport.logger.label == "RemoteTransport")
+        #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+        #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
         
         // Test that OAuth headers work
         let headers = try await authProvider.authenticationHeaders()
@@ -251,7 +257,8 @@ struct RemoteTransportSimpleTests {
         )
         
         // Should initialize fine
-        #expect(transport.logger.label == "RemoteTransport")
+        #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+        #expect(transport.logger[metadataKey: "serverURL"] == .string(serverURL.absoluteString))
         
         // Auth provider errors should be handled gracefully
         do {
@@ -280,8 +287,9 @@ struct RemoteTransportSimpleTests {
         }
         
         // All should initialize independently
-        for transport in transports {
-            #expect(transport.logger.label == "RemoteTransport")
+        for (transport, url) in zip(transports, urls) {
+            #expect(transport.logger[metadataKey: "component"] == .string("RemoteTransport"))
+            #expect(transport.logger[metadataKey: "serverURL"] == .string(url.absoluteString))
         }
         
         // Cleanup should work for all

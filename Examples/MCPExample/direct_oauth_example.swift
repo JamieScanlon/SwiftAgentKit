@@ -10,11 +10,20 @@ import SwiftAgentKit
 import SwiftAgentKitMCP
 import Logging
 
+private func configureDirectOAuthLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.mcp.directoauth"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("MCPDirectOAuth")))
+    )
+}
+
 /// Example demonstrating how to use direct OAuth configuration
 /// This fixes the issue where SwiftAgentKit was ignoring user-provided OAuth credentials
 /// and always using the hardcoded 'swiftagentkit-mcp-client' client ID
 func directOAuthExample() async throws {
-    let logger = Logger(label: "DirectOAuthExample")
+    configureDirectOAuthLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("DirectOAuthExample"))
     logger.info("=== SwiftAgentKit Direct OAuth Configuration Example ===")
     
     // Example 1: Direct OAuth configuration with user-provided credentials
@@ -125,7 +134,8 @@ func directOAuthExample() async throws {
 
 // Example of how to use this in a real application
 func realWorldUsageExample() async throws {
-    let logger = Logger(label: "RealWorldUsage")
+    configureDirectOAuthLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("DirectOAuthRealWorld"))
     logger.info("=== Real World Usage Example ===")
     
     // Load configuration from file
@@ -133,14 +143,11 @@ func realWorldUsageExample() async throws {
     
     do {
         let config = try MCPConfigHelper.parseMCPConfig(fileURL: configURL)
-        logger.info("✓ Loaded MCP configuration from file")
+        logger.info("✓ Loaded MCP configuration from file (\(config.serverBootCalls.count) server boot calls)")
         
-        // Create MCP manager
-        let manager = MCPManager()
-        
-        // Connect to all configured servers
-        // Note: The actual method name may vary - check MCPManager documentation
-        logger.info("✓ Configuration loaded successfully")
+        // Create MCP manager (not started in this snippet)
+        let _ = MCPManager()
+        logger.info("✓ MCPManager ready to use with loaded configuration")
         
         // The OAuth authentication will now use user-provided credentials
         // instead of falling back to hardcoded values

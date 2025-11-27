@@ -1,19 +1,23 @@
 import Foundation
+import SwiftAgentKit
 import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
 import Logging
 
+private func configureLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.openaiadapter"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("OpenAIAdapter")))
+    )
+}
+
 @main
 struct OpenAIAdapterExample {
     static func main() async throws {
-        // Set up logging
-        LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardOutput(label: label)
-            handler.logLevel = .info
-            return handler
-        }
+        configureLogging()
         
-        let logger = Logger(label: "OpenAIAdapterExample")
+        let logger = SwiftAgentKitLogging.logger(for: .examples("OpenAIAdapterExample"))
         logger.info("Starting OpenAI Adapter Example")
         logger.info("This example demonstrates the enhanced OpenAI adapter that can handle:")
         logger.info("- Text content in response messages")

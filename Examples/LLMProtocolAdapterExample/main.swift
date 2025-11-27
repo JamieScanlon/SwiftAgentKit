@@ -11,6 +11,14 @@ import SwiftAgentKitA2A
 import SwiftAgentKitAdapters
 import Logging
 
+private func configureLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.llmprotocoladapter"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("LLMProtocolAdapter")))
+    )
+}
+
 // MARK: - Example LLM Implementation
 
 /// A simple example LLM that implements LLMProtocol
@@ -21,7 +29,11 @@ struct ExampleLLM: LLMProtocol {
     
     init(model: String = "example-llm") {
         self.model = model
-        self.logger = Logger(label: "ExampleLLM")
+        configureLogging()
+        self.logger = SwiftAgentKitLogging.logger(
+            for: .examples("LLMProtocolAdapterExample.ExampleLLM"),
+            metadata: SwiftAgentKitLogging.metadata(("model", .string(model)))
+        )
     }
     
     func getModelName() -> String {
@@ -108,10 +120,13 @@ func testLLMProtocolAdapter() async {
     print("✓ Adapter created successfully")
     print("  - Agent name: \(adapter.agentName)")
     print("  - Agent description: \(adapter.agentDescription)")
-    print("  - Capabilities: streaming=\(adapter.cardCapabilities.streaming), pushNotifications=\(adapter.cardCapabilities.pushNotifications)")
+    let capabilities = adapter.cardCapabilities
+    print("  - Capabilities: streaming=\(capabilities.streaming == true), pushNotifications=\(capabilities.pushNotifications == true)")
     print("  - Skills: \(adapter.skills.count)")
-    print("  - Input modes: \(adapter.defaultInputModes)")
-    print("  - Output modes: \(adapter.defaultOutputModes)")
+    let inputModes = adapter.defaultInputModes.joined(separator: ", ")
+    let outputModes = adapter.defaultOutputModes.joined(separator: ", ")
+    print("  - Input modes: \(inputModes)")
+    print("  - Output modes: \(outputModes)")
     
     // Test custom configuration
     print("\nTesting custom configuration...")
@@ -145,10 +160,13 @@ func testLLMProtocolAdapter() async {
     print("✓ Custom adapter created successfully")
     print("  - Agent name: \(customAdapter.agentName)")
     print("  - Agent description: \(customAdapter.agentDescription)")
-    print("  - Capabilities: streaming=\(customAdapter.cardCapabilities.streaming), pushNotifications=\(customAdapter.cardCapabilities.pushNotifications)")
+    let customCapabilities = customAdapter.cardCapabilities
+    print("  - Capabilities: streaming=\(customCapabilities.streaming == true), pushNotifications=\(customCapabilities.pushNotifications == true)")
     print("  - Skills: \(customAdapter.skills.count)")
-    print("  - Input modes: \(customAdapter.defaultInputModes)")
-    print("  - Output modes: \(customAdapter.defaultOutputModes)")
+    let customInputModes = customAdapter.defaultInputModes.joined(separator: ", ")
+    let customOutputModes = customAdapter.defaultOutputModes.joined(separator: ", ")
+    print("  - Input modes: \(customInputModes)")
+    print("  - Output modes: \(customOutputModes)")
     
     // Test message handling
     let store = TaskStore()
@@ -213,14 +231,8 @@ func testLLMProtocolAdapter() async {
 
 struct LLMProtocolAdapterExample {
     static func main() async throws {
-        // Set up logging
-        LoggingSystem.bootstrap { label in
-            var handler = StreamLogHandler.standardOutput(label: label)
-            handler.logLevel = .info
-            return handler
-        }
-        
-        let logger = Logger(label: "LLMProtocolAdapterExample")
+        configureLogging()
+        let logger = SwiftAgentKitLogging.logger(for: .examples("LLMProtocolAdapterExample"))
         logger.info("Starting LLMProtocolAdapter example...")
         
         // Run the test
@@ -244,7 +256,7 @@ struct LLMProtocolAdapterExample {
         logger.info("  - Agent name: \(adapter.agentName)")
         logger.info("  - Agent description: \(adapter.agentDescription)")
         logger.info("  - Skills: \(adapter.skills.count)")
-        logger.info("  - Capabilities: streaming=\(adapter.cardCapabilities.streaming)")
+        logger.info("  - Capabilities: streaming=\(adapter.cardCapabilities.streaming == true)")
         
         // Create an A2A server with the adapter
         let server = A2AServer(port: 4245, adapter: adapter)

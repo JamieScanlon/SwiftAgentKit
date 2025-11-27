@@ -4,9 +4,32 @@ import SwiftAgentKit
 import SwiftAgentKitMCP
 import EasyJSON
 
+private func configureLogging() {
+    // Example: Configure logging with optional filters
+    // Uncomment the filter to see filtering in action:
+    
+    // Filter example: Only show MCP-related logs with "error" or "connection" keywords
+    // let filter = SwiftAgentKitLogging.LogFilter(
+    //     level: .minimum(.info),
+    //     allowedScopes: [.mcp("Client"), .mcp("Server")],
+    //     keywords: ["error", "connection", "connected"]
+    // )
+    
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.mcp"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("MCP")))
+        // filter: filter  // Uncomment to enable filtering
+    )
+    
+    // You can also set filters dynamically:
+    // SwiftAgentKitLogging.setFilter(filter)
+}
+
 // Example: New MCP Architecture with MCPServerManager and MCPClient
 func newMCPArchitectureExample() async {
-    let logger = Logger(label: "NewMCPExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("NewMCPExample"))
     logger.info("=== SwiftAgentKit New MCP Architecture Example ===")
     
     // Step 1: Create MCP configuration programmatically
@@ -97,7 +120,8 @@ func newMCPArchitectureExample() async {
 
 // Example: Direct MCPClient usage with custom transport
 func directMCPClientExample() async {
-    let logger = Logger(label: "DirectMCPClientExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("DirectMCPClientExample"))
     logger.info("=== SwiftAgentKit Direct MCPClient Example ===")
     
     // Create a simple echo server for demonstration
@@ -145,7 +169,8 @@ func directMCPClientExample() async {
 
 // Example: Error handling with the new architecture
 func newMCPErrorHandlingExample() async {
-    let logger = Logger(label: "NewMCPErrorHandlingExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("NewMCPErrorHandlingExample"))
     logger.info("=== SwiftAgentKit New MCP Error Handling Example ===")
     
     // Example 1: Try to use MCPClient without connecting
@@ -194,7 +219,8 @@ func newMCPErrorHandlingExample() async {
 
 // Example: Multiple servers with the new architecture
 func multipleServersExample() async {
-    let logger = Logger(label: "MultipleServersExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("MultipleServersExample"))
     logger.info("=== SwiftAgentKit Multiple Servers Example ===")
     
     // Create configuration with multiple servers
@@ -243,7 +269,8 @@ func multipleServersExample() async {
 
 // Example: Using MCPManager with the new architecture (backward compatibility)
 func mcpManagerWithNewArchitectureExample() async {
-    let logger = Logger(label: "MCPManagerNewArchExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("MCPManagerNewArchExample"))
     logger.info("=== SwiftAgentKit MCPManager with New Architecture Example ===")
     
     // Create a sample config file
@@ -302,7 +329,8 @@ func mcpManagerWithNewArchitectureExample() async {
 
 // Example: Remote server connection using RemoteServerConfig
 func remoteServerConfigExample() async {
-    let logger = Logger(label: "RemoteServerConfigExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("RemoteServerConfigExample"))
     logger.info("=== SwiftAgentKit Remote Server Config Example ===")
     
     // Example 1: Remote server with Bearer token authentication
@@ -440,7 +468,8 @@ func remoteServerConfigExample() async {
 
 // Example: Configurable ClientID
 func configurableClientIDExample() async {
-    let logger = Logger(label: "ConfigurableClientIDExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("ConfigurableClientIDExample"))
     logger.info("=== SwiftAgentKit Configurable ClientID Example ===")
     
     // Example 1: Using default clientID
@@ -488,7 +517,8 @@ func configurableClientIDExample() async {
 
 // Example: OAuth Manual Flow Handling
 func oAuthManualFlowExample() async {
-    let logger = Logger(label: "OAuthManualFlowExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("OAuthManualFlowExample"))
     logger.info("=== SwiftAgentKit OAuth Manual Flow Example ===")
     
     // Example OAuth server configuration that will trigger manual flow
@@ -558,7 +588,7 @@ func oAuthManualFlowExample() async {
 // Example helper function for handling OAuth manual flow (commented out as it requires system integration)
 /*
 func handleOAuthManualFlow(_ oauthFlowError: OAuthManualFlowRequired) async {
-    let logger = Logger(label: "OAuthFlowHandler")
+    let logger = SwiftAgentKitLogging.logger(for: .examples("OAuthFlowHandler"))
     
     // Step 1: Open the authorization URL in the system browser
     logger.info("Opening authorization URL in browser...")

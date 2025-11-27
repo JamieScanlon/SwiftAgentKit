@@ -12,33 +12,33 @@ import Logging
 public actor BearerTokenAuthProvider: AuthenticationProvider {
     
     public let scheme: AuthenticationScheme = .bearer
-    private let logger = Logger(label: "BearerTokenAuthProvider")
+    private let logger: Logger
     
     private var token: String
     private let tokenRefreshHandler: (() async throws -> String)?
     private var tokenExpiresAt: Date?
     
-    /// Initialize with a static token
-    /// - Parameter token: The bearer token to use
-    public init(token: String) {
-        self.token = token
-        self.tokenRefreshHandler = nil
-        self.tokenExpiresAt = nil
-    }
-    
-    /// Initialize with a token and refresh capability
-    /// - Parameters:
-    ///   - token: Initial bearer token
-    ///   - expiresAt: When the token expires (optional)
-    ///   - refreshHandler: Closure to refresh the token when needed
     public init(
         token: String,
         expiresAt: Date? = nil,
-        refreshHandler: (() async throws -> String)?
+        refreshHandler: (() async throws -> String)? = nil,
+        logger: Logger? = nil
     ) {
         self.token = token
         self.tokenExpiresAt = expiresAt
         self.tokenRefreshHandler = refreshHandler
+        if let logger {
+            self.logger = logger
+        } else {
+            self.logger = SwiftAgentKitLogging.logger(
+                for: .authentication("BearerTokenAuthProvider"),
+                metadata: ["refreshable": .string(refreshHandler != nil ? "true" : "false")]
+            )
+        }
+    }
+    
+    public init(token: String) {
+        self.init(token: token, expiresAt: nil, refreshHandler: nil, logger: nil)
     }
     
     public func authenticationHeaders() async throws -> [String: String] {
@@ -47,18 +47,38 @@ public actor BearerTokenAuthProvider: AuthenticationProvider {
             try await refreshToken()
         }
         
+        if let expiresAt = tokenExpiresAt {
+            let secondsRemaining = expiresAt.timeIntervalSinceNow
+            logger.debug(
+                "Using bearer token",
+                metadata: [
+                    "expiresIn": .stringConvertible(secondsRemaining),
+                    "refreshable": .string(tokenRefreshHandler != nil ? "true" : "false")
+                ]
+            )
+        }
+        
         return ["Authorization": "Bearer \(token)"]
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info("Handling authentication challenge with status code: \(challenge.statusCode)")
+        let hasRefreshHandler = tokenRefreshHandler != nil
+        logger.warning(
+            "Bearer authentication challenge encountered",
+            metadata: [
+                "status": .stringConvertible(challenge.statusCode),
+                "refreshHandler": .string(hasRefreshHandler ? "present" : "missing"),
+                "server": .string(challenge.serverInfo ?? "unknown")
+            ]
+        )
         
         guard challenge.statusCode == 401 else {
             throw AuthenticationError.authenticationFailed("Unexpected status code: \(challenge.statusCode)")
         }
         
         // Try to refresh the token if we have a refresh handler
-        guard tokenRefreshHandler != nil else {
+        guard hasRefreshHandler else {
+            logger.error("Bearer token challenge cannot be resolved because no refresh handler is configured")
             throw AuthenticationError.invalidCredentials
         }
         
@@ -73,7 +93,7 @@ public actor BearerTokenAuthProvider: AuthenticationProvider {
     public func cleanup() async {
         // For bearer tokens, we typically don't need to do cleanup
         // unless we're managing token storage or sessions
-        logger.info("Bearer token authentication cleaned up")
+        logger.debug("Bearer token authentication cleaned up")
     }
     
     // MARK: - Private Methods
@@ -93,14 +113,23 @@ public actor BearerTokenAuthProvider: AuthenticationProvider {
             throw AuthenticationError.authenticationFailed("No token refresh handler available")
         }
         
-        logger.info("Refreshing bearer token")
+        logger.info(
+            "Refreshing bearer token",
+            metadata: ["expiresAt": .stringConvertible(tokenExpiresAt ?? Date())]
+        )
         
         do {
             let newToken = try await refreshHandler()
             self.token = newToken
-            logger.info("Successfully refreshed bearer token")
+            logger.info(
+                "Successfully refreshed bearer token",
+                metadata: ["refreshHandler": .string("present")]
+            )
         } catch {
-            logger.error("Failed to refresh token: \(error)")
+            logger.error(
+                "Failed to refresh token",
+                metadata: ["error": .string(String(describing: error))]
+            )
             throw AuthenticationError.authenticationFailed("Token refresh failed: \(error.localizedDescription)")
         }
     }

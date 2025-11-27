@@ -6,10 +6,17 @@
 //
 
 import Foundation
+import Logging
 import SwiftAgentKit
 
 public actor A2AManager {
-    public init() {}
+    private let logger: Logger
+    
+    public init(logger: Logger? = nil) {
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .a2a("A2AManager")
+        )
+    }
     
     public enum State {
         case notReady
@@ -25,7 +32,14 @@ public actor A2AManager {
         do {
             try await loadA2AConfiguration(configFileURL: configFileURL)
         } catch {
-            print("\(error)")
+            logger.error(
+                "Failed to initialize A2A manager",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("configURL", .string(configFileURL.absoluteString)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
+            throw error
         }
     }
     
@@ -54,6 +68,7 @@ public actor A2AManager {
         guard case .object(let argsDict) = toolCall.arguments,
               case .string(let instructions) = argsDict["instructions"] else { return nil }
         
+        // A2A messages take the role of 'user' for the purpose of communicating with other agents.
         let a2aMessage = A2AMessage(role: "user", parts: [.text(text: instructions)], messageId: UUID().uuidString)
         let params: MessageSendParams = .init(message: a2aMessage, metadata: try? .init(["toolCallId": toolCall.id]))
         let contents = try await client.streamMessage(params: params)
@@ -120,17 +135,52 @@ public actor A2AManager {
             try await createClients(config)
             state = .initialized
         } catch {
-            print("Error loading A2A configuration: \(error)")
+            logger.error(
+                "Error loading A2A configuration",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("configURL", .string(configFileURL.absoluteString)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
             state = .notReady
+            throw error
         }
     }
     
     private func createClients(_ config: A2AConfig) async throws {
+        logger.info(
+            "Creating A2A clients",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("serverCount", .stringConvertible(config.servers.count))
+            )
+        )
         for server in config.servers {
             let bootCall = config.serverBootCalls.first(where: { $0.name == server.name })
-            let client = A2AClient(server: server, bootCall: bootCall)
-            try await client.initializeA2AClient(globalEnvironment: config.globalEnvironment)
-            clients.append(client)
+            let clientLogger = SwiftAgentKitLogging.logger(
+                for: .a2a("A2AClient"),
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("serverName", .string(server.name)),
+                    ("serverURL", .string(server.url.absoluteString))
+                )
+            )
+            let client = A2AClient(server: server, bootCall: bootCall, logger: clientLogger)
+            do {
+                try await client.initializeA2AClient(globalEnvironment: config.globalEnvironment)
+                clients.append(client)
+                logger.info(
+                    "Initialized A2A client",
+                    metadata: SwiftAgentKitLogging.metadata(("serverName", .string(server.name)))
+                )
+            } catch {
+                logger.error(
+                    "Failed to initialize A2A client",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("serverName", .string(server.name)),
+                        ("error", .string(String(describing: error)))
+                    )
+                )
+                throw error
+            }
         }
         await buildToolsJson()
     }
@@ -145,6 +195,10 @@ public actor A2AManager {
         if let data = try? JSONSerialization.data(withJSONObject: json) {
             toolCallsJsonString = String(data: data, encoding: .utf8)
         }
+        logger.debug(
+            "Built tools JSON",
+            metadata: SwiftAgentKitLogging.metadata(("toolCount", .stringConvertible(json.count)))
+        )
     }
 }
 

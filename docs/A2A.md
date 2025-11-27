@@ -2,6 +2,17 @@
 
 The A2A module provides support for the [Agent-to-Agent (A2A) protocol](https://a2aproject.github.io/A2A/v0.2.5/specification/), enabling your agent to communicate with other A2A-compliant agents and servers. This module includes both client and server implementations.
 
+> ℹ️ **Logging tip**  
+> Before interacting with A2A clients or servers, bootstrap your application's logger once:
+> ```swift
+> import Logging
+> import SwiftAgentKit
+> 
+> let logger = Logger(label: "com.example.a2a")
+> SwiftAgentKitLogging.bootstrap(logger: logger, level: .info)
+> ```
+> All A2A types request scoped loggers from `SwiftAgentKitLogging`, so they automatically inherit the level and metadata you configure. The `print` statements in this guide are for CLI output only.
+
 ## Key Types
 - **A2AManager**: Manages multiple A2A clients and agent calls. Now requires a config file URL provided by the consumer.
 - **A2AClient**: Connects to and communicates with A2A servers

@@ -4,6 +4,7 @@ import SwiftAgentKit
 import SwiftAgentKitA2A
 import SwiftAgentKitMCP
 import SwiftAgentKitAdapters
+import EasyJSON
 
 /// Configuration for the SwiftAgentKitOrchestrator
 public struct OrchestratorConfig: Sendable {
@@ -72,7 +73,7 @@ public actor SwiftAgentKitOrchestrator {
     }
     
     public init(
-        llm: LLMProtocol, 
+        llm: LLMProtocol,
         config: OrchestratorConfig = OrchestratorConfig(),
         mcpManager: MCPManager? = nil,
         a2aManager: A2AManager? = nil,
@@ -80,9 +81,46 @@ public actor SwiftAgentKitOrchestrator {
     ) {
         self.llm = llm
         self.config = config
-        self.mcpManager = mcpManager ?? (config.mcpEnabled ? MCPManager(connectionTimeout: config.mcpConnectionTimeout) : nil)
-        self.a2aManager = a2aManager
-        self.logger = logger ?? Logger(label: "SwiftAgentKitOrchestrator")
+        let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
+            for: .orchestrator,
+            metadata: SwiftAgentKitLogging.metadata(
+                ("streamingEnabled", .string(config.streamingEnabled ? "true" : "false")),
+                ("mcpEnabled", .string(config.mcpEnabled ? "true" : "false")),
+                ("a2aEnabled", .string(config.a2aEnabled ? "true" : "false"))
+            )
+        )
+        self.logger = resolvedLogger
+        if let providedMCPManager = mcpManager {
+            self.mcpManager = providedMCPManager
+        } else if config.mcpEnabled {
+            self.mcpManager = MCPManager(
+                connectionTimeout: config.mcpConnectionTimeout,
+                logger: SwiftAgentKitLogging.logger(
+                    for: .mcp("MCPManager"),
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("source", .string("SwiftAgentKitOrchestrator")),
+                        ("connectionTimeout", .stringConvertible(config.mcpConnectionTimeout))
+                    )
+                )
+            )
+        } else {
+            self.mcpManager = nil
+        }
+        
+        if let providedA2AManager = a2aManager {
+            self.a2aManager = providedA2AManager
+        } else if config.a2aEnabled {
+            self.a2aManager = A2AManager(
+                logger: SwiftAgentKitLogging.logger(
+                    for: .a2a("A2AManager"),
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("source", .string("SwiftAgentKitOrchestrator"))
+                    )
+                )
+            )
+        } else {
+            self.a2aManager = nil
+        }
     }
     
     /// Process a conversation thread and publish message updates to the message stream
@@ -90,9 +128,22 @@ public actor SwiftAgentKitOrchestrator {
     /// - Parameter availableTools: Array of available tools that can be used during conversation processing
     public func updateConversation(_ messages: [Message], availableTools: [ToolDefinition] = []) async throws {
         
-        logger.info("Processing conversation with \(messages.count) messages")
+        logger.info(
+            "Processing conversation",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("messageCount", .stringConvertible(messages.count)),
+                ("streamingEnabled", .string(config.streamingEnabled ? "true" : "false")),
+                ("toolCount", .stringConvertible(availableTools.count))
+            )
+        )
         if !availableTools.isEmpty {
-            logger.info("Available tools: \(availableTools.map { $0.name }.joined(separator: ", "))")
+            let toolNames = availableTools.map { $0.name }
+            logger.debug(
+                "Resolved available tools",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("tools", .array(toolNames.map { .string($0) }))
+                )
+            )
         }
         
         // Create a copy of the conversation history
@@ -108,15 +159,27 @@ public actor SwiftAgentKitOrchestrator {
             for try await result in stream {
                 switch result {
                 case .stream(let response):
-                    logger.info("Received streaming chunk")
+                    logger.debug(
+                        "Received streaming chunk",
+                        metadata: metadataForStreamingContent(response.content)
+                    )
                     // Publish the streaming chunk to partial content stream
                     publishPartialContent(response.content)
                     
                 case .complete(let response):
-                    logger.info("Received complete streaming response")
+                    logger.info(
+                        "Received complete streaming response",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("contentLength", .stringConvertible(response.content.count)),
+                            ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
+                        )
+                    )
 
+                    // Ensure all tool calls have IDs (some models don't provide them)
+                    let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
+                    
                     // Convert LLMResponse to Message for conversation history
-                    let responseMessage = Message(id: UUID(), role: .assistant, content: response.content)
+                    let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
                     updatedMessages.append(responseMessage)
                     // Publish the message
                     publishMessage(responseMessage)
@@ -124,15 +187,33 @@ public actor SwiftAgentKitOrchestrator {
                     if response.hasToolCalls {
                         
                         // Execute tool calls
-                        logger.info("Response contains \(response.toolCalls.count) tool calls")
-                        let toolResponses = await executeToolCalls(response.toolCalls)
+                        logger.info(
+                            "Response contains tool calls",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
+                            )
+                        )
+                        let toolResponses = await executeToolCalls(toolCallsWithIds)
                         
                         guard !toolResponses.isEmpty else { continue }
                         
-                        // Pubilsh the tool calll Messages
+                        // Create tool response messages with proper toolCallId mapping
                         // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
-                        logger.info("Sending \(toolResponses.count) tool responses back to LLM")
-                        let toolResponseMessages = toolResponses.map({ Message(id: UUID(), role: .tool, content: $0.content) })
+                        logger.info(
+                            "Sending tool responses back to LLM",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("responseCount", .stringConvertible(toolResponses.count))
+                            )
+                        )
+                        let toolResponseMessages = toolResponses.map { response in
+                            Message(
+                                id: UUID(),
+                                role: .tool,
+                                content: response.content,
+                                toolCalls: response.toolCalls,
+                                toolCallId: response.toolCallId
+                            )
+                        }
                         updatedMessages.append(contentsOf: toolResponseMessages)
                         toolResponseMessages.forEach { publishMessage($0) }
                         
@@ -150,9 +231,18 @@ public actor SwiftAgentKitOrchestrator {
             // Handle synchronous response
             let response = try await llm.send(messages, config: requestConfig)
             
-            logger.info("Received complete response")
+            logger.info(
+                "Received complete response",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("contentLength", .stringConvertible(response.content.count)),
+                    ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
+                )
+            )
+            // Ensure all tool calls have IDs (some models don't provide them)
+            let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
+            
             // Convert LLMResponse to Message for conversation history
-            let responseMessage = Message(id: UUID(), role: .assistant, content: response.content)
+            let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
             updatedMessages.append(responseMessage)
             // Publish the final conversation history
             publishMessage(responseMessage)
@@ -160,15 +250,33 @@ public actor SwiftAgentKitOrchestrator {
             if response.hasToolCalls {
                 
                 // Execute tool calls
-                logger.info("Response contains \(response.toolCalls.count) tool calls")
-                let toolResponses = await executeToolCalls(response.toolCalls)
+                logger.info(
+                    "Response contains tool calls",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
+                    )
+                )
+                let toolResponses = await executeToolCalls(toolCallsWithIds)
                 
                 guard !toolResponses.isEmpty else { return }
                 
-                // Pubilsh the tool calll Messages
+                // Create tool response messages with proper toolCallId mapping
                 // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
-                logger.info("Sending \(toolResponses.count) tool responses back to LLM")
-                let toolResponseMessages = toolResponses.map({ Message(id: UUID(), role: .tool, content: $0.content) })
+                logger.info(
+                    "Sending tool responses back to LLM",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("responseCount", .stringConvertible(toolResponses.count))
+                    )
+                )
+                let toolResponseMessages = toolResponses.map { response in
+                    Message(
+                        id: UUID(),
+                        role: .tool,
+                        content: response.content,
+                        toolCalls: response.toolCalls,
+                        toolCallId: response.toolCallId
+                    )
+                }
                 updatedMessages.append(contentsOf: toolResponseMessages)
                 toolResponseMessages.forEach { publishMessage($0) }
                 
@@ -204,13 +312,19 @@ public actor SwiftAgentKitOrchestrator {
     
     /// Publish a message to the stream
     private func publishMessage(_ message: Message) {
-        logger.info("Publishing message: \(message.content.prefix(10))...")
+        logger.debug(
+            "Publishing message",
+            metadata: metadataForMessage(message)
+        )
         messageStreamContinuation?.yield(message)
     }
     
     /// Publish partial content to the partial content stream
     private func publishPartialContent(_ content: String) {
-        logger.info("Publishing partial content: \(content.prefix(10))...")
+        logger.debug(
+            "Publishing partial content chunk",
+            metadata: metadataForStreamingContent(content)
+        )
         partialContentStreamContinuation?.yield(content)
     }
     
@@ -220,7 +334,7 @@ public actor SwiftAgentKitOrchestrator {
             self.messageStreamContinuation = continuation
         }
         self.currentMessageStream = stream
-        logger.info("Created message stream")
+        logger.debug("Created message stream")
         return stream
     }
     
@@ -230,36 +344,192 @@ public actor SwiftAgentKitOrchestrator {
             self.partialContentStreamContinuation = continuation
         }
         self.currentPartialContentStream = stream
-        logger.info("Created partial content stream")
+        logger.debug("Created partial content stream")
         return stream
+    }
+    
+    /// Ensures all tool calls have IDs, generating them if missing
+    /// Some LLM models don't provide tool call IDs, so we generate them here
+    /// - Parameter toolCalls: Array of tool calls that may or may not have IDs
+    /// - Returns: Array of tool calls with guaranteed IDs
+    private func ensureToolCallsHaveIds(_ toolCalls: [ToolCall]) -> [ToolCall] {
+        return toolCalls.map { toolCall in
+            if toolCall.id != nil {
+                return toolCall
+            }
+            // Generate a unique ID for tool calls without one
+            // Format: "call_" followed by a short UUID (first 8 characters)
+            let generatedId = "call_\(UUID().uuidString.prefix(8))"
+            return ToolCall(
+                name: toolCall.name,
+                arguments: toolCall.arguments,
+                instructions: toolCall.instructions,
+                id: generatedId
+            )
+        }
     }
     
     /// Execute tool calls using available managers
     /// - Parameter toolCalls: Array of tool calls to execute
     /// - Returns: Array of tool response messages to send back to the LLM
     private func executeToolCalls(_ toolCalls: [ToolCall]) async -> [LLMResponse] {
-        var responses: [LLMResponse] = []
+        var aggregatedResponses: [LLMResponse] = []
         for toolCall in toolCalls {
-            logger.info("Executing tool call: \(toolCall.name)")
+            logger.info(
+                "Executing tool call",
+                metadata: metadataForToolCall(toolCall, provider: "orchestrator")
+            )
             do {
-                responses = try await {
-                    var temp = [LLMResponse]()
-                    // Try MCP manager first
-                    if let mcpManager = mcpManager, config.mcpEnabled {
-                        temp.append(contentsOf: try await mcpManager.toolCall(toolCall) ?? [])
+                var callResponses: [LLMResponse] = []
+                // Try MCP manager first
+                if let mcpManager = mcpManager, config.mcpEnabled {
+                    logger.debug(
+                        "Dispatching MCP tool call",
+                        metadata: metadataForToolCall(toolCall, provider: "mcp")
+                    )
+                    if let mcpResponses = try await mcpManager.toolCall(toolCall) {
+                        if mcpResponses.isEmpty {
+                            logger.debug(
+                                "MCP tool call returned no responses",
+                                metadata: metadataForToolCall(toolCall, provider: "mcp")
+                            )
+                        } else {
+                            logger.debug(
+                                "MCP tool call responses received",
+                                metadata: metadataForResponses(mcpResponses, provider: "mcp")
+                            )
+                            // Set toolCallId on each response
+                            let responsesWithId = mcpResponses.map { response in
+                                LLMResponse(
+                                    content: response.content,
+                                    toolCalls: response.toolCalls,
+                                    metadata: response.metadata,
+                                    isComplete: response.isComplete,
+                                    toolCallId: toolCall.id
+                                )
+                            }
+                            callResponses.append(contentsOf: responsesWithId)
+                        }
+                    } else {
+                        logger.debug(
+                            "MCP tool call returned nil",
+                            metadata: metadataForToolCall(toolCall, provider: "mcp")
+                        )
                     }
-                    // Try A2A manager
-                    if let a2aManager = a2aManager, config.a2aEnabled {
-                        temp.append(contentsOf: try await a2aManager.agentCall(toolCall) ?? [])
+                }
+                // Try A2A manager
+                if let a2aManager = a2aManager, config.a2aEnabled {
+                    logger.debug(
+                        "Dispatching A2A agent call",
+                        metadata: metadataForToolCall(toolCall, provider: "a2a")
+                    )
+                    if let a2aResponses = try await a2aManager.agentCall(toolCall) {
+                        if a2aResponses.isEmpty {
+                            logger.debug(
+                                "A2A agent call returned no responses",
+                                metadata: metadataForToolCall(toolCall, provider: "a2a")
+                            )
+                        } else {
+                            logger.debug(
+                                "A2A agent call responses received",
+                                metadata: metadataForResponses(a2aResponses, provider: "a2a")
+                            )
+                            // Set toolCallId on each response
+                            let responsesWithId = a2aResponses.map { response in
+                                LLMResponse(
+                                    content: response.content,
+                                    toolCalls: response.toolCalls,
+                                    metadata: response.metadata,
+                                    isComplete: response.isComplete,
+                                    toolCallId: toolCall.id
+                                )
+                            }
+                            callResponses.append(contentsOf: responsesWithId)
+                        }
+                    } else {
+                        logger.debug(
+                            "A2A agent call returned nil",
+                            metadata: metadataForToolCall(toolCall, provider: "a2a")
+                        )
                     }
-                    logger.info("Tool call executed successfully, got \(temp.count) responses")
-                    return temp
-                }()
+                }
+                
+                var successMetadata = metadataForToolCall(toolCall, provider: "orchestrator")
+                successMetadata["responseCount"] = .stringConvertible(callResponses.count)
+                logger.info(
+                    "Tool call executed successfully",
+                    metadata: successMetadata
+                )
+                aggregatedResponses.append(contentsOf: callResponses)
             } catch {
-                logger.error("Tool call failed: \(error.localizedDescription)")
-                continue
+                logger.error(
+                    "Tool call failed",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("toolName", .string(toolCall.name)),
+                        ("error", .string(String(describing: error)))
+                    )
+                )
             }
         }
-        return responses
+        return aggregatedResponses
+    }
+}
+
+// MARK: - Logging helpers
+
+private extension SwiftAgentKitOrchestrator {
+    nonisolated func metadataForStreamingContent(_ content: String) -> Logger.Metadata {
+        SwiftAgentKitLogging.metadata(
+            ("content", .string(content)),
+            ("length", .stringConvertible(content.count))
+        )
+    }
+    
+    nonisolated func metadataForMessage(_ message: Message) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("role", .string(message.role.rawValue)),
+            ("content", .string(message.content)),
+            ("hasToolCalls", .string(message.toolCalls.isEmpty ? "false" : "true"))
+        )
+        if !message.toolCalls.isEmpty {
+            metadata["toolCallCount"] = .stringConvertible(message.toolCalls.count)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForToolCall(_ toolCall: ToolCall, provider: String) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("provider", .string(provider)),
+            ("toolName", .string(toolCall.name)),
+            ("arguments", .string(stringifyJSON(toolCall.arguments)))
+        )
+        if let instructions = toolCall.instructions, !instructions.isEmpty {
+            metadata["instructions"] = .string(instructions)
+        }
+        if let identifier = toolCall.id {
+            metadata["toolCallId"] = .string(identifier)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForResponses(_ responses: [LLMResponse], provider: String) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("provider", .string(provider)),
+            ("responseCount", .stringConvertible(responses.count))
+        )
+        if !responses.isEmpty {
+            metadata["contents"] = .array(responses.map { .string($0.content) })
+        }
+        return metadata
+    }
+    
+    nonisolated func stringifyJSON(_ json: JSON) -> String {
+        let literal = json.literalValue
+        if JSONSerialization.isValidJSONObject(literal),
+           let data = try? JSONSerialization.data(withJSONObject: literal, options: [.sortedKeys]),
+           let string = String(data: data, encoding: .utf8) {
+            return string
+        }
+        return String(describing: json)
     }
 }

@@ -4,9 +4,18 @@ import EasyJSON
 import SwiftAgentKit
 import SwiftAgentKitMCP
 
+private func configureRemoteLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.mcp.remote"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("MCPRemote")))
+    )
+}
+
 // Example: Connecting to Remote MCP Servers with Authentication
 func remoteMCPExample() async {
-    let logger = Logger(label: "RemoteMCPExample")
+    configureRemoteLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("RemoteMCPExample"))
     logger.info("=== SwiftAgentKit Remote MCP Authentication Example ===")
     
     // Example 1: Direct MCPClient connection with Bearer token

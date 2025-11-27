@@ -12,7 +12,7 @@ import Logging
 public struct BasicAuthProvider: AuthenticationProvider {
     
     public let scheme: AuthenticationScheme = .basic
-    private let logger = Logger(label: "BasicAuthProvider")
+    private let logger: Logger
     
     private let username: String
     private let password: String
@@ -21,9 +21,21 @@ public struct BasicAuthProvider: AuthenticationProvider {
     /// - Parameters:
     ///   - username: Username for authentication
     ///   - password: Password for authentication
-    public init(username: String, password: String) {
+    public init(username: String, password: String, logger: Logger? = nil) {
         self.username = username
         self.password = password
+        if let logger {
+            self.logger = logger
+        } else {
+            self.logger = SwiftAgentKitLogging.logger(
+                for: .authentication("BasicAuthProvider"),
+                metadata: ["scheme": .string("basic")]
+            )
+        }
+    }
+    
+    public init(username: String, password: String) {
+        self.init(username: username, password: password, logger: nil)
     }
     
     public func authenticationHeaders() async throws -> [String: String] {
@@ -37,7 +49,18 @@ public struct BasicAuthProvider: AuthenticationProvider {
     }
     
     public func handleAuthenticationChallenge(_ challenge: AuthenticationChallenge) async throws -> [String: String] {
-        logger.info("Handling Basic auth challenge with status code: \(challenge.statusCode)")
+        let wwwAuthenticate = challenge.headers["WWW-Authenticate"]
+        let parameters = wwwAuthenticate.map(WWWAuthenticateParser.parseWWWAuthenticateHeader) ?? [:]
+        let realm = parameters["realm"]
+        
+        logger.warning(
+            "Basic authentication challenge encountered",
+            metadata: [
+                "status": .stringConvertible(challenge.statusCode),
+                "realm": .string(realm ?? "unknown"),
+                "server": .string(challenge.serverInfo ?? "unknown")
+            ]
+        )
         
         guard challenge.statusCode == 401 else {
             throw AuthenticationError.authenticationFailed("Unexpected status code: \(challenge.statusCode)")
@@ -56,6 +79,6 @@ public struct BasicAuthProvider: AuthenticationProvider {
     
     public func cleanup() async {
         // No cleanup needed for Basic auth
-        logger.info("Basic authentication cleaned up")
+        logger.debug("Basic authentication cleaned up")
     }
 }

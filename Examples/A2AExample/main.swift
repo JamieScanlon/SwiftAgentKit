@@ -4,9 +4,18 @@ import SwiftAgentKit
 import SwiftAgentKitA2A
 import EasyJSON
 
+private func configureLogging() {
+    SwiftAgentKitLogging.bootstrap(
+        logger: Logger(label: "com.example.swiftagentkit.a2a"),
+        level: .info,
+        metadata: SwiftAgentKitLogging.metadata(("example", .string("A2A")))
+    )
+}
+
 // Example: A2A (Agent-to-Agent) usage with A2AManager
 func a2aManagerExample() async {
-    let logger = Logger(label: "A2AExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("A2AExample"))
     logger.info("=== SwiftAgentKit A2A Manager Example ===")
     
     // Create a sample A2A config file for demonstration
@@ -88,7 +97,8 @@ func a2aManagerExample() async {
 
 // Example: Using A2AManager with a real config file
 func a2aManagerWithRealConfigExample() async {
-    let logger = Logger(label: "A2ARealConfigExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("A2ARealConfigExample"))
     logger.info("=== SwiftAgentKit A2A Manager with Real Config Example ===")
     
     // In a real application, you would load your actual A2A config file
@@ -139,7 +149,8 @@ func a2aManagerWithRealConfigExample() async {
 
 // Example: Error handling and state management
 func a2aManagerErrorHandlingExample() async {
-    let logger = Logger(label: "A2AErrorHandlingExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("A2AErrorHandlingExample"))
     logger.info("=== SwiftAgentKit A2A Manager Error Handling Example ===")
     
     let a2aManager = A2AManager()
@@ -190,7 +201,8 @@ func a2aManagerErrorHandlingExample() async {
 
 // Example: Working with multiple agents
 func a2aManagerMultipleAgentsExample() async {
-    let logger = Logger(label: "A2AMultipleAgentsExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("A2AMultipleAgentsExample"))
     logger.info("=== SwiftAgentKit A2A Manager Multiple Agents Example ===")
     
     // This example assumes you have a config file with multiple A2A servers
@@ -251,7 +263,8 @@ func a2aManagerMultipleAgentsExample() async {
 
 // Example: Streaming agent responses
 func a2aManagerStreamingExample() async {
-    let logger = Logger(label: "A2AStreamingExample")
+    configureLogging()
+    let logger = SwiftAgentKitLogging.logger(for: .examples("A2AStreamingExample"))
     logger.info("=== SwiftAgentKit A2A Manager Streaming Example ===")
     
     // This example shows how to work with streaming responses from A2A agents

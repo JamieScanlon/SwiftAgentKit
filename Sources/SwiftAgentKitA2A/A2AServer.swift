@@ -8,6 +8,8 @@
 import Foundation
 import Vapor
 import EasyJSON
+import Logging
+import SwiftAgentKit
 
 // Alias protocol-defined types for convenience
 typealias AgentCapabilities = AgentCard.AgentCapabilities
@@ -20,14 +22,21 @@ extension AgentCard: Content {}
 /// A2A Server (Remote Agent): An agent or agentic system that exposes an A2A-compliant HTTP endpoint, processing tasks and providing responses.
 public actor A2AServer {
     
+    private let logger: Logger
+    
     /**
      * Initializes a new APILayer instance.
      *
-     * - Parameter port: The port number that the server will listen on. Defaults to `4245` standing for A2AS(erver).
+     * - Parameters:
+     *   - port: The port number that the server will listen on. Defaults to `4245` standing for A2AS(erver).
+     *   - adapter: The agent adapter that handles message processing.
+     *   - filterReasoningBlocks: Whether to filter out `<think>...</think>` blocks from responses. Defaults to `true`.
+     *   - logger: Optional logger instance. If not provided, a default logger will be created.
      */
-    public init(port: Int = 4245, adapter: AgentAdapter) {
+    public init(port: Int = 4245, adapter: AgentAdapter, filterReasoningBlocks: Bool = true, logger: Logger? = nil) {
         self.port = port
         self.adapter = adapter
+        self.filterReasoningBlocks = filterReasoningBlocks
         // derive AgentCard from adapter metadata
         self.agentCard = AgentCard(
             name: adapter.agentName,
@@ -42,9 +51,17 @@ public actor A2AServer {
         )
         
         self.encoder.dateEncodingStrategy = .iso8601
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .a2a("A2AServer"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("port", .stringConvertible(port)),
+                ("agentName", .string(adapter.agentName))
+            )
+        )
     }
     
     public func start() async throws {
+        logger.info("Starting A2A server")
         
         // Create a new Vapor application using the modern async API
         let env = try Environment.detect()
@@ -70,11 +87,13 @@ public actor A2AServer {
         
         // Start the server and wait for it to be ready
         try await app.execute()
+        logger.info("A2A server started")
     }
     
     func stop() {
         app?.shutdown()
         app = nil
+        logger.info("A2A server stopped")
     }
     
     // MARK: - Private
@@ -89,6 +108,8 @@ public actor A2AServer {
     /// Agent Card Definition
     private let agentCard: AgentCard
     private let encoder = JSONEncoder()
+    /// Whether to filter out reasoning blocks from responses
+    private let filterReasoningBlocks: Bool
     
     private func setupRoutes(app: Application) {
         
@@ -132,7 +153,9 @@ public actor A2AServer {
     }
     
     private func handleMessageSend(_ req: Request) async throws -> Response {
+        logger.debug("Handling message/send request")
         guard isAuthorized(req) else {
+            logger.warning("Unauthorized message/send request")
             return jsonRPCErrorResponse(code: 401, message: "Unauthorized", status: .unauthorized)
         }
         
@@ -146,13 +169,38 @@ public actor A2AServer {
         let params = rpcRequest.params
         let requestId = rpcRequest.id
         
+        // Validate instructions parameter
+        if let validationError = validateInstructions(message: params.message) {
+            logger.warning(
+                "Invalid instructions in message/send request",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("requestId", .stringConvertible(requestId)),
+                    ("error", .string(validationError))
+                )
+            )
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.invalidParams.rawValue, message: validationError, status: .badRequest)
+        }
+        
+        logger.debug(
+            "Decoded message/send request",
+            metadata: metadataForMessageSend(params: params, requestId: requestId)
+        )
+        
         // Ask adapter what type of response it will return
         let responseType = adapter.responseType(for: params)
         
         switch responseType {
         case .message:
             // Handle as a simple message (no task created)
-            let message = try await adapter.handleMessageSend(params)
+            var message = try await adapter.handleMessageSend(params)
+            // Filter reasoning blocks if configured
+            if filterReasoningBlocks {
+                message = filterReasoningBlocks(from: message)
+            }
+            logger.debug(
+                "Returning message response",
+                metadata: metadataForMessage(message: message, requestId: requestId)
+            )
             return try jsonRPCSuccessResponse(id: requestId, result: message)
             
         case .task:
@@ -176,9 +224,17 @@ public actor A2AServer {
             try await adapter.handleTaskSend(params, taskId: taskId, contextId: contextId, store: taskStore)
             
             // Return the updated task
-            guard let updatedTask = await taskStore.getTask(id: taskId) else {
+            guard var updatedTask = await taskStore.getTask(id: taskId) else {
                 return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found after processing", status: .internalServerError)
             }
+            // Filter reasoning blocks if configured
+            if filterReasoningBlocks {
+                updatedTask = filterReasoningBlocks(from: updatedTask)
+            }
+            logger.debug(
+                "Returning task response",
+                metadata: metadataForTask(task: updatedTask, requestId: requestId)
+            )
             return try jsonRPCSuccessResponse(id: requestId, result: updatedTask)
         }
     }
@@ -190,6 +246,7 @@ public actor A2AServer {
         }
         guard isAuthorized(req) else {
             let httpResponseStatus: HTTPResponseStatus = .unauthorized
+            logger.warning("Unauthorized message/stream request")
             return jsonRPCErrorResponse(code: Int(httpResponseStatus.code), message: "Unauthorized", status: httpResponseStatus)
         }
         // Decode JSON-RPC request envelope to capture request id and params
@@ -201,6 +258,23 @@ public actor A2AServer {
         }
         let params = rpcRequest.params
         let requestId = rpcRequest.id
+        
+        // Validate instructions parameter
+        if let validationError = validateInstructions(message: params.message) {
+            logger.warning(
+                "Invalid instructions in message/stream request",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("requestId", .stringConvertible(requestId)),
+                    ("error", .string(validationError))
+                )
+            )
+            return jsonRPCErrorResponse(id: requestId, code: ErrorCode.invalidParams.rawValue, message: validationError, status: .badRequest)
+        }
+        
+        logger.debug(
+            "Decoded message/stream request",
+            metadata: metadataForMessageSend(params: params, requestId: requestId, stream: true)
+        )
         let adapter = self.adapter  // Capture adapter before the task
         let res = Response(status:.ok)
         let store = taskStore
@@ -227,10 +301,18 @@ public actor A2AServer {
         var isExistingTask = false
         if let taskId = updatedParams.message.taskId {
             guard let foundTask = await taskStore.getTask(id: taskId) else {
+                logger.warning(
+                    "Task not found during resubscribe",
+                    metadata: SwiftAgentKitLogging.metadata(("taskId", .string(taskId)))
+                )
                 return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .badRequest)
             }
             // cannot be completed, canceled, rejected, or failed
             guard foundTask.status.state != .completed && foundTask.status.state != .failed && foundTask.status.state != .canceled && foundTask.status.state != .rejected else {
+                logger.warning(
+                    "Attempted to restart terminal task",
+                    metadata: SwiftAgentKitLogging.metadata(("taskId", .string(taskId)))
+                )
                 return jsonRPCErrorResponse(id: requestId, code: ErrorCode.invalidRequest.rawValue, message: "A task which has reached a terminal state (completed, canceled, rejected, or failed) can't be restarted", status: .badRequest)
             }
             isExistingTask = true
@@ -275,12 +357,21 @@ public actor A2AServer {
         }
         
         // Create streaming body (unified for both message and task responses)
+        let streamLogger = logger
+        let shouldFilter = filterReasoningBlocks
         let bodyStream = AsyncStream<ByteBuffer> { cont in
             Task.detached {
                 do {
                     try await adapter.handleStream(updatedParams, taskId: taskId, contextId: contextId, store: taskId != nil ? store : nil) { ev in
-                        if let data = try? self.encoder.encode(ev),
+                        // Filter reasoning blocks from events if configured
+                        let filteredEvent: Encodable = shouldFilter ? self.filterReasoningBlocks(from: ev) : ev
+                        
+                        if let data = try? self.encoder.encode(filteredEvent),
                             let jsonString = String(data: data, encoding:.utf8) {
+                            streamLogger.debug(
+                                "Streaming A2A event",
+                                metadata: self.metadataForEventJSONString(jsonString)
+                            )
                             var buf = ByteBufferAllocator().buffer(capacity: jsonString.count+8)
                             buf.writeString("data: \(jsonString)\n\n")
                             cont.yield(buf)
@@ -288,6 +379,13 @@ public actor A2AServer {
                     }
                 } catch {
                     // Ensure the stream finishes even if the adapter throws
+                    streamLogger.error(
+                        "Adapter stream failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("error", .string(String(describing: error))),
+                            ("requestId", .stringConvertible(requestId))
+                        )
+                    )
                 }
                 cont.finish()
             }
@@ -329,6 +427,11 @@ public actor A2AServer {
         } else {
             let hist = task.history ?? []
             task.history = hist.suffix(historyLength)
+        }
+        
+        // Filter reasoning blocks if configured
+        if filterReasoningBlocks {
+            task = filterReasoningBlocks(from: task)
         }
         
         // Encode the task and create JSON-RPC response
@@ -441,15 +544,35 @@ public actor A2AServer {
         let rpcRequest = try req.content.decode(JSONRPCRequest<TaskIdParams>.self)
         let taskIdParams = rpcRequest.params
         let requestId = rpcRequest.id
-        guard let task = await self.taskStore.getTask(id: taskIdParams.taskId) else {
+        logger.debug(
+            "Handling tasks/resubscribe request",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("taskId", .string(taskIdParams.taskId)),
+                ("requestId", .stringConvertible(requestId))
+            )
+        )
+        guard var task = await self.taskStore.getTask(id: taskIdParams.taskId) else {
             return jsonRPCErrorResponse(id: requestId, code: ErrorCode.taskNotFound.rawValue, message: "Task not found", status: .notFound)
+        }
+        
+        // Filter reasoning blocks if configured
+        let shouldFilter = filterReasoningBlocks
+        if shouldFilter {
+            task = filterReasoningBlocks(from: task)
         }
         
         let now = ISO8601DateFormatter().string(from: Date())
         let stream = AsyncStream<ByteBuffer> { continuation in
             func send<T: Encodable>(_ obj: T) {
-                if let data = try? encoder.encode(obj),
+                // Apply filtering if configured
+                let filteredObj: Encodable = shouldFilter ? self.filterReasoningBlocks(from: obj) : obj
+                
+                if let data = try? encoder.encode(filteredObj),
                    let jsonString = String(data: data, encoding: .utf8) {
+                    logger.debug(
+                        "tasks/resubscribe event",
+                        metadata: self.metadataForEventJSONString(jsonString)
+                    )
                     var buffer = ByteBufferAllocator().buffer(capacity: jsonString.count + 8)
                     buffer.writeString("data: \(jsonString)\n\n")
                     continuation.yield(buffer)
@@ -498,6 +621,189 @@ public actor A2AServer {
         return response
     }
     
+    // MARK: - Reasoning Block Filtering
+    
+    /// Filters out reasoning blocks from text content
+    /// Removes `<think>...</think>`, `<think>...</think>`, and similar reasoning blocks
+    nonisolated private func filterReasoningBlocks(from text: String) -> String {
+        // Pattern to match various reasoning block formats
+        // Matches: <think>...</think>, <think>...</think>, <reasoning>...</reasoning>, etc.
+        let pattern = #"<(?:think|redacted_reasoning|reasoning|thinking)[^>]*>.*?</(?:think|redacted_reasoning|reasoning|thinking)>"#
+        
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .dotMatchesLineSeparators]) else {
+            return text
+        }
+        
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        let filtered = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+        
+        // Clean up any extra whitespace that might be left
+        return filtered.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    /// Filters reasoning blocks from A2AMessage parts
+    private func filterReasoningBlocks(from message: A2AMessage) -> A2AMessage {
+        let filteredParts = message.parts.map { part -> A2AMessagePart in
+            switch part {
+            case .text(let text):
+                let filtered = filterReasoningBlocks(from: text)
+                return .text(text: filtered)
+            case .file, .data:
+                return part
+            }
+        }
+        
+        return A2AMessage(
+            role: message.role,
+            parts: filteredParts,
+            messageId: message.messageId,
+            metadata: message.metadata,
+            extensions: message.extensions,
+            referenceTaskIds: message.referenceTaskIds,
+            taskId: message.taskId,
+            contextId: message.contextId,
+            kind: message.kind
+        )
+    }
+    
+    /// Filters reasoning blocks from Artifact parts
+    private func filterReasoningBlocks(from artifact: Artifact) -> Artifact {
+        let filteredParts = artifact.parts.map { part -> A2AMessagePart in
+            switch part {
+            case .text(let text):
+                let filtered = filterReasoningBlocks(from: text)
+                return .text(text: filtered)
+            case .file, .data:
+                return part
+            }
+        }
+        
+        return Artifact(
+            artifactId: artifact.artifactId,
+            parts: filteredParts,
+            name: artifact.name,
+            description: artifact.description,
+            metadata: artifact.metadata,
+            extensions: artifact.extensions
+        )
+    }
+    
+    /// Filters reasoning blocks from A2ATask (including artifacts and status messages)
+    private func filterReasoningBlocks(from task: A2ATask) -> A2ATask {
+        var filteredTask = task
+        
+        // Filter artifacts
+        if let artifacts = task.artifacts {
+            filteredTask.artifacts = artifacts.map { filterReasoningBlocks(from: $0) }
+        }
+        
+        // Filter history messages
+        if let history = task.history {
+            filteredTask.history = history.map { filterReasoningBlocks(from: $0) }
+        }
+        
+        // Filter status message
+        if let statusMessage = task.status.message {
+            filteredTask.status.message = filterReasoningBlocks(from: statusMessage)
+        }
+        
+        return filteredTask
+    }
+    
+    /// Filters reasoning blocks from streaming events by decoding to JSON, filtering, and re-encoding
+    /// This approach works with any Encodable event type without needing to know the specific type
+    nonisolated private func filterReasoningBlocks(from event: Encodable) -> Encodable {
+        // Create a local encoder (nonisolated)
+        let localEncoder = JSONEncoder()
+        localEncoder.dateEncodingStrategy = .iso8601
+        
+        // Encode the event to JSON data
+        guard let jsonData = try? localEncoder.encode(event),
+              var jsonObject = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            // If encoding/decoding fails, return original event
+            return event
+        }
+        
+        // Recursively filter reasoning blocks from the JSON structure
+        filterReasoningBlocksFromJSON(&jsonObject)
+        
+        // Return a wrapper that encodes the filtered JSON
+        return FilteredJSONEncodable(jsonObject: jsonObject)
+    }
+    
+    /// Helper to recursively filter reasoning blocks from JSON structures
+    nonisolated private func filterReasoningBlocksFromJSON(_ json: inout [String: Any]) {
+        for (key, value) in json {
+            if let stringValue = value as? String {
+                // Filter reasoning blocks from string values
+                json[key] = filterReasoningBlocks(from: stringValue)
+            } else if var dictValue = value as? [String: Any] {
+                // Recursively process dictionaries
+                filterReasoningBlocksFromJSON(&dictValue)
+                json[key] = dictValue
+            } else if var arrayValue = value as? [[String: Any]] {
+                // Recursively process arrays of dictionaries
+                for i in 0..<arrayValue.count {
+                    filterReasoningBlocksFromJSON(&arrayValue[i])
+                }
+                json[key] = arrayValue
+            } else if var arrayValue = value as? [Any] {
+                // Handle arrays of mixed types
+                for i in 0..<arrayValue.count {
+                    if var dictItem = arrayValue[i] as? [String: Any] {
+                        filterReasoningBlocksFromJSON(&dictItem)
+                        arrayValue[i] = dictItem
+                    } else if let stringItem = arrayValue[i] as? String {
+                        arrayValue[i] = filterReasoningBlocks(from: stringItem)
+                    }
+                }
+                json[key] = arrayValue
+            }
+        }
+    }
+    
+    /// A wrapper that encodes a JSON dictionary as-is
+    /// This preserves the exact JSON structure while allowing us to filter content
+    private struct FilteredJSONEncodable: Encodable {
+        let jsonObject: [String: Any]
+        
+        func encode(to encoder: Encoder) throws {
+            // Use JSONSerialization to encode the dictionary directly
+            // This preserves the exact structure
+            let jsonData = try JSONSerialization.data(withJSONObject: jsonObject, options: [])
+            // Decode as EasyJSON JSON and encode through the encoder
+            let json = try JSONDecoder().decode(JSON.self, from: jsonData)
+            var container = encoder.singleValueContainer()
+            try container.encode(json)
+        }
+    }
+    
+    // MARK: - Validation Helpers
+    
+    /// Validates that the message contains non-empty text instructions
+    /// - Parameter message: The A2A message to validate
+    /// - Returns: An error message if validation fails, nil if validation passes
+    private func validateInstructions(message: A2AMessage) -> String? {
+        // Check if message has any parts
+        guard !message.parts.isEmpty else {
+            return "Message must contain at least one part with instructions"
+        }
+        
+        // Check if there's at least one text part with non-empty content
+        let hasValidTextPart = message.parts.contains { part in
+            if case .text(let text) = part {
+                return !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            }
+            return false
+        }
+        
+        guard hasValidTextPart else {
+            return "Message must contain at least one non-empty text part with instructions"
+        }
+        
+        return nil
+    }
+    
     // MARK: - Basic Authentication Helper
     private var expectedToken: String { "local-dev-token" }
     
@@ -541,5 +847,89 @@ extension A2AServer {
         response.body = .init(data: data)
         response.headers.replaceOrAdd(name: .contentType, value: "application/json")
         return response
+    }
+}
+
+// MARK: - Logging Helpers
+
+private extension A2AServer {
+    nonisolated func metadataForMessageSend(params: MessageSendParams, requestId: Int, stream: Bool = false) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("requestId", .stringConvertible(requestId)),
+            ("messageId", .string(params.message.messageId)),
+            ("role", .string(params.message.role)),
+            ("partCount", .stringConvertible(params.message.parts.count)),
+            ("stream", .string(stream ? "true" : "false"))
+        )
+        if let rendered = renderParts(from: params.message.parts) {
+            metadata["message"] = .string(rendered)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForMessage(message: A2AMessage, requestId: Int) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("requestId", .stringConvertible(requestId)),
+            ("messageId", .string(message.messageId)),
+            ("role", .string(message.role)),
+            ("partCount", .stringConvertible(message.parts.count))
+        )
+        if let rendered = renderParts(from: message.parts) {
+            metadata["message"] = .string(rendered)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForTask(task: A2ATask, requestId: Int) -> Logger.Metadata {
+        var metadata = SwiftAgentKitLogging.metadata(
+            ("requestId", .stringConvertible(requestId)),
+            ("taskId", .string(task.id)),
+            ("contextId", .string(task.contextId)),
+            ("status", .string(task.status.state.rawValue)),
+            ("artifactCount", .stringConvertible(task.artifacts?.count ?? 0))
+        )
+        if let lastMessage = task.history?.last,
+           let rendered = renderParts(from: lastMessage.parts) {
+            metadata["lastMessage"] = .string(rendered)
+        }
+        return metadata
+    }
+    
+    nonisolated func metadataForEventJSONString(_ json: String) -> Logger.Metadata {
+        var kind = "unknown"
+        if let data = json.data(using: .utf8),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            if let result = object["result"] as? [String: Any],
+               let resultKind = result["kind"] as? String {
+                kind = resultKind
+            } else if let method = object["method"] as? String {
+                kind = method
+            }
+        }
+        return SwiftAgentKitLogging.metadata(
+            ("eventKind", .string(kind)),
+            ("payload", .string(json))
+        )
+    }
+    
+    nonisolated func renderParts(from parts: [A2AMessagePart]) -> String? {
+        let raw = parts.compactMap { part -> String? in
+            switch part {
+            case .text(let text):
+                return text
+            case .file(let data, let url):
+                if let url {
+                    return "[file:url:\(url.absoluteString)]"
+                }
+                if let data {
+                    return "[file:data:\(data.count)B]"
+                }
+                return "[file:empty]"
+            case .data(let data):
+                return "[data:\(data.count)B]"
+            }
+        }.joined(separator: " ")
+        guard !raw.isEmpty else { return nil }
+        return raw.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
     }
 }

@@ -289,11 +289,21 @@ public struct OpenIDConnectProviderMetadata: Sendable, Codable {
 /// OAuth server metadata discovery client
 public actor OAuthServerMetadataClient {
     
-    private let logger = Logger(label: "OAuthServerMetadataClient")
+    private let logger: Logger
     private let urlSession: URLSession
     
-    public init(urlSession: URLSession = .shared) {
+    public init(
+        urlSession: URLSession,
+        logger: Logger?
+    ) {
         self.urlSession = urlSession
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .authentication("OAuthServerMetadataClient")
+        )
+    }
+    
+    public init(urlSession: URLSession = .shared) {
+        self.init(urlSession: urlSession, logger: nil)
     }
     
     /// Generate MCP-compliant well-known discovery URLs for an issuer
@@ -377,7 +387,10 @@ public actor OAuthServerMetadataClient {
     /// - Returns: OAuth server metadata
     /// - Throws: OAuthMetadataError if discovery fails
     private func fetchOAuthServerMetadata(from wellKnownURL: URL) async throws -> OAuthServerMetadata {
-        logger.debug("Attempting to fetch OAuth server metadata from: \(wellKnownURL)")
+        logger.debug(
+            "Attempting to fetch OAuth server metadata",
+            metadata: ["url": .string(wellKnownURL.absoluteString)]
+        )
         
         let (data, response) = try await urlSession.data(from: wellKnownURL)
         
@@ -390,7 +403,10 @@ public actor OAuthServerMetadataClient {
         }
         
         let metadata = try JSONDecoder().decode(OAuthServerMetadata.self, from: data)
-        logger.info("Successfully fetched OAuth server metadata from: \(wellKnownURL)")
+        logger.info(
+            "Successfully fetched OAuth server metadata",
+            metadata: ["url": .string(wellKnownURL.absoluteString)]
+        )
         return metadata
     }
     
@@ -399,7 +415,10 @@ public actor OAuthServerMetadataClient {
     /// - Returns: OpenID Connect provider metadata
     /// - Throws: OAuthMetadataError if discovery fails
     private func fetchOpenIDConnectProviderMetadata(from wellKnownURL: URL) async throws -> OpenIDConnectProviderMetadata {
-        logger.debug("Attempting to fetch OpenID Connect provider metadata from: \(wellKnownURL)")
+        logger.debug(
+            "Attempting to fetch OpenID Connect provider metadata",
+            metadata: ["url": .string(wellKnownURL.absoluteString)]
+        )
         
         let (data, response) = try await urlSession.data(from: wellKnownURL)
         
@@ -412,7 +431,10 @@ public actor OAuthServerMetadataClient {
         }
         
         let metadata = try JSONDecoder().decode(OpenIDConnectProviderMetadata.self, from: data)
-        logger.info("Successfully fetched OpenID Connect provider metadata from: \(wellKnownURL)")
+        logger.info(
+            "Successfully fetched OpenID Connect provider metadata",
+            metadata: ["url": .string(wellKnownURL.absoluteString)]
+        )
         return metadata
     }
     
@@ -429,14 +451,20 @@ public actor OAuthServerMetadataClient {
             throw OAuthMetadataError.discoveryFailed("No OAuth 2.0 discovery URL could be generated")
         }
         
-        logger.info("Discovering OAuth server metadata from: \(firstOAuthURL)")
+        logger.info(
+            "Discovering OAuth server metadata",
+            metadata: ["url": .string(firstOAuthURL.absoluteString)]
+        )
         
         do {
             return try await fetchOAuthServerMetadata(from: firstOAuthURL)
         } catch let error as OAuthMetadataError {
             throw error
         } catch {
-            logger.error("Failed to discover OAuth server metadata: \(error)")
+            logger.error(
+                "Failed to discover OAuth server metadata",
+                metadata: ["error": .string(String(describing: error))]
+            )
             throw OAuthMetadataError.discoveryFailed(error.localizedDescription)
         }
     }
@@ -454,14 +482,20 @@ public actor OAuthServerMetadataClient {
             throw OAuthMetadataError.discoveryFailed("No OpenID Connect discovery URL could be generated")
         }
         
-        logger.info("Discovering OpenID Connect provider metadata from: \(firstOidcURL)")
+        logger.info(
+            "Discovering OpenID Connect provider metadata",
+            metadata: ["url": .string(firstOidcURL.absoluteString)]
+        )
         
         do {
             return try await fetchOpenIDConnectProviderMetadata(from: firstOidcURL)
         } catch let error as OAuthMetadataError {
             throw error
         } catch {
-            logger.error("Failed to discover OpenID Connect provider metadata: \(error)")
+            logger.error(
+                "Failed to discover OpenID Connect provider metadata",
+                metadata: ["error": .string(String(describing: error))]
+            )
             throw OAuthMetadataError.discoveryFailed(error.localizedDescription)
         }
     }
@@ -472,36 +506,67 @@ public actor OAuthServerMetadataClient {
     /// - Returns: OAuth server metadata (from the first successful endpoint)
     /// - Throws: OAuthMetadataError if all discovery methods fail
     public func discoverAuthorizationServerMetadata(issuerURL: URL) async throws -> OAuthServerMetadata {
-        logger.info("Discovering authorization server metadata with MCP-compliant priority ordering from: \(issuerURL)")
+        logger.info(
+            "Discovering authorization server metadata with MCP-compliant priority ordering",
+            metadata: ["issuerURL": .string(issuerURL.absoluteString)]
+        )
         
         let discoveryURLs = generateDiscoveryURLs(for: issuerURL)
         var lastError: Error?
         
         for (index, discoveryURL) in discoveryURLs.enumerated() {
             do {
-                logger.debug("Trying discovery endpoint \(index + 1)/\(discoveryURLs.count): \(discoveryURL)")
+                logger.debug(
+                    "Trying discovery endpoint",
+                    metadata: [
+                        "index": .stringConvertible(index + 1),
+                        "total": .stringConvertible(discoveryURLs.count),
+                        "url": .string(discoveryURL.absoluteString)
+                    ]
+                )
                 
                 if discoveryURL.path.contains("oauth-authorization-server") {
                     // OAuth 2.0 Authorization Server Metadata endpoint
                     let metadata = try await fetchOAuthServerMetadata(from: discoveryURL)
-                    logger.info("Successfully discovered authorization server metadata via OAuth 2.0 from: \(discoveryURL)")
+                    logger.info(
+                        "Successfully discovered authorization server metadata via OAuth 2.0",
+                        metadata: ["url": .string(discoveryURL.absoluteString)]
+                    )
                     return metadata
                 } else if discoveryURL.path.contains("openid-configuration") {
                     // OpenID Connect Discovery endpoint
                     let oidcMetadata = try await fetchOpenIDConnectProviderMetadata(from: discoveryURL)
-                    logger.info("Successfully discovered authorization server metadata via OpenID Connect from: \(discoveryURL)")
+                    logger.info(
+                        "Successfully discovered authorization server metadata via OpenID Connect",
+                        metadata: ["url": .string(discoveryURL.absoluteString)]
+                    )
                     return oidcMetadata.oauthMetadata
                 }
                 
             } catch let error as OAuthMetadataError {
                 if case .httpError(let statusCode, _) = error, statusCode == 404 {
-                    logger.debug("Discovery endpoint not found (404): \(discoveryURL)")
+                    logger.debug(
+                        "Discovery endpoint not found (404)",
+                        metadata: ["url": .string(discoveryURL.absoluteString)]
+                    )
                 } else {
-                    logger.warning("Discovery failed for \(discoveryURL): \(error)")
+                    logger.warning(
+                        "Discovery failed for endpoint",
+                        metadata: [
+                            "url": .string(discoveryURL.absoluteString),
+                            "error": .string(String(describing: error))
+                        ]
+                    )
                 }
                 lastError = error
             } catch {
-                logger.warning("Discovery failed for \(discoveryURL) with unexpected error: \(error)")
+                logger.warning(
+                    "Discovery failed for endpoint with unexpected error",
+                    metadata: [
+                        "url": .string(discoveryURL.absoluteString),
+                        "error": .string(String(describing: error))
+                    ]
+                )
                 lastError = error
             }
         }
@@ -520,7 +585,10 @@ public actor OAuthServerMetadataClient {
             throw OAuthMetadataError.invalidIssuerURL("No authorization server URL found in protected resource metadata")
         }
         
-        logger.info("Discovering authorization server metadata from protected resource metadata URL: \(authorizationServerURL)")
+        logger.info(
+            "Discovering authorization server metadata from protected resource metadata",
+            metadata: ["authorizationServerURL": .string(authorizationServerURL.absoluteString)]
+        )
         
         return try await discoverAuthorizationServerMetadata(issuerURL: authorizationServerURL)
     }
