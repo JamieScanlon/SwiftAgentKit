@@ -18,6 +18,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     
     // MARK: - Configuration
     
+    /// Callback function type for updating the system prompt before sending a message.
+    /// - Parameters:
+    ///   - params: The message send parameters containing the message being sent
+    ///   - currentPrompt: The current system prompt (may be nil)
+    /// - Returns: An updated system prompt (or nil to remove the system prompt)
+    public typealias SystemPromptUpdateCallback = @Sendable (MessageSendParams, DynamicPrompt?) -> DynamicPrompt?
+    
     public struct Configuration: Sendable {
         public let model: String
         public let maxTokens: Int?
@@ -25,6 +32,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         public let topP: Double?
         public let systemPrompt: DynamicPrompt?
         public let additionalParameters: JSON?
+        
+        /// Optional callback to update the system prompt before sending a message.
+        /// This callback is called right before a message is sent to the LLM,
+        /// allowing you to dynamically update the system prompt based on the message content.
+        public let systemPromptUpdateCallback: SystemPromptUpdateCallback?
         
         // MARK: - Agentic Loop Configuration
         public let maxAgenticIterations: Int
@@ -45,6 +57,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             systemPrompt: DynamicPrompt? = nil,
             additionalParameters: JSON? = nil,
             maxAgenticIterations: Int = 10,
+            systemPromptUpdateCallback: SystemPromptUpdateCallback? = nil,
             agentName: String? = nil,
             agentDescription: String? = nil,
             cardCapabilities: AgentCard.AgentCapabilities? = nil,
@@ -59,6 +72,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             self.systemPrompt = systemPrompt
             self.additionalParameters = additionalParameters
             self.maxAgenticIterations = maxAgenticIterations
+            self.systemPromptUpdateCallback = systemPromptUpdateCallback
             
             // Set agent properties with defaults if not provided
             self.agentName = agentName ?? "LLM Protocol Agent"
@@ -135,6 +149,20 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     ///     systemPrompt: prompt
     /// )
     /// ```
+    /// 
+    /// Example with callback:
+    /// ```swift
+    /// let adapter = LLMProtocolAdapter(
+    ///     llm: myLLM,
+    ///     systemPrompt: prompt,
+    ///     systemPromptUpdateCallback: { params, currentPrompt in
+    ///         // Update prompt based on message content
+    ///         var updated = currentPrompt ?? DynamicPrompt(template: "You are a helpful assistant.")
+    ///         updated["context"] = extractContext(from: params.message)
+    ///         return updated
+    ///     }
+    /// )
+    /// ```
     public init(
         llm: LLMProtocol,
         model: String? = nil,
@@ -144,6 +172,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         systemPrompt: DynamicPrompt? = nil,
         additionalParameters: JSON? = nil,
         maxAgenticIterations: Int = 10,
+        systemPromptUpdateCallback: SystemPromptUpdateCallback? = nil,
         agentName: String? = nil,
         agentDescription: String? = nil,
         cardCapabilities: AgentCard.AgentCapabilities? = nil,
@@ -160,6 +189,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             systemPrompt: systemPrompt,
             additionalParameters: additionalParameters,
             maxAgenticIterations: maxAgenticIterations,
+            systemPromptUpdateCallback: systemPromptUpdateCallback,
             agentName: agentName,
             agentDescription: agentDescription,
             cardCapabilities: cardCapabilities,
@@ -203,6 +233,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         systemPrompt: String,  // Non-optional to avoid ambiguity when omitted
         additionalParameters: JSON? = nil,
         maxAgenticIterations: Int = 10,
+        systemPromptUpdateCallback: SystemPromptUpdateCallback? = nil,
         agentName: String? = nil,
         agentDescription: String? = nil,
         cardCapabilities: AgentCard.AgentCapabilities? = nil,
@@ -220,6 +251,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             systemPrompt: systemPromptDynamic,
             additionalParameters: additionalParameters,
             maxAgenticIterations: maxAgenticIterations,
+            systemPromptUpdateCallback: systemPromptUpdateCallback,
             agentName: agentName,
             agentDescription: agentDescription,
             cardCapabilities: cardCapabilities,
@@ -318,7 +350,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let task = await store.getTask(id: taskId)
             
             // Convert A2A message to SwiftAgentKit Message
-            let messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history)
+            let messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history, params: params)
             
             // Create LLM request configuration
             let llmConfig = LLMRequestConfig(
@@ -492,7 +524,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let task = await store.getTask(id: taskId)
             
             // Convert A2A message to SwiftAgentKit Message
-            let messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history)
+            let messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history, params: params)
             
             // Create LLM request configuration for streaming
             let llmConfig = LLMRequestConfig(
@@ -703,7 +735,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let task = await store.getTask(id: taskId)
             
             // Convert A2A message to SwiftAgentKit Message
-            var messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history)
+            var messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history, params: params)
             let availableToolCalls: [ToolDefinition] = await {
                 var returnValue = [ToolDefinition]()
                 for provider in toolProviders {
@@ -999,7 +1031,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             let task = await store.getTask(id: taskId)
             
             // Convert A2A message to SwiftAgentKit Message
-            var messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history)
+            var messages = try convertA2AMessageToMessages(params.message, metadata: params.metadata, taskHistory: task?.history, params: params)
             
             // Create LLM request configuration for streaming WITH tools
             let llmConfig = LLMRequestConfig(
@@ -1285,11 +1317,17 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     
     // MARK: - Helper Methods
     
-    private func convertA2AMessageToMessages(_ a2aMessage: A2AMessage, metadata: JSON?, taskHistory: [A2AMessage]?) throws -> [Message] {
+    private func convertA2AMessageToMessages(_ a2aMessage: A2AMessage, metadata: JSON?, taskHistory: [A2AMessage]?, params: MessageSendParams) throws -> [Message] {
         var messages: [Message] = []
         
+        // Get the system prompt, potentially updated by callback
+        var systemPrompt = config.systemPrompt
+        if let callback = config.systemPromptUpdateCallback {
+            systemPrompt = callback(params, systemPrompt)
+        }
+        
         // Add system prompt if configured
-        if let systemPrompt = config.systemPrompt {
+        if let systemPrompt = systemPrompt {
             messages.append(Message(
                 id: UUID(),
                 role: .system,
