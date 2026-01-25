@@ -25,8 +25,8 @@ import MCP
         #expect(adapter.cardCapabilities.pushNotifications == false)
         #expect(adapter.cardCapabilities.stateTransitionHistory == true)
         #expect(adapter.defaultInputModes == ["text/plain"])
-        #expect(adapter.defaultOutputModes == ["text/plain"])
-        #expect(adapter.skills.count >= 3)
+        #expect(adapter.defaultOutputModes == ["text/plain", "image/png", "image/jpeg"])
+        #expect(adapter.skills.count >= 4) // Now includes image-generation skill
     }
     
     
@@ -52,7 +52,7 @@ import MCP
             model: "gpt-4",
             maxTokens: 500,
             temperature: 0.5,
-            systemPrompt: "You are a helpful assistant.",
+            systemPrompt: DynamicPrompt(template: "You are a helpful assistant."),
             topP: 0.9,
             frequencyPenalty: 0.1,
             presencePenalty: 0.1,
@@ -69,7 +69,7 @@ import MCP
         let adapter = OpenAIAdapter(
             apiKey: "test-key",
             model: "gpt-4o",
-            systemPrompt: "You are a coding assistant. Always respond with code examples."
+            systemPrompt: DynamicPrompt(template: "You are a coding assistant. Always respond with code examples.")
         )
         
         #expect(adapter.cardCapabilities.streaming == true)
@@ -216,7 +216,7 @@ import MCP
         let config = OpenAIAdapter.Configuration(
             apiKey: "test-key",
             model: "gpt-4o",
-            systemPrompt: longPrompt
+            systemPrompt: DynamicPrompt(template: longPrompt)
         )
         let adapter = OpenAIAdapter(configuration: config)
         
@@ -229,7 +229,7 @@ import MCP
         let config = OpenAIAdapter.Configuration(
             apiKey: "test-key",
             model: "gpt-4o",
-            systemPrompt: specialPrompt
+            systemPrompt: DynamicPrompt(template: specialPrompt)
         )
         let adapter = OpenAIAdapter(configuration: config)
         
@@ -242,7 +242,7 @@ import MCP
         let config = OpenAIAdapter.Configuration(
             apiKey: "test-key",
             model: "gpt-4o",
-            systemPrompt: unicodePrompt
+            systemPrompt: DynamicPrompt(template: unicodePrompt)
         )
         let adapter = OpenAIAdapter(configuration: config)
         
@@ -310,7 +310,7 @@ import MCP
             baseURL: URL(string: "https://api.openai.com/v1")!,
             maxTokens: 1000,
             temperature: 0.7,
-            systemPrompt: "You are a helpful assistant.",
+            systemPrompt: DynamicPrompt(template: "You are a helpful assistant."),
             topP: 0.9,
             frequencyPenalty: 0.1,
             presencePenalty: 0.1,
@@ -320,7 +320,7 @@ import MCP
         let adapter = OpenAIAdapter(configuration: config)
         
         #expect(adapter.cardCapabilities.streaming == true)
-        #expect(adapter.skills.count >= 3)
+        #expect(adapter.skills.count >= 4) // Includes image-generation skill
     }
     
     @Test("OpenAIAdapter should handle minimal configuration")
@@ -329,7 +329,7 @@ import MCP
         let adapter = OpenAIAdapter(configuration: config)
         
         #expect(adapter.cardCapabilities.streaming == true)
-        #expect(adapter.skills.count >= 3)
+        #expect(adapter.skills.count >= 4) // Includes image-generation skill
     }
     
     // MARK: - Skill Validation Tests
@@ -390,6 +390,20 @@ import MCP
         #expect(analysisSkill?.name == "Text Analysis")
         #expect(analysisSkill?.tags.contains("analysis") == true)
         #expect(analysisSkill?.tags.contains("text") == true)
+    }
+    
+    @Test("OpenAIAdapter should have image generation skill")
+    func testOpenAIAdapterImageGenerationSkill() throws {
+        let adapter = OpenAIAdapter(apiKey: "test-key")
+        let imageSkill = adapter.skills.first { $0.id == "image-generation" }
+        
+        #expect(imageSkill != nil)
+        #expect(imageSkill?.name == "Image Generation")
+        #expect(imageSkill?.tags.contains("image") == true)
+        #expect(imageSkill?.tags.contains("dall-e") == true)
+        #expect(imageSkill?.inputModes?.contains("text/plain") == true)
+        #expect(imageSkill?.outputModes?.contains("image/png") == true)
+        #expect(imageSkill?.outputModes?.contains("image/jpeg") == true)
     }
     
     // MARK: - A2AToolProvider Tests

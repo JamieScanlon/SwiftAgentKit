@@ -10,6 +10,7 @@ import SwiftAgentKit
 import SwiftAgentKitA2A
 import SwiftAgentKitAdapters
 import Logging
+import EasyJSON
 
 private func configureLogging() {
     SwiftAgentKitLogging.bootstrap(
@@ -41,7 +42,7 @@ struct ExampleLLM: LLMProtocol {
     }
     
     func getCapabilities() -> [LLMCapability] {
-        return [.completion, .tools]
+        return [.completion, .tools, .imageGeneration]
     }
     
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
@@ -97,6 +98,41 @@ struct ExampleLLM: LLMProtocol {
             }
         }
     }
+    
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        if let image = config.image {
+            logger.info("Generating/editing image with prompt: '\(config.prompt)', input image: \(config.fileName ?? "unnamed")")
+        } else {
+            logger.info("Generating image (pure generation) with prompt: '\(config.prompt)'")
+        }
+        
+        // Create temporary directory for generated images
+        let tempDir = FileManager.default.temporaryDirectory
+        let imageCount = config.n ?? 1
+        
+        var imageURLs: [URL] = []
+        
+        for i in 0..<imageCount {
+            // Create a simple test image file (in real implementation, you'd generate actual images)
+            let imageURL = tempDir.appendingPathComponent("generated-image-\(UUID().uuidString).png")
+            
+            // Create a minimal PNG file for demonstration
+            // In a real implementation, you would generate actual images here
+            let pngHeader = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) // PNG signature
+            try pngHeader.write(to: imageURL)
+            
+            imageURLs.append(imageURL)
+            logger.info("Generated image \(i + 1)/\(imageCount) at: \(imageURL.path)")
+        }
+        
+        return ImageGenerationResponse(
+            images: imageURLs,
+            createdAt: Date(),
+            metadata: LLMMetadata(
+                totalTokens: 100
+            )
+        )
+    }
 }
 
 // MARK: - Test Function
@@ -108,12 +144,13 @@ func testLLMProtocolAdapter() async {
     let exampleLLM = ExampleLLM(model: "example-llm-v1")
     
     // Create the LLMProtocolAdapter with configuration
+    var systemPrompt = DynamicPrompt(template: "You are a helpful assistant powered by the ExampleLLM.")
     let adapter = LLMProtocolAdapter(
         llm: exampleLLM,
         model: "example-llm-v1",
         maxTokens: 1000,
         temperature: 0.7,
-        systemPrompt: "You are a helpful assistant powered by the ExampleLLM."
+        systemPrompt: systemPrompt
     )
     
     // Test basic properties
@@ -130,12 +167,13 @@ func testLLMProtocolAdapter() async {
     
     // Test custom configuration
     print("\nTesting custom configuration...")
+    var customPrompt = DynamicPrompt(template: "You are a specialized coding assistant.")
     let customAdapter = LLMProtocolAdapter(
         llm: exampleLLM,
         model: "example-llm-v1",
         maxTokens: 500,
         temperature: 0.3,
-        systemPrompt: "You are a specialized coding assistant.",
+        systemPrompt: customPrompt,
         agentName: "Custom Coding Agent",
         agentDescription: "A specialized agent for coding tasks and technical questions",
         cardCapabilities: AgentCard.AgentCapabilities(
@@ -227,6 +265,123 @@ func testLLMProtocolAdapter() async {
     print("\nAll tests completed!")
 }
 
+// MARK: - Image Generation Example
+
+func testImageGeneration() async {
+    print("\nTesting Image Generation...")
+    
+    // Create LLM with image generation support
+    let imageLLM = ExampleLLM(model: "image-generating-llm")
+    let adapter = LLMProtocolAdapter(
+        llm: imageLLM,
+        model: "image-generating-llm",
+        maxTokens: 1000,
+        temperature: 0.7
+    )
+    
+    let store = TaskStore()
+    
+    // Create a message requesting image generation (pure generation - no input image needed)
+    // The key is specifying image output modes in acceptedOutputModes
+    let message = A2AMessage(
+        role: "user",
+        parts: [
+            .text(text: "Generate a beautiful sunset over mountains")
+        ],
+        messageId: UUID().uuidString
+    )
+    
+    // Client accepts image output - this triggers image generation
+    let config = MessageSendConfiguration(
+        acceptedOutputModes: ["image/png", "text/plain"]
+    )
+    
+    let params = MessageSendParams(
+        message: message,
+        configuration: config,
+        metadata: try? JSON(["n": 2])  // Optional: request 2 images
+    )
+    
+    let task = A2ATask(
+        id: UUID().uuidString,
+        contextId: UUID().uuidString,
+        status: TaskStatus(
+            state: .submitted,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        )
+    )
+    await store.addTask(task: task)
+    
+    do {
+        try await adapter.handleTaskSend(params, taskId: task.id, contextId: task.contextId, store: store)
+        
+        if let updatedTask = await store.getTask(id: task.id) {
+            print("✓ Image generation successful")
+            print("  - Task state: \(updatedTask.status.state)")
+            print("  - Artifacts count: \(updatedTask.artifacts?.count ?? 0)")
+            
+            if let artifacts = updatedTask.artifacts {
+                for (index, artifact) in artifacts.enumerated() {
+                    print("  - Artifact \(index + 1):")
+                    print("    - Name: \(artifact.name ?? "unnamed")")
+                    print("    - Parts: \(artifact.parts.count)")
+                    
+                    for part in artifact.parts {
+                        if case .file(_, let url) = part {
+                            print("    - Image URL: \(url?.path ?? "nil")")
+                        }
+                    }
+                    
+                    // Check metadata for MIME type
+                    if let metadata = artifact.metadata?.literalValue as? [String: Any],
+                       let mimeType = metadata["mimeType"] as? String {
+                        print("    - MIME Type: \(mimeType)")
+                    }
+                }
+            }
+        }
+    } catch {
+        print("✗ Image generation failed: \(error)")
+    }
+    
+    // Test streaming image generation
+    print("\nTesting streaming image generation...")
+    var receivedEvents = 0
+    
+    let streamTask = A2ATask(
+        id: UUID().uuidString,
+        contextId: UUID().uuidString,
+        status: TaskStatus(
+            state: .submitted,
+            timestamp: ISO8601DateFormatter().string(from: .init())
+        )
+    )
+    await store.addTask(task: streamTask)
+    
+    do {
+        try await adapter.handleStream(
+            params,
+            taskId: streamTask.id,
+            contextId: streamTask.contextId,
+            store: store
+        ) { event in
+            receivedEvents += 1
+            print("  - Received streaming event \(receivedEvents)")
+        }
+        
+        print("✓ Streaming image generation successful")
+        print("  - Received \(receivedEvents) events")
+        
+        if let updatedTask = await store.getTask(id: streamTask.id) {
+            print("  - Final artifacts: \(updatedTask.artifacts?.count ?? 0)")
+        }
+    } catch {
+        print("✗ Streaming image generation failed: \(error)")
+    }
+    
+    print("\nImage generation tests completed!")
+}
+
 // MARK: - Main Example
 
 struct LLMProtocolAdapterExample {
@@ -235,19 +390,21 @@ struct LLMProtocolAdapterExample {
         let logger = SwiftAgentKitLogging.logger(for: .examples("LLMProtocolAdapterExample"))
         logger.info("Starting LLMProtocolAdapter example...")
         
-        // Run the test
+        // Run the tests
         await testLLMProtocolAdapter()
+        await testImageGeneration()
         
         // Create an example LLM
         let exampleLLM = ExampleLLM(model: "example-llm-v1")
         
         // Create the LLMProtocolAdapter with configuration
+        var mainPrompt = DynamicPrompt(template: "You are a helpful assistant powered by the ExampleLLM.")
         let adapter = LLMProtocolAdapter(
             llm: exampleLLM,
             model: "example-llm-v1",
             maxTokens: 1000,
             temperature: 0.7,
-            systemPrompt: "You are a helpful assistant powered by the ExampleLLM.",
+            systemPrompt: mainPrompt,
             agentName: "Example LLM Agent",
             agentDescription: "A demonstration agent using the ExampleLLM implementation"
         )

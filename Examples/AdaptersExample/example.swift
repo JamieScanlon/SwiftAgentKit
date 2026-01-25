@@ -22,10 +22,11 @@ func openAIAdapterExample() async {
     // let openAIKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? ""
     let openAIKey = "your-openai-api-key-here" // Replace with actual key
     
+    var systemPrompt = DynamicPrompt(template: "You are a helpful coding assistant. Always provide clear, concise explanations and include code examples when relevant.")
     let openAIAdapter = OpenAIAdapter(
         apiKey: openAIKey,
         model: "gpt-4o",
-        systemPrompt: "You are a helpful coding assistant. Always provide clear, concise explanations and include code examples when relevant."
+        systemPrompt: systemPrompt
     )
     
     let openAIServer = A2AServer(port: 4246, adapter: openAIAdapter)
@@ -57,10 +58,11 @@ func enhancedOpenAIExample() async {
     
     // Example 1: Basic configuration with system prompt
     logger.info("Creating OpenAI adapter with system prompt...")
+    var basicPrompt = DynamicPrompt(template: "You are a helpful coding assistant. Always provide clear, concise explanations and include code examples when relevant.")
     let basicOpenAI = OpenAIAdapter(
         apiKey: ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "demo-key",
         model: "gpt-4o",
-        systemPrompt: "You are a helpful coding assistant. Always provide clear, concise explanations and include code examples when relevant."
+        systemPrompt: basicPrompt
     )
     
     // Example 2: Full configuration with all options
@@ -71,7 +73,7 @@ func enhancedOpenAIExample() async {
         baseURL: URL(string: "https://api.openai.com/v1")!,
         maxTokens: 1000,
         temperature: 0.7,
-        systemPrompt: "You are an expert software developer. Provide detailed technical explanations and always include working code examples.",
+        systemPrompt: DynamicPrompt(template: "You are an expert software developer. Provide detailed technical explanations and always include working code examples."),
         topP: 0.9,
         frequencyPenalty: 0.1,
         presencePenalty: 0.1,
@@ -82,18 +84,20 @@ func enhancedOpenAIExample() async {
     
     // Example 3: Creative writing configuration
     logger.info("Creating OpenAI adapter for creative writing...")
+    var creativePrompt = DynamicPrompt(template: "You are a creative writer. Write engaging, imaginative content with vivid descriptions and compelling narratives.")
     let creativeOpenAI = OpenAIAdapter(
         apiKey: ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "demo-key",
         model: "gpt-4o",
-        systemPrompt: "You are a creative writer. Write engaging, imaginative content with vivid descriptions and compelling narratives."
+        systemPrompt: creativePrompt
     )
     
     // Example 4: Technical documentation configuration
     logger.info("Creating OpenAI adapter for technical documentation...")
+    var docsPrompt = DynamicPrompt(template: "You are a technical writer. Create clear, structured documentation with examples, code snippets, and step-by-step instructions.")
     let docsOpenAI = OpenAIAdapter(
         apiKey: ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "demo-key",
         model: "gpt-4o",
-        systemPrompt: "You are a technical writer. Create clear, structured documentation with examples, code snippets, and step-by-step instructions."
+        systemPrompt: docsPrompt
     )
     
     // Create servers for each configuration

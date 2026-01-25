@@ -156,10 +156,11 @@ Or in case of hitting the limit:
 
 3. **System Prompts**: Consider adding instructions in your system prompt about how to use tools and synthesize results:
    ```swift
-   systemPrompt: """
+   var prompt = DynamicPrompt(template: """
    When using tools, always synthesize the results into a clear, 
    concise answer for the user. Don't just repeat tool outputs.
-   """
+   """)
+   systemPrompt: prompt
    ```
 
 4. **Monitor Logs**: Watch the logs to understand how many iterations your typical requests require and adjust accordingly.

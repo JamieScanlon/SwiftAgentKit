@@ -3,6 +3,7 @@ import SwiftAgentKit
 import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
 import Logging
+import EasyJSON
 
 private func configureLogging() {
     SwiftAgentKitLogging.bootstrap(
@@ -23,21 +24,27 @@ struct OpenAIAdapterExample {
         logger.info("- Text content in response messages")
         logger.info("- Tool calls as separate message parts")
         logger.info("- Mixed content types in a single response")
+        logger.info("- Image generation using DALL-E")
         
         // Create OpenAI adapter with MacPaw OpenAI package and custom configuration
         // This demonstrates the full configuration options available:
         // - apiKey: Your OpenAI API key
         // - model: The model to use (gpt-4o, gpt-4, etc.)
-        // - systemPrompt: Optional system prompt to set behavior
+        // - systemPrompt: Optional DynamicPrompt to set behavior (supports token replacement)
         // - baseURL: Custom API endpoint (useful for proxies or custom deployments)
         // - organizationIdentifier: OpenAI organization ID for billing
         // - timeoutInterval: Request timeout in seconds
         // - customHeaders: Additional HTTP headers
         // - parsingOptions: Response parsing behavior (.relaxed for better compatibility)
+        
+        // Create a dynamic prompt with token support
+        var systemPrompt = DynamicPrompt(template: "You are a {{tone}} AI assistant.")
+        systemPrompt["tone"] = "helpful"
+        
         let openAIAdapter = OpenAIAdapter(
             apiKey: "your-api-key-here", // Replace with your actual API key
             model: "gpt-4o",
-            systemPrompt: "You are a helpful AI assistant.",
+            systemPrompt: systemPrompt,
             baseURL: URL(string: "https://api.openai.com/v1")!,
             organizationIdentifier: "your-org-id", // Optional: Add your OpenAI organization ID
             timeoutInterval: 120.0, // 2 minutes timeout
@@ -103,6 +110,64 @@ struct OpenAIAdapterExample {
             logger.info("Testing streaming...")
             try await openAIAdapter.handleStream(params, taskId: taskID, contextId: task.contextId, store: taskStore) { @Sendable event in
                 logger.info("Stream event received: \(type(of: event))")
+            }
+            
+            // Test image generation
+            logger.info("\nTesting image generation...")
+            let imageMessage = A2AMessage(
+                role: "user",
+                parts: [.text(text: "Generate a beautiful sunset over mountains")],
+                messageId: UUID().uuidString,
+                taskId: UUID().uuidString,
+                contextId: UUID().uuidString
+            )
+            
+            let imageTaskID = UUID().uuidString
+            let imageConfig = MessageSendConfiguration(
+                acceptedOutputModes: ["image/png", "text/plain"]
+            )
+            let imageParams = MessageSendParams(
+                message: imageMessage,
+                configuration: imageConfig,
+                metadata: try? JSON(["n": 1, "size": "1024x1024"])
+            )
+            
+            var imageTask = A2ATask(
+                id: imageTaskID,
+                contextId: UUID().uuidString,
+                status: TaskStatus(
+                    state: .submitted,
+                    timestamp: ISO8601DateFormatter().string(from: .init())
+                ),
+                history: [imageParams.message]
+            )
+            await taskStore.addTask(task: imageTask)
+            
+            try await openAIAdapter.handleTaskSend(imageParams, taskId: imageTaskID, contextId: imageTask.contextId, store: taskStore)
+            
+            imageTask = await taskStore.getTask(id: imageTaskID)!
+            logger.info("Image generation completed. Status: \(imageTask.status.state)")
+            
+            if let artifacts = imageTask.artifacts {
+                logger.info("Generated \(artifacts.count) image artifact(s):")
+                for (index, artifact) in artifacts.enumerated() {
+                    logger.info("  Artifact \(index + 1):")
+                    logger.info("    - Name: \(artifact.name ?? "unnamed")")
+                    logger.info("    - Description: \(artifact.description ?? "none")")
+                    for part in artifact.parts {
+                        if case .file(_, let url) = part {
+                            logger.info("    - Image URL: \(url?.path ?? "nil")")
+                        }
+                    }
+                    if let metadata = artifact.metadata?.literalValue as? [String: Any] {
+                        if let mimeType = metadata["mimeType"] as? String {
+                            logger.info("    - MIME Type: \(mimeType)")
+                        }
+                        if let createdAt = metadata["createdAt"] as? String {
+                            logger.info("    - Created At: \(createdAt)")
+                        }
+                    }
+                }
             }
             
         } catch {
