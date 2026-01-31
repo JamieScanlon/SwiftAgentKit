@@ -758,6 +758,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             // Agentic loop: continue calling LLM until we get a response without tool calls
             var iteration = 0
             var finalResponse: String = ""
+            var toolFileArtifacts: [Artifact] = []
             
             while iteration < config.maxAgenticIterations {
                 iteration += 1
@@ -822,6 +823,47 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                             let toolResultText = "Successfully Executed Tool: \(toolCall.name)\n-- Start Tool Result ---\n\(result.content)\n-- End Tool Result ---\n\nYou can now continue with the next step in the conversation."
                             toolResults.append(toolResultText)
                             
+                            // Check for file resources in metadata
+                            if let metadataDict = result.metadata.literalValue as? [String: Any],
+                               let fileResources = metadataDict["fileResources"] as? [[String: Any]] {
+                                for (index, fileResource) in fileResources.enumerated() {
+                                    if let uri = fileResource["uri"] as? String,
+                                       let mimeType = fileResource["mimeType"] as? String,
+                                       let base64Data = fileResource["data"] as? String,
+                                       let fileData = Data(base64Encoded: base64Data) {
+                                        
+                                        let fileName = fileResource["name"] as? String ?? "file-\(index + 1)"
+                                        
+                                        // Create file artifact
+                                        let artifactMetadata = try? JSON([
+                                            "mimeType": mimeType,
+                                            "source": "mcp_tool",
+                                            "toolName": toolCall.name
+                                        ])
+                                        
+                                        let artifact = Artifact(
+                                            artifactId: UUID().uuidString,
+                                            parts: [.file(data: fileData, url: nil)],
+                                            name: fileName,
+                                            description: "File resource from MCP tool: \(toolCall.name)",
+                                            metadata: artifactMetadata
+                                        )
+                                        
+                                        toolFileArtifacts.append(artifact)
+                                        
+                                        logger.info(
+                                            "Created file artifact from MCP tool result",
+                                            metadata: SwiftAgentKitLogging.metadata(
+                                                ("toolName", .string(toolCall.name)),
+                                                ("fileName", .string(fileName)),
+                                                ("mimeType", .string(mimeType)),
+                                                ("size", .stringConvertible(fileData.count))
+                                            )
+                                        )
+                                    }
+                                }
+                            }
+                            
                             // Add tool result as a tool message
                             messages.append(Message(
                                 id: UUID(),
@@ -871,10 +913,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 parts: [.text(text: finalResponse)]
             )
             
+            // Combine response artifact with file artifacts from tool results
+            var allArtifacts = [responseArtifact]
+            allArtifacts.append(contentsOf: toolFileArtifacts)
+            
             // Update the task artifacts
             await store.updateTaskArtifacts(
                 id: taskId,
-                artifacts: [responseArtifact]
+                artifacts: allArtifacts
             )
             
             // Update task with completed status
@@ -1046,6 +1092,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             // Agentic loop: continue calling LLM until we get a response without tool calls
             var iteration = 0
             var finalResponse: String = ""
+            var toolFileArtifacts: [Artifact] = []
             
             while iteration < config.maxAgenticIterations {
                 iteration += 1
@@ -1176,6 +1223,38 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     for provider in toolProviders {
                         let result = try await provider.executeTool(toolCall)
                         if result.success {
+                            // Check for file resources in metadata
+                            if let metadataDict = result.metadata.literalValue as? [String: Any],
+                               let fileResources = metadataDict["fileResources"] as? [[String: Any]] {
+                                for (index, fileResource) in fileResources.enumerated() {
+                                    if let uri = fileResource["uri"] as? String,
+                                       let mimeType = fileResource["mimeType"] as? String,
+                                       let base64Data = fileResource["data"] as? String,
+                                       let fileData = Data(base64Encoded: base64Data) {
+                                        
+                                        let fileName = fileResource["name"] as? String ?? "file-\(index + 1)"
+                                        
+                                        // Create file artifact
+                                        let artifactMetadata = try? JSON([
+                                            "mimeType": mimeType,
+                                            "source": "mcp_tool",
+                                            "toolName": toolCall.name
+                                        ])
+                                        
+                                        let artifact = Artifact(
+                                            artifactId: UUID().uuidString,
+                                            parts: [.file(data: fileData, url: nil)],
+                                            name: fileName,
+                                            description: "File resource from MCP tool: \(toolCall.name)",
+                                            metadata: artifactMetadata,
+                                            extensions: []
+                                        )
+                                        
+                                        toolFileArtifacts.append(artifact)
+                                    }
+                                }
+                            }
+                            
                             // Add tool result as a tool message
                             messages.append(Message(
                                 id: UUID(),
@@ -1228,7 +1307,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 extensions: []
             )
             
-            await store.updateTaskArtifacts(id: taskId, artifacts: [finalArtifact])
+            // Combine response artifact with file artifacts from tool results
+            var allArtifacts = [finalArtifact]
+            allArtifacts.append(contentsOf: toolFileArtifacts)
+            
+            await store.updateTaskArtifacts(id: taskId, artifacts: allArtifacts)
             
             let artifactEvent = TaskArtifactUpdateEvent(
                 taskId: taskId,

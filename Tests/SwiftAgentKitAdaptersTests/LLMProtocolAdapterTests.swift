@@ -12,6 +12,7 @@ import SwiftAgentKitA2A
 import SwiftAgentKitAdapters
 import Logging
 import EasyJSON
+import SwiftAgentKitMCP
 
 // MARK: - Test LLM Implementation
 
@@ -790,5 +791,355 @@ struct TestLLM: LLMProtocol {
         } else {
             #expect(false, "Decoded part is not a file part")
         }
+    }
+    
+    // MARK: - File Artifact Creation from Tool Results Tests
+    
+    @Test("LLMProtocolAdapter should create file artifacts from tool result metadata")
+    func testAdapterCreatesFileArtifactsFromToolResults() async throws {
+        // Create test file data
+        let testFileData = "Test file content".data(using: .utf8)!
+        let base64Data = testFileData.base64EncodedString()
+        
+        // Create a tool provider that returns file resources in metadata
+        let fileResourceProvider = FileResourceToolProvider(
+            fileResources: [
+                [
+                    "uri": .string("file:///test/file.txt"),
+                    "mimeType": .string("text/plain"),
+                    "name": .string("file.txt"),
+                    "data": .string(base64Data)
+                ]
+            ],
+            textContent: "Generated 1 file(s)"
+        )
+        
+        // Create a test LLM that returns tool calls
+        let testLLM = TestLLMWithToolCalls(
+            model: "test-model",
+            toolCalls: [
+                ToolCall(name: "file_tool", arguments: .object([:]), id: UUID().uuidString)
+            ]
+        )
+        
+        let adapter = LLMProtocolAdapter(
+            llm: testLLM,
+            model: "test-model"
+        )
+        
+        let store = TaskStore()
+        
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Generate a file")],
+            messageId: UUID().uuidString
+        )
+        
+        let params = MessageSendParams(message: message)
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
+        
+        try await adapter.handleTaskSendWithTools(params, taskId: task.id, contextId: task.contextId, toolProviders: [fileResourceProvider], store: store)
+        
+        if let updatedTask = await store.getTask(id: task.id) {
+            #expect(updatedTask.status.state == .completed)
+            #expect(updatedTask.artifacts?.count ?? 0 >= 2) // Text response + file artifact
+            
+            // Find the file artifact
+            let fileArtifacts = updatedTask.artifacts?.filter { artifact in
+                if case .file = artifact.parts.first {
+                    return true
+                }
+                return false
+            } ?? []
+            
+            #expect(fileArtifacts.count == 1)
+            
+            if let fileArtifact = fileArtifacts.first {
+                #expect(fileArtifact.name == "file.txt")
+                if let description = fileArtifact.description {
+                    #expect(description.contains("MCP tool"))
+                }
+                
+                if case .file(let data, _) = fileArtifact.parts.first {
+                    #expect(data != nil)
+                    #expect(data == testFileData)
+                } else {
+                    Issue.record("Expected file part with data")
+                }
+                
+                // Check metadata
+                if let metadata = fileArtifact.metadata,
+                   let metadataDict = metadata.literalValue as? [String: Any] {
+                    #expect(metadataDict["mimeType"] as? String == "text/plain")
+                    #expect(metadataDict["source"] as? String == "mcp_tool")
+                }
+            } else {
+                Issue.record("File artifact should be created")
+            }
+        } else {
+            Issue.record("Task not found")
+        }
+    }
+    
+    @Test("LLMProtocolAdapter should create multiple file artifacts from tool results")
+    func testAdapterCreatesMultipleFileArtifacts() async throws {
+        // Create test file data
+        let testFileData1 = "Content 1".data(using: .utf8)!
+        let testFileData2 = "Content 2".data(using: .utf8)!
+        let base64Data1 = testFileData1.base64EncodedString()
+        let base64Data2 = testFileData2.base64EncodedString()
+        
+        // Create a tool provider that returns multiple file resources
+        let fileResourceProvider = FileResourceToolProvider(
+            fileResources: [
+                [
+                    "uri": .string("file:///test/file1.txt"),
+                    "mimeType": .string("text/plain"),
+                    "name": .string("file1.txt"),
+                    "data": .string(base64Data1)
+                ],
+                [
+                    "uri": .string("file:///test/file2.txt"),
+                    "mimeType": .string("text/plain"),
+                    "name": .string("file2.txt"),
+                    "data": .string(base64Data2)
+                ]
+            ],
+            textContent: "Generated 2 files"
+        )
+        
+        let testLLM = TestLLMWithToolCalls(
+            model: "test-model",
+            toolCalls: [
+                ToolCall(name: "file_tool", arguments: .object([:]), id: UUID().uuidString)
+            ]
+        )
+        
+        let adapter = LLMProtocolAdapter(
+            llm: testLLM,
+            model: "test-model"
+        )
+        
+        let store = TaskStore()
+        
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Generate files")],
+            messageId: UUID().uuidString
+        )
+        
+        let params = MessageSendParams(message: message)
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
+        
+        try await adapter.handleTaskSendWithTools(params, taskId: task.id, contextId: task.contextId, toolProviders: [fileResourceProvider], store: store)
+        
+        if let updatedTask = await store.getTask(id: task.id) {
+            #expect(updatedTask.status.state == .completed)
+            
+            // Find file artifacts
+            let fileArtifacts = updatedTask.artifacts?.filter { artifact in
+                if case .file = artifact.parts.first {
+                    return true
+                }
+                return false
+            } ?? []
+            
+            #expect(fileArtifacts.count == 2)
+            #expect(fileArtifacts[0].name == "file1.txt")
+            #expect(fileArtifacts[1].name == "file2.txt")
+        } else {
+            Issue.record("Task not found")
+        }
+    }
+    
+    @Test("LLMProtocolAdapter should combine text and file artifacts")
+    func testAdapterCombinesTextAndFileArtifacts() async throws {
+        let testFileData = "File content".data(using: .utf8)!
+        let base64Data = testFileData.base64EncodedString()
+        
+        let fileResourceProvider = FileResourceToolProvider(
+            fileResources: [
+                [
+                    "uri": .string("file:///test/file.txt"),
+                    "mimeType": .string("text/plain"),
+                    "name": .string("file.txt"),
+                    "data": .string(base64Data)
+                ]
+            ],
+            textContent: "Generated file successfully"
+        )
+        
+        let testLLM = TestLLMWithToolCalls(
+            model: "test-model",
+            toolCalls: [
+                ToolCall(name: "file_tool", arguments: .object([:]), id: UUID().uuidString)
+            ]
+        )
+        
+        let adapter = LLMProtocolAdapter(
+            llm: testLLM,
+            model: "test-model"
+        )
+        
+        let store = TaskStore()
+        
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Generate a file")],
+            messageId: UUID().uuidString
+        )
+        
+        let params = MessageSendParams(message: message)
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
+        
+        try await adapter.handleTaskSendWithTools(params, taskId: task.id, contextId: task.contextId, toolProviders: [fileResourceProvider], store: store)
+        
+        if let updatedTask = await store.getTask(id: task.id) {
+            #expect(updatedTask.status.state == .completed)
+            
+            // Should have both text response artifact and file artifact
+            let textArtifacts = updatedTask.artifacts?.filter { artifact in
+                if case .text = artifact.parts.first {
+                    return true
+                }
+                return false
+            } ?? []
+            
+            let fileArtifacts = updatedTask.artifacts?.filter { artifact in
+                if case .file = artifact.parts.first {
+                    return true
+                }
+                return false
+            } ?? []
+            
+            #expect(textArtifacts.count >= 1)
+            #expect(fileArtifacts.count == 1)
+        } else {
+            Issue.record("Task not found")
+        }
+    }
+    
+    @Test("LLMProtocolAdapter should handle tool results without file resources")
+    func testAdapterHandlesToolResultsWithoutFileResources() async throws {
+        // Tool provider with no file resources
+        let textOnlyProvider = FileResourceToolProvider(
+            fileResources: [],
+            textContent: "Tool executed successfully"
+        )
+        
+        let testLLM = TestLLMWithToolCalls(
+            model: "test-model",
+            toolCalls: [
+                ToolCall(name: "text_tool", arguments: .object([:]), id: UUID().uuidString)
+            ]
+        )
+        
+        let adapter = LLMProtocolAdapter(
+            llm: testLLM,
+            model: "test-model"
+        )
+        
+        let store = TaskStore()
+        
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Execute tool")],
+            messageId: UUID().uuidString
+        )
+        
+        let params = MessageSendParams(message: message)
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
+        
+        try await adapter.handleTaskSendWithTools(params, taskId: task.id, contextId: task.contextId, toolProviders: [textOnlyProvider], store: store)
+        
+        if let updatedTask = await store.getTask(id: task.id) {
+            #expect(updatedTask.status.state == .completed)
+            
+            // Should only have text artifacts, no file artifacts
+            let fileArtifacts = updatedTask.artifacts?.filter { artifact in
+                if case .file = artifact.parts.first {
+                    return true
+                }
+                return false
+            } ?? []
+            
+            #expect(fileArtifacts.isEmpty)
+        } else {
+            Issue.record("Task not found")
+        }
+    }
+}
+
+// MARK: - Test Helper: LLM with Tool Calls
+
+struct TestLLMWithToolCalls: LLMProtocol {
+    let model: String
+    let logger: Logger
+    let toolCalls: [ToolCall]
+    
+    init(model: String = "test-llm", toolCalls: [ToolCall]) {
+        self.model = model
+        self.logger = Logger(label: "TestLLMWithToolCalls")
+        self.toolCalls = toolCalls
+    }
+    
+    func getModelName() -> String {
+        return model
+    }
+    
+    func getCapabilities() -> [LLMCapability] {
+        return [.completion, .tools]
+    }
+    
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        // First call returns tool calls, second call returns final response
+        if messages.contains(where: { $0.role == .tool }) {
+            // Second call - return final response
+            return LLMResponse.complete(content: "Task completed successfully")
+        } else {
+            // First call - return tool calls
+            return LLMResponse.withToolCalls(
+                content: "",
+                toolCalls: toolCalls
+            )
+        }
+    }
+    
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        return AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    let response = try await send(messages, config: config)
+                    continuation.yield(.complete(response))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+    
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        throw LLMError.invalidRequest("Not implemented")
     }
 } 

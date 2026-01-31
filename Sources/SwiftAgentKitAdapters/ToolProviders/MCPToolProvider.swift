@@ -10,6 +10,7 @@ import Logging
 import MCP
 import SwiftAgentKit
 import SwiftAgentKitMCP
+import EasyJSON
 
 /// Direct MCP tool provider
 public struct MCPToolProvider: ToolProvider {
@@ -49,13 +50,70 @@ public struct MCPToolProvider: ToolProvider {
                 let arguments = toolCall.argumentsToValue()
                 
                 if let contents = try await client.callTool(toolCall.name, arguments: arguments) {
-                    let content = contents.compactMap { content in
+                    // Extract text content
+                    let textContent = contents.compactMap { content in
                         if case .text(let text) = content { return text } else { return nil }
                     }.joined(separator: "\n")
+                    
+                    // Extract resource content (file:// URIs)
+                    var fileResources: [[String: JSON]] = []
+                    for content in contents {
+                        if case .resource(let uri, let mimeType, let text) = content {
+                            // Only handle file:// URIs
+                            if uri.hasPrefix("file://") {
+                                do {
+                                    let fileURL = URL(string: uri)
+                                    if let fileURL = fileURL, fileURL.scheme == "file" {
+                                        // Read file data
+                                        let fileData = try Data(contentsOf: fileURL)
+                                        let base64Data = fileData.base64EncodedString()
+                                        
+                                        var resourceInfo: [String: JSON] = [
+                                            "uri": .string(uri),
+                                            "mimeType": .string(mimeType),
+                                            "data": .string(base64Data)
+                                        ]
+                                        
+                                        if let text = text {
+                                            resourceInfo["name"] = .string(text)
+                                        }
+                                        
+                                        fileResources.append(resourceInfo)
+                                        
+                                        logger.info(
+                                            "Read file resource from MCP tool",
+                                            metadata: SwiftAgentKitLogging.metadata(
+                                                ("toolName", .string(toolCall.name)),
+                                                ("uri", .string(uri)),
+                                                ("mimeType", .string(mimeType)),
+                                                ("size", .stringConvertible(fileData.count))
+                                            )
+                                        )
+                                    }
+                                } catch {
+                                    logger.warning(
+                                        "Failed to read file resource",
+                                        metadata: SwiftAgentKitLogging.metadata(
+                                            ("toolName", .string(toolCall.name)),
+                                            ("uri", .string(uri)),
+                                            ("error", .string(String(describing: error)))
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Build metadata with file resources if any
+                    var metadata: [String: JSON] = ["source": .string("mcp_tool")]
+                    if !fileResources.isEmpty {
+                        metadata["fileResources"] = .array(fileResources.map { .object($0) })
+                    }
+                    
                     return ToolResult(
                         success: true,
-                        content: content,
-                        metadata: .object(["source": .string("mcp_tool")]),
+                        content: textContent,
+                        metadata: .object(metadata),
                         toolCallId: toolCall.id
                     )
                 }

@@ -10,6 +10,7 @@ import Testing
 import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
 import SwiftAgentKit
+import SwiftAgentKitMCP
 import EasyJSON
 import MCP
 
@@ -483,6 +484,12 @@ import MCP
         #expect(result.content.isEmpty)
         #expect(result.error == "MCP tool not found or failed")
     }
+    
+    // MARK: - MCPToolProvider Resource Content Tests
+    
+    // Note: Direct MCPToolProvider tests with file resources require actual MCPClient instances
+    // which are complex to mock. Instead, we test the adapter's artifact creation logic
+    // which is the actual integration point.
     
     // MARK: - ToolManager Tests
     
@@ -992,6 +999,40 @@ struct CustomTestToolProvider: ToolProvider {
             content: "",
             toolCallId: toolCall.id,
             error: "Unknown tool: \(toolCall.name)"
+        )
+    }
+}
+
+// MARK: - Test Tool Provider with File Resources
+
+/// Test tool provider that returns file resources in metadata
+struct FileResourceToolProvider: ToolProvider {
+    let name: String = "File Resource Test Provider"
+    let fileResources: [[String: JSON]]
+    let textContent: String
+    
+    func availableTools() async -> [ToolDefinition] {
+        return [
+            ToolDefinition(
+                name: "file_tool",
+                description: "Tool that returns file resources",
+                parameters: [],
+                type: .function
+            )
+        ]
+    }
+    
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        var metadata: [String: JSON] = ["source": .string("test_tool")]
+        if !fileResources.isEmpty {
+            metadata["fileResources"] = .array(fileResources.map { .object($0) })
+        }
+        
+        return ToolResult(
+            success: true,
+            content: textContent,
+            metadata: .object(metadata),
+            toolCallId: toolCall.id
         )
     }
 } 

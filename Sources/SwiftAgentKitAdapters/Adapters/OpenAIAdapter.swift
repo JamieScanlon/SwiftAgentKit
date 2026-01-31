@@ -796,11 +796,43 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             }
             
             // Execute the tool calls and add the tool content
+            var toolFileArtifacts: [Artifact] = []
             for toolCall in llmResponse.toolCalls {
                 for provider in toolProviders {
                     let result = try await provider.executeTool(toolCall)
                     if result.success {
                         responseParts.append(.text(text: result.content))
+                        
+                        // Check for file resources in metadata
+                        if let metadataDict = result.metadata.literalValue as? [String: Any],
+                           let fileResources = metadataDict["fileResources"] as? [[String: Any]] {
+                            for (index, fileResource) in fileResources.enumerated() {
+                                if let uri = fileResource["uri"] as? String,
+                                   let mimeType = fileResource["mimeType"] as? String,
+                                   let base64Data = fileResource["data"] as? String,
+                                   let fileData = Data(base64Encoded: base64Data) {
+                                    
+                                    let fileName = fileResource["name"] as? String ?? "file-\(index + 1)"
+                                    
+                                    // Create file artifact
+                                    let artifactMetadata = try? JSON([
+                                        "mimeType": mimeType,
+                                        "source": "mcp_tool",
+                                        "toolName": toolCall.name
+                                    ])
+                                    
+                                    let artifact = Artifact(
+                                        artifactId: UUID().uuidString,
+                                        parts: [.file(data: fileData, url: nil)],
+                                        name: fileName,
+                                        description: "File resource from MCP tool: \(toolCall.name)",
+                                        metadata: artifactMetadata
+                                    )
+                                    
+                                    toolFileArtifacts.append(artifact)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -811,10 +843,14 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 parts: responseParts
             )
             
+            // Combine response artifact with file artifacts from tool results
+            var allArtifacts = [responseArtifact]
+            allArtifacts.append(contentsOf: toolFileArtifacts)
+            
             // Update the task artifacts
             await store.updateTaskArtifacts(
                 id: taskId,
-                artifacts: [responseArtifact]
+                artifacts: allArtifacts
             )
             
             // Update task with completed status
@@ -1029,11 +1065,44 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             }
             
             // Execute the tool calls and add the tool content
+            var toolFileArtifacts: [Artifact] = []
             for toolCall in llmResponse.toolCalls {
                 for provider in toolProviders {
                     let result = try await provider.executeTool(toolCall)
                     if result.success {
                         responseParts.append(.text(text: result.content))
+                        
+                        // Check for file resources in metadata
+                        if let metadataDict = result.metadata.literalValue as? [String: Any],
+                           let fileResources = metadataDict["fileResources"] as? [[String: Any]] {
+                            for (index, fileResource) in fileResources.enumerated() {
+                                if let uri = fileResource["uri"] as? String,
+                                   let mimeType = fileResource["mimeType"] as? String,
+                                   let base64Data = fileResource["data"] as? String,
+                                   let fileData = Data(base64Encoded: base64Data) {
+                                    
+                                    let fileName = fileResource["name"] as? String ?? "file-\(index + 1)"
+                                    
+                                    // Create file artifact
+                                    let artifactMetadata = try? JSON([
+                                        "mimeType": mimeType,
+                                        "source": "mcp_tool",
+                                        "toolName": toolCall.name
+                                    ])
+                                    
+                                    let artifact = Artifact(
+                                        artifactId: UUID().uuidString,
+                                        parts: [.file(data: fileData, url: nil)],
+                                        name: fileName,
+                                        description: "File resource from MCP tool: \(toolCall.name)",
+                                        metadata: artifactMetadata,
+                                        extensions: []
+                                    )
+                                    
+                                    toolFileArtifacts.append(artifact)
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1048,7 +1117,11 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                 extensions: []
             )
             
-            await store.updateTaskArtifacts(id: taskId, artifacts: [artifact])
+            // Combine response artifact with file artifacts from tool results
+            var allArtifacts = [artifact]
+            allArtifacts.append(contentsOf: toolFileArtifacts)
+            
+            await store.updateTaskArtifacts(id: taskId, artifacts: allArtifacts)
             
             let artifactEvent = TaskArtifactUpdateEvent(
                 taskId: taskId,
