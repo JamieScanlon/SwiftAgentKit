@@ -1251,6 +1251,26 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                                         )
                                         
                                         toolFileArtifacts.append(artifact)
+                                        
+                                        // Stream tool file artifact immediately after creation
+                                        // This ensures clients receive artifacts as soon as they're available
+                                        let artifactEvent = TaskArtifactUpdateEvent(
+                                            taskId: taskId,
+                                            contextId: contextId,
+                                            kind: "artifact-update",
+                                            artifact: artifact,
+                                            append: false,
+                                            lastChunk: false,  // Not the last chunk if we'll have a final response
+                                            metadata: nil
+                                        )
+                                        
+                                        let artifactResponse = SendStreamingMessageSuccessResponse(
+                                            jsonrpc: "2.0",
+                                            id: requestId,
+                                            result: artifactEvent
+                                        )
+                                        
+                                        eventSink(artifactResponse)
                                     }
                                 }
                             }
@@ -1298,38 +1318,48 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             }
             
             // Create artifact update event for final response
-            let finalArtifact = Artifact(
-                artifactId: UUID().uuidString,
-                parts: [.text(text: finalResponse)],
-                name: "final-llm-response",
-                description: "Final streaming response from LLM",
-                metadata: nil,
-                extensions: []
-            )
+            // Only stream final artifact if there's actual content, or if there are no tool artifacts
+            let shouldStreamFinalArtifact = !finalResponse.isEmpty || toolFileArtifacts.isEmpty
             
-            // Combine response artifact with file artifacts from tool results
-            var allArtifacts = [finalArtifact]
-            allArtifacts.append(contentsOf: toolFileArtifacts)
-            
-            await store.updateTaskArtifacts(id: taskId, artifacts: allArtifacts)
-            
-            let artifactEvent = TaskArtifactUpdateEvent(
-                taskId: taskId,
-                contextId: contextId,
-                kind: "artifact-update",
-                artifact: finalArtifact,
-                append: false,
-                lastChunk: true,
-                metadata: nil
-            )
-            
-            let streamingEvent = SendStreamingMessageSuccessResponse(
-                jsonrpc: "2.0",
-                id: requestId,
-                result: artifactEvent
-            )
-            
-            eventSink(streamingEvent)
+            if shouldStreamFinalArtifact {
+                let finalArtifact = Artifact(
+                    artifactId: UUID().uuidString,
+                    parts: [.text(text: finalResponse)],
+                    name: "final-llm-response",
+                    description: "Final streaming response from LLM",
+                    metadata: nil,
+                    extensions: []
+                )
+                
+                // Combine response artifact with file artifacts from tool results
+                var allArtifacts = [finalArtifact]
+                allArtifacts.append(contentsOf: toolFileArtifacts)
+                
+                await store.updateTaskArtifacts(id: taskId, artifacts: allArtifacts)
+                
+                // Stream final artifact - this is always the last chunk
+                let artifactEvent = TaskArtifactUpdateEvent(
+                    taskId: taskId,
+                    contextId: contextId,
+                    kind: "artifact-update",
+                    artifact: finalArtifact,
+                    append: false,
+                    lastChunk: true,
+                    metadata: nil
+                )
+                
+                let streamingEvent = SendStreamingMessageSuccessResponse(
+                    jsonrpc: "2.0",
+                    id: requestId,
+                    result: artifactEvent
+                )
+                
+                eventSink(streamingEvent)
+            } else {
+                // No final response, but we have tool artifacts - update the store
+                // Tool artifacts were already streamed when created, so we just need to save them
+                await store.updateTaskArtifacts(id: taskId, artifacts: toolFileArtifacts)
+            }
             
             // Update task with completed status
             let completedStatus = TaskStatus(
