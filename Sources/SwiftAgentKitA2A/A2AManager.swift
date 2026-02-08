@@ -10,6 +10,12 @@ import Logging
 import SwiftAgentKit
 import EasyJSON
 
+/// Protocol for A2A clients that support streaming; allows injection of test doubles.
+public protocol A2AAgentStreamClient: Sendable {
+    var agentCard: AgentCard? { get async }
+    func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>>
+}
+
 public actor A2AManager {
     private let logger: Logger
     
@@ -44,15 +50,15 @@ public actor A2AManager {
         }
     }
     
-    /// Initialize the A2AManager with an arrat of `A2AClient` objects
-    public func initialize(clients: [A2AClient]) async throws {
+    /// Initialize the A2AManager with an array of stream-capable A2A clients (e.g. `A2AClient` or test doubles).
+    public func initialize(clients: [any A2AAgentStreamClient]) async throws {
         self.clients = clients
         await buildToolsJson()
     }
     
     public func agentCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
         // Find the client whose agent card name matches the tool call name
-        var matchingClient: A2AClient?
+        var matchingClient: (any A2AAgentStreamClient)?
         for client in clients {
             guard let agentCard = await client.agentCard else { continue }
             if agentCard.name == toolCall.name {
@@ -76,30 +82,36 @@ public actor A2AManager {
         var returnResponses: [LLMResponse] = []
         var responseText: String = ""
         var accumulatedImages: [Message.Image] = []
+        var accumulatedFiles: [LLMResponseFile] = []
         
         for await content in contents {
             switch content.result {
             case .message(let aMessage):
-                let (text, images) = extractTextAndImages(from: aMessage.parts)
+                let (text, images, files) = extractTextImagesAndFiles(from: aMessage.parts)
                 accumulatedImages.append(contentsOf: images)
-                let metadata = createMetadataWithImages(images)
+                accumulatedFiles.append(contentsOf: files)
+                let metadata = createMetadata(images: images, files: files)
                 returnResponses.append(LLMResponse.complete(content: text, metadata: metadata))
             case .task(let task):
                 var text: String = ""
                 var taskImages: [Message.Image] = []
+                var taskFiles: [LLMResponseFile] = []
                 if let artifacts = task.artifacts {
                     for artifact in artifacts {
-                        let (artifactText, artifactImages) = extractTextAndImages(from: artifact.parts, artifactName: artifact.name)
+                        let (artifactText, artifactImages, artifactFiles) = extractTextImagesAndFiles(from: artifact.parts, artifactName: artifact.name)
                         text += artifactText
                         taskImages.append(contentsOf: artifactImages)
+                        taskFiles.append(contentsOf: artifactFiles)
                     }
                 }
                 accumulatedImages.append(contentsOf: taskImages)
-                let metadata = createMetadataWithImages(taskImages)
+                accumulatedFiles.append(contentsOf: taskFiles)
+                let metadata = createMetadata(images: taskImages, files: taskFiles)
                 returnResponses.append(LLMResponse.complete(content: text, metadata: metadata))
             case .taskArtifactUpdate(let event):
-                let (artifactText, artifactImages) = extractTextAndImages(from: event.artifact.parts, artifactName: event.artifact.name)
+                let (artifactText, artifactImages, artifactFiles) = extractTextImagesAndFiles(from: event.artifact.parts, artifactName: event.artifact.name)
                 accumulatedImages.append(contentsOf: artifactImages)
+                accumulatedFiles.append(contentsOf: artifactFiles)
                 
                 if event.append == true {
                     responseText += artifactText
@@ -107,29 +119,34 @@ public actor A2AManager {
                     responseText = artifactText
                 }
                 if event.lastChunk == true {
-                    let metadata = createMetadataWithImages(accumulatedImages)
+                    let metadata = createMetadata(images: accumulatedImages, files: accumulatedFiles)
                     returnResponses.append(LLMResponse.complete(content: responseText, metadata: metadata))
                     responseText = ""
                     accumulatedImages = []
+                    accumulatedFiles = []
                 }
             case .taskStatusUpdate(let event):
-                if event.status.state == .completed, (!responseText.isEmpty || !accumulatedImages.isEmpty) {
-                    let metadata = createMetadataWithImages(accumulatedImages)
+                if event.status.state == .completed, (!responseText.isEmpty || !accumulatedImages.isEmpty || !accumulatedFiles.isEmpty) {
+                    let metadata = createMetadata(images: accumulatedImages, files: accumulatedFiles)
                     returnResponses.append(LLMResponse.complete(content: responseText, metadata: metadata))
                     responseText = ""
                     accumulatedImages = []
+                    accumulatedFiles = []
                 }
             }
         }
         return returnResponses
     }
     
-    // MARK: - Helper Methods for Image Extraction
+    // MARK: - Helper Methods for Content Extraction
     
-    /// Extracts text and images from A2A message parts
-    private func extractTextAndImages(from parts: [A2AMessagePart], artifactName: String? = nil) -> (text: String, images: [Message.Image]) {
+    /// Extracts text, images, and file/data content from A2A message parts.
+    /// Image parts go to `images`; other file/data parts go to `files`.
+    private func extractTextImagesAndFiles(from parts: [A2AMessagePart], artifactName: String? = nil) -> (text: String, images: [Message.Image], files: [LLMResponseFile]) {
         var textParts: [String] = []
         var images: [Message.Image] = []
+        var files: [LLMResponseFile] = []
+        let baseName = artifactName ?? "part"
         
         for (index, part) in parts.enumerated() {
             switch part {
@@ -139,63 +156,71 @@ public actor A2AManager {
                 }
             case .file(let data, let url):
                 if let imageData = data {
-                    // Determine MIME type from artifact metadata or file extension
                     let mimeType = detectMIMEType(from: imageData)
-                    let imageName = artifactName ?? "image-\(index + 1)"
-                    
-                    // Create Message.Image from file data
-                    let image = Message.Image(
-                        name: imageName,
-                        path: url?.absoluteString,
-                        imageData: imageData,
-                        thumbData: nil
-                    )
-                    images.append(image)
-                    
-                    logger.debug(
-                        "Extracted image from file part",
-                        metadata: SwiftAgentKitLogging.metadata(
-                            ("imageName", .string(imageName)),
-                            ("dataSize", .stringConvertible(imageData.count)),
-                            ("mimeType", .string(mimeType ?? "unknown"))
+                    let name = artifactName ?? "\(baseName)-\(index + 1)"
+                    if mimeType?.hasPrefix("image/") == true {
+                        let image = Message.Image(
+                            name: name,
+                            path: url?.absoluteString,
+                            imageData: imageData,
+                            thumbData: nil
                         )
-                    )
+                        images.append(image)
+                        logger.debug(
+                            "Extracted image from file part",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("imageName", .string(name)),
+                                ("dataSize", .stringConvertible(imageData.count)),
+                                ("mimeType", .string(mimeType ?? "unknown"))
+                            )
+                        )
+                    } else {
+                        files.append(LLMResponseFile(name: name, mimeType: mimeType, data: imageData, url: url))
+                        logger.debug(
+                            "Extracted file from file part",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("name", .string(name)),
+                                ("dataSize", .stringConvertible(imageData.count)),
+                                ("mimeType", .string(mimeType ?? "unknown"))
+                            )
+                        )
+                    }
                 } else if let url = url {
-                    // If URL but no data, create image with path only
-                    let imageName = artifactName ?? "image-\(index + 1)"
-                    let image = Message.Image(
-                        name: imageName,
-                        path: url.absoluteString,
-                        imageData: nil,
-                        thumbData: nil
-                    )
-                    images.append(image)
-                    
+                    let name = artifactName ?? "\(baseName)-\(index + 1)"
+                    files.append(LLMResponseFile(name: name, mimeType: nil, data: nil, url: url))
                     logger.debug(
-                        "Extracted image URL from file part",
+                        "Extracted file URL from file part",
                         metadata: SwiftAgentKitLogging.metadata(
-                            ("imageName", .string(imageName)),
+                            ("name", .string(name)),
                             ("url", .string(url.absoluteString))
                         )
                     )
                 }
             case .data(let data):
-                // Try to detect if it's image data
                 let mimeType = detectMIMEType(from: data)
+                let name = artifactName ?? "\(baseName)-\(index + 1)"
                 if mimeType?.hasPrefix("image/") == true {
-                    let imageName = artifactName ?? "image-\(index + 1)"
                     let image = Message.Image(
-                        name: imageName,
+                        name: name,
                         path: nil,
                         imageData: data,
                         thumbData: nil
                     )
                     images.append(image)
-                    
                     logger.debug(
                         "Extracted image from data part",
                         metadata: SwiftAgentKitLogging.metadata(
-                            ("imageName", .string(imageName)),
+                            ("imageName", .string(name)),
+                            ("dataSize", .stringConvertible(data.count)),
+                            ("mimeType", .string(mimeType ?? "unknown"))
+                        )
+                    )
+                } else {
+                    files.append(LLMResponseFile(name: name, mimeType: mimeType, data: data, url: nil))
+                    logger.debug(
+                        "Extracted file from data part",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("name", .string(name)),
                             ("dataSize", .stringConvertible(data.count)),
                             ("mimeType", .string(mimeType ?? "unknown"))
                         )
@@ -205,22 +230,20 @@ public actor A2AManager {
         }
         
         let text = textParts.joined(separator: " ")
-        return (text, images)
+        return (text, images, files)
     }
     
-    /// Creates LLMMetadata with images stored in modelMetadata
-    private func createMetadataWithImages(_ images: [Message.Image]) -> LLMMetadata? {
-        guard !images.isEmpty else { return nil }
-        
-        // Convert images to JSON array
-        let imagesJSON = images.map { $0.toEasyJSON(includeImageData: true, includeThumbData: false) }
-        
-        // Store in modelMetadata
-        let modelMetadata = try? JSON([
-            "images": JSON.array(imagesJSON)
-        ])
-        
-        return LLMMetadata(modelMetadata: modelMetadata)
+    /// Creates LLMMetadata with images and/or files in modelMetadata
+    private func createMetadata(images: [Message.Image], files: [LLMResponseFile]) -> LLMMetadata? {
+        var entries: [String: JSON] = [:]
+        if !images.isEmpty {
+            entries["images"] = .array(images.map { $0.toEasyJSON(includeImageData: true, includeThumbData: false) })
+        }
+        if !files.isEmpty {
+            entries["files"] = .array(files.map { $0.toJSON() })
+        }
+        guard !entries.isEmpty else { return nil }
+        return LLMMetadata(modelMetadata: .object(entries))
     }
     
     /// Detects MIME type from image data by checking magic bytes
@@ -281,7 +304,7 @@ public actor A2AManager {
     
     // MARK: - Private
     
-    private var clients: [A2AClient] = []
+    private var clients: [any A2AAgentStreamClient] = []
     
     private func loadA2AConfiguration(configFileURL: URL) async throws {
         do {

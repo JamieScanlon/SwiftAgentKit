@@ -16,7 +16,7 @@ struct A2AManagerTests {
     
     // MARK: - Mock Classes
     
-    /// Mock A2AClient for testing
+    /// Mock A2AClient for testing (legacy; does not conform to A2AAgentStreamClient).
     actor MockA2AClient {
         var agentCard: AgentCard?
         var messageToReturn: [MessageResult] = []
@@ -43,6 +43,32 @@ struct A2AManagerTests {
         func setMessageToReturn(_ messages: [MessageResult]) {
             self.messageToReturn = messages
         }
+    }
+    
+    /// Mock stream client that conforms to A2AAgentStreamClient for agentCall integration tests.
+    actor MockA2AStreamClient: A2AAgentStreamClient {
+        var agentCard: AgentCard?
+        private var eventsToYield: [SendStreamingMessageSuccessResponse<MessageResult>] = []
+        
+        init(agentCard: AgentCard?, events: [SendStreamingMessageSuccessResponse<MessageResult>]) {
+            self.agentCard = agentCard
+            self.eventsToYield = events
+        }
+        
+        func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>> {
+            let events = eventsToYield
+            return AsyncStream { continuation in
+                for event in events {
+                    continuation.yield(event)
+                }
+                continuation.finish()
+            }
+        }
+    }
+    
+    /// Wraps a MessageResult into the stream response type the manager consumes.
+    func wrap(_ result: MessageResult) -> SendStreamingMessageSuccessResponse<MessageResult> {
+        SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: result)
     }
     
     // MARK: - Helper Methods
@@ -704,6 +730,367 @@ struct A2AManagerTests {
         
         // Then
         #expect(response.images.isEmpty)
+    }
+    
+    // MARK: - agentCall response content types (text, images, file refs, data)
+    
+    @Test("agentCall returns text-only response from message")
+    func testAgentCallReturnsTextResponse() async throws {
+        let manager = A2AManager()
+        let agentName = "TextAgent"
+        let card = createMockAgentCard(name: agentName)
+        let msg = A2AMessage(
+            role: "agent",
+            parts: [.text(text: "Here is the answer.")],
+            messageId: UUID().uuidString
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.message(msg))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Say something", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        #expect(responses?[0].content == "Here is the answer.")
+        #expect(responses?[0].images.isEmpty == true)
+        #expect(responses?[0].files.isEmpty == true)
+    }
+    
+    @Test("agentCall returns image from file part with base64 image data")
+    func testAgentCallReturnsImageFromFilePart() async throws {
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let pngData = Data(base64Encoded: pngBase64) else { Issue.record("Bad PNG"); return }
+        
+        let manager = A2AManager()
+        let agentName = "ImageAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Generated image"),
+                .file(data: pngData, url: nil)
+            ],
+            name: "out.png"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Generate", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        #expect(responses?[0].content == "Generated image")
+        #expect(responses?[0].images.count == 1)
+        #expect(responses?[0].images[0].name == "out.png")
+        #expect(responses?[0].images[0].imageData == pngData)
+        #expect(responses?[0].files.isEmpty == true)
+    }
+    
+    @Test("agentCall returns file reference for remote URL (file part, no data)")
+    func testAgentCallReturnsFileReferenceRemote() async throws {
+        let remoteURL = URL(string: "https://example.com/doc.pdf")!
+        let manager = A2AManager()
+        let agentName = "FileAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "See attachment"),
+                .file(data: nil, url: remoteURL)
+            ],
+            name: "doc.pdf"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Attach", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        #expect(responses?[0].content == "See attachment")
+        #expect(responses?[0].images.isEmpty == true)
+        #expect(responses?[0].files.count == 1)
+        #expect(responses?[0].files[0].url == remoteURL)
+        #expect(responses?[0].files[0].data == nil)
+    }
+    
+    @Test("agentCall returns file reference for local file URL")
+    func testAgentCallReturnsFileReferenceLocal() async throws {
+        let localURL = URL(string: "file:///tmp/output.pdf")!
+        let manager = A2AManager()
+        let agentName = "LocalAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Saved to disk"),
+                .file(data: nil, url: localURL)
+            ],
+            name: "output.pdf"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Save", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        #expect(responses?[0].files.count == 1)
+        #expect(responses?[0].files[0].url == localURL)
+    }
+    
+    @Test("agentCall returns file from data part when not image")
+    func testAgentCallReturnsFileFromDataPart() async throws {
+        // Non-image bytes (e.g. PDF header or arbitrary binary)
+        let arbitraryData = Data([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34]) // %PDF-1.4
+        let manager = A2AManager()
+        let agentName = "DataAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Binary payload"),
+                .data(data: arbitraryData)
+            ],
+            name: "file.bin"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Send data", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        #expect(responses?[0].content == "Binary payload")
+        #expect(responses?[0].images.isEmpty == true)
+        #expect(responses?[0].files.count == 1)
+        #expect(responses?[0].files[0].data == arbitraryData)
+        #expect(responses?[0].files[0].url == nil)
+    }
+    
+    @Test("agentCall returns image from data part when image bytes")
+    func testAgentCallReturnsImageFromDataPart() async throws {
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let pngData = Data(base64Encoded: pngBase64) else { Issue.record("Bad PNG"); return }
+        
+        let manager = A2AManager()
+        let agentName = "DataImageAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Image via data part"),
+                .data(data: pngData)
+            ],
+            name: "img.png"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Generate", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        #expect(responses?[0].content == "Image via data part")
+        #expect(responses?[0].images.count == 1)
+        #expect(responses?[0].images[0].imageData == pngData)
+        #expect(responses?[0].files.isEmpty == true)
+    }
+    
+    @Test("agentCall returns text, image, and files in one response")
+    func testAgentCallReturnsTextImageAndFilesCombined() async throws {
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let pngData = Data(base64Encoded: pngBase64) else { Issue.record("Bad PNG"); return }
+        let nonImageData = Data([0x00, 0x01, 0x02, 0x03])
+        let remoteURL = URL(string: "https://example.com/ref.txt")!
+        
+        let manager = A2AManager()
+        let agentName = "CombinedAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Summary"),
+                .file(data: pngData, url: nil),
+                .file(data: nil, url: remoteURL),
+                .data(data: nonImageData)
+            ],
+            name: "combined"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Mix", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        let r = responses![0]
+        #expect(r.content == "Summary")
+        #expect(r.images.count == 1)
+        #expect(r.images[0].imageData == pngData)
+        #expect(r.files.count == 2)
+        let fileURL = r.files.first { $0.url == remoteURL }
+        let fileData = r.files.first { $0.data == nonImageData }
+        #expect(fileURL != nil)
+        #expect(fileData != nil)
+    }
+    
+    @Test("agentCall returns image when there is no text content")
+    func testAgentCallReturnsImageOnlyWhenNoText() async throws {
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let pngData = Data(base64Encoded: pngBase64) else { Issue.record("Bad PNG"); return }
+        
+        let manager = A2AManager()
+        let agentName = "ImageOnlyAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.file(data: pngData, url: nil)],
+            name: "out.png"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Generate", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        #expect(responses?[0].content.isEmpty == true)
+        #expect(responses?[0].images.count == 1)
+        #expect(responses?[0].images[0].imageData == pngData)
+        #expect(responses?[0].files.isEmpty == true)
+    }
+    
+    @Test("agentCall returns file when there is no text content")
+    func testAgentCallReturnsFileOnlyWhenNoText() async throws {
+        let remoteURL = URL(string: "https://example.com/asset.pdf")!
+        let manager = A2AManager()
+        let agentName = "FileOnlyAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.file(data: nil, url: remoteURL)],
+            name: "asset.pdf"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Attach", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        #expect(responses?[0].content.isEmpty == true)
+        #expect(responses?[0].images.isEmpty == true)
+        #expect(responses?[0].files.count == 1)
+        #expect(responses?[0].files[0].url == remoteURL)
+    }
+    
+    @Test("agentCall returns images and files when there is no text content")
+    func testAgentCallReturnsImagesAndFilesOnlyWhenNoText() async throws {
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let pngData = Data(base64Encoded: pngBase64) else { Issue.record("Bad PNG"); return }
+        let nonImageData = Data([0x01, 0x02, 0x03])
+        let remoteURL = URL(string: "https://example.com/ref.pdf")!
+        
+        let manager = A2AManager()
+        let agentName = "MediaOnlyAgent"
+        let card = createMockAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .file(data: pngData, url: nil),
+                .file(data: nil, url: remoteURL),
+                .data(data: nonImageData)
+            ],
+            name: "media"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskArtifactUpdate(event))])
+        try await manager.initialize(clients: [mock])
+        let toolCall = createToolCall(name: agentName, instructions: "Send media", id: UUID().uuidString)
+        
+        let responses = try await manager.agentCall(toolCall)
+        
+        #expect(responses != nil)
+        #expect(responses?.count == 1)
+        let r = responses![0]
+        #expect(r.content.isEmpty == true)
+        #expect(r.images.count == 1)
+        #expect(r.images[0].imageData == pngData)
+        #expect(r.files.count == 2)
+        #expect(r.files.contains { $0.url == remoteURL } == true)
+        #expect(r.files.contains { $0.data == nonImageData } == true)
     }
     
     @Test("agentCall should handle file artifacts with URL but no data")
