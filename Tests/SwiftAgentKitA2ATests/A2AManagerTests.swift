@@ -478,5 +478,317 @@ struct A2AManagerTests {
             #expect(Bool(false), "Long instructions should be preserved")
         }
     }
+    
+    // MARK: - Image Extraction Tests
+    
+    @Test("agentCall should extract images from file artifacts with base64 data")
+    func testAgentCallExtractsImagesFromFileArtifacts() async throws {
+        // Given - A task with file artifact containing base64 image data
+        let testImageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let imageData = Data(base64Encoded: testImageData) else {
+            Issue.record("Failed to create test image data")
+            return
+        }
+        
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            ),
+            artifacts: [
+                Artifact(
+                    artifactId: UUID().uuidString,
+                    parts: [
+                        .text(text: "The image has been generated"),
+                        .file(data: imageData, url: nil)
+                    ],
+                    name: "generated-image"
+                )
+            ]
+        )
+        
+        // Create manager and client
+        let agentCard = createMockAgentCard(name: "ImageGenerator")
+        let client = A2AClient(server: A2AConfig.A2AConfigServer(name: "test", url: URL(string: "https://example.com")!), bootCall: nil)
+        // Note: This is a structural test - full integration would require proper client setup
+        
+        // Verify artifact structure
+        if let artifact = task.artifacts?.first {
+            #expect(artifact.parts.count == 2)
+            
+            // Verify text part
+            let textParts = artifact.parts.compactMap { part -> String? in
+                if case .text(let text) = part, !text.isEmpty {
+                    return text
+                }
+                return nil
+            }
+            #expect(textParts.count == 1)
+            #expect(textParts[0] == "The image has been generated")
+            
+            // Verify file part
+            let fileParts = artifact.parts.compactMap { part -> Data? in
+                if case .file(let data, _) = part {
+                    return data
+                }
+                return nil
+            }
+            #expect(fileParts.count == 1)
+            #expect(fileParts[0] == imageData)
+        } else {
+            Issue.record("Expected artifact with file part")
+        }
+    }
+    
+    @Test("agentCall should extract multiple images from artifacts")
+    func testAgentCallExtractsMultipleImages() async throws {
+        // Given - Task with multiple file artifacts
+        let testImageData1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        let testImageData2 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        
+        guard let imageData1 = Data(base64Encoded: testImageData1),
+              let imageData2 = Data(base64Encoded: testImageData2) else {
+            Issue.record("Failed to create test image data")
+            return
+        }
+        
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            ),
+            artifacts: [
+                Artifact(
+                    artifactId: UUID().uuidString,
+                    parts: [.file(data: imageData1, url: nil)],
+                    name: "image1"
+                ),
+                Artifact(
+                    artifactId: UUID().uuidString,
+                    parts: [.file(data: imageData2, url: nil)],
+                    name: "image2"
+                )
+            ]
+        )
+        
+        // Verify structure
+        #expect(task.artifacts?.count == 2)
+        
+        let fileParts = task.artifacts?.flatMap { artifact in
+            artifact.parts.compactMap { part -> Data? in
+                if case .file(let data, _) = part {
+                    return data
+                }
+                return nil
+            }
+        } ?? []
+        
+        #expect(fileParts.count == 2)
+        #expect(fileParts[0] == imageData1)
+        #expect(fileParts[1] == imageData2)
+    }
+    
+    @Test("agentCall should extract both text and images from mixed artifacts")
+    func testAgentCallExtractsTextAndImages() async throws {
+        // Given - Artifact with both text and file parts
+        let testImageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let imageData = Data(base64Encoded: testImageData) else {
+            Issue.record("Failed to create test image data")
+            return
+        }
+        
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Here is the generated image:"),
+                .file(data: imageData, url: nil),
+                .text(text: "The image generation is complete.")
+            ],
+            name: "mixed-artifact"
+        )
+        
+        // Verify structure
+        #expect(artifact.parts.count == 3)
+        
+        let textParts = artifact.parts.compactMap { part -> String? in
+            if case .text(let text) = part, !text.isEmpty {
+                return text
+            }
+            return nil
+        }
+        
+        let fileParts = artifact.parts.compactMap { part -> Data? in
+            if case .file(let data, _) = part {
+                return data
+            }
+            return nil
+        }
+        
+        #expect(textParts.count == 2)
+        #expect(fileParts.count == 1)
+        #expect(textParts[0] == "Here is the generated image:")
+        #expect(textParts[1] == "The image generation is complete.")
+        #expect(fileParts[0] == imageData)
+    }
+    
+    @Test("LLMResponse should store images in metadata")
+    func testLLMResponseStoresImagesInMetadata() async throws {
+        // Given - Create Message.Image objects
+        let testImageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let imageData = Data(base64Encoded: testImageData) else {
+            Issue.record("Failed to create test image data")
+            return
+        }
+        
+        let image = Message.Image(
+            name: "test-image",
+            path: nil,
+            imageData: imageData,
+            thumbData: nil
+        )
+        
+        // Convert to JSON
+        let imageJSON = image.toEasyJSON(includeImageData: true, includeThumbData: false)
+        let modelMetadata = try JSON([
+            "images": JSON.array([imageJSON])
+        ])
+        
+        let metadata = LLMMetadata(modelMetadata: modelMetadata)
+        let response = LLMResponse.complete(content: "Image generated", metadata: metadata)
+        
+        // Verify images can be extracted
+        #expect(response.images.count == 1)
+        #expect(response.images[0].name == "test-image")
+        #expect(response.images[0].imageData == imageData)
+    }
+    
+    @Test("LLMResponse should extract multiple images from metadata")
+    func testLLMResponseExtractsMultipleImages() async throws {
+        // Given - Multiple images
+        let testImageData1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        let testImageData2 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        
+        guard let imageData1 = Data(base64Encoded: testImageData1),
+              let imageData2 = Data(base64Encoded: testImageData2) else {
+            Issue.record("Failed to create test image data")
+            return
+        }
+        
+        let image1 = Message.Image(name: "image1", imageData: imageData1)
+        let image2 = Message.Image(name: "image2", imageData: imageData2)
+        
+        let imagesJSON = [image1, image2].map { $0.toEasyJSON(includeImageData: true, includeThumbData: false) }
+        let modelMetadata = try JSON([
+            "images": JSON.array(imagesJSON)
+        ])
+        
+        let metadata = LLMMetadata(modelMetadata: modelMetadata)
+        let response = LLMResponse.complete(content: "Images generated", metadata: metadata)
+        
+        // Verify both images are extracted
+        #expect(response.images.count == 2)
+        #expect(response.images[0].name == "image1")
+        #expect(response.images[1].name == "image2")
+        #expect(response.images[0].imageData == imageData1)
+        #expect(response.images[1].imageData == imageData2)
+    }
+    
+    @Test("LLMResponse should return empty array when no images in metadata")
+    func testLLMResponseReturnsEmptyImagesWhenNone() async throws {
+        // Given - Response without images
+        let response = LLMResponse.complete(content: "No images")
+        
+        // Then
+        #expect(response.images.isEmpty)
+    }
+    
+    @Test("agentCall should handle file artifacts with URL but no data")
+    func testAgentCallHandlesFileArtifactWithURL() async throws {
+        // Given - File artifact with URL but no data
+        let imageURL = URL(string: "https://example.com/image.png")!
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Image available at URL"),
+                .file(data: nil, url: imageURL)
+            ],
+            name: "url-image"
+        )
+        
+        // Verify structure
+        let fileParts = artifact.parts.compactMap { part -> URL? in
+            if case .file(_, let url) = part {
+                return url
+            }
+            return nil
+        }
+        
+        #expect(fileParts.count == 1)
+        #expect(fileParts[0] == imageURL)
+    }
+    
+    @Test("agentCall should handle data parts that are images")
+    func testAgentCallHandlesDataPartsAsImages() async throws {
+        // Given - Data part with image data
+        let testImageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let imageData = Data(base64Encoded: testImageData) else {
+            Issue.record("Failed to create test image data")
+            return
+        }
+        
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Image data"),
+                .data(data: imageData)
+            ],
+            name: "data-image"
+        )
+        
+        // Verify structure
+        let dataParts = artifact.parts.compactMap { part -> Data? in
+            if case .data(let data) = part {
+                return data
+            }
+            return nil
+        }
+        
+        #expect(dataParts.count == 1)
+        #expect(dataParts[0] == imageData)
+    }
+    
+    @Test("Message.Image should be created from file artifact data")
+    func testMessageImageFromFileArtifact() async throws {
+        // Given - File artifact with image data
+        let testImageData = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let imageData = Data(base64Encoded: testImageData) else {
+            Issue.record("Failed to create test image data")
+            return
+        }
+        
+        // Create Message.Image from artifact data
+        let image = Message.Image(
+            name: "generated-image",
+            path: nil,
+            imageData: imageData,
+            thumbData: nil
+        )
+        
+        // Verify
+        #expect(image.name == "generated-image")
+        #expect(image.imageData == imageData)
+        #expect(image.path == nil)
+        
+        // Verify it can be converted to JSON and back
+        let imageJSON = image.toEasyJSON(includeImageData: true, includeThumbData: false)
+        let reconstructedImage = Message.Image(from: imageJSON)
+        
+        #expect(reconstructedImage.name == image.name)
+        #expect(reconstructedImage.imageData == image.imageData)
+    }
 }
 

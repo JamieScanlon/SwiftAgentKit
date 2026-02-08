@@ -194,4 +194,18 @@ public extension LLMResponse {
     var finishReason: String? {
         return metadata?.finishReason
     }
+    
+    /// Extracts Message.Image objects from the response metadata
+    /// Images are stored in metadata.modelMetadata["images"] as a JSON array
+    var images: [Message.Image] {
+        guard let modelMetadata = metadata?.modelMetadata,
+              case .object(let dict) = modelMetadata,
+              case .array(let imagesArray) = dict["images"] else {
+            return []
+        }
+        
+        return imagesArray.compactMap { imageJSON in
+            Message.Image(from: imageJSON)
+        }
+    }
 } 
