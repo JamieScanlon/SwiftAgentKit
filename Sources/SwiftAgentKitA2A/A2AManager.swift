@@ -113,7 +113,7 @@ public actor A2AManager {
                     accumulatedImages = []
                 }
             case .taskStatusUpdate(let event):
-                if event.status.state == .completed, !responseText.isEmpty {
+                if event.status.state == .completed, (!responseText.isEmpty || !accumulatedImages.isEmpty) {
                     let metadata = createMetadataWithImages(accumulatedImages)
                     returnResponses.append(LLMResponse.complete(content: responseText, metadata: metadata))
                     responseText = ""
