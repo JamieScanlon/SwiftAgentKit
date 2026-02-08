@@ -653,7 +653,7 @@ struct A2AManagerTests {
         
         // Convert to JSON
         let imageJSON = image.toEasyJSON(includeImageData: true, includeThumbData: false)
-        let modelMetadata = try JSON([
+        let modelMetadata = JSON.object([
             "images": JSON.array([imageJSON])
         ])
         
@@ -682,7 +682,7 @@ struct A2AManagerTests {
         let image2 = Message.Image(name: "image2", imageData: imageData2)
         
         let imagesJSON = [image1, image2].map { $0.toEasyJSON(includeImageData: true, includeThumbData: false) }
-        let modelMetadata = try JSON([
+        let modelMetadata = JSON.object([
             "images": JSON.array(imagesJSON)
         ])
         
