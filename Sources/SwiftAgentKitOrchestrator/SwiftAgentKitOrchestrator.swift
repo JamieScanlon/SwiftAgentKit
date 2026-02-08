@@ -205,15 +205,7 @@ public actor SwiftAgentKitOrchestrator {
                                 ("responseCount", .stringConvertible(toolResponses.count))
                             )
                         )
-                        let toolResponseMessages = toolResponses.map { response in
-                            Message(
-                                id: UUID(),
-                                role: .tool,
-                                content: response.content,
-                                toolCalls: response.toolCalls,
-                                toolCallId: response.toolCallId
-                            )
-                        }
+                        let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
                         updatedMessages.append(contentsOf: toolResponseMessages)
                         toolResponseMessages.forEach { publishMessage($0) }
                         
@@ -268,15 +260,7 @@ public actor SwiftAgentKitOrchestrator {
                         ("responseCount", .stringConvertible(toolResponses.count))
                     )
                 )
-                let toolResponseMessages = toolResponses.map { response in
-                    Message(
-                        id: UUID(),
-                        role: .tool,
-                        content: response.content,
-                        toolCalls: response.toolCalls,
-                        toolCallId: response.toolCallId
-                    )
-                }
+                let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
                 updatedMessages.append(contentsOf: toolResponseMessages)
                 toolResponseMessages.forEach { publishMessage($0) }
                 
@@ -367,6 +351,34 @@ public actor SwiftAgentKitOrchestrator {
                 id: generatedId
             )
         }
+    }
+    
+    /// Builds a conversation Message from a tool call LLMResponse, including images and file references.
+    /// When the response contains files (URLs or data), appends a text summary so the next LLM turn sees them.
+    private func messageFromToolResponse(_ response: LLMResponse) -> Message {
+        var content = response.content
+        if !response.files.isEmpty {
+            let fileDescriptions = response.files.map { file in
+                let name = file.name ?? "attachment"
+                if let url = file.url {
+                    return "\(name): \(url.absoluteString)"
+                }
+                if let data = file.data {
+                    return "\(name): \(data.count) bytes"
+                }
+                return name
+            }
+            let attachmentSummary = "\n\n[Attachments: " + fileDescriptions.joined(separator: ", ") + "]"
+            content = content.isEmpty ? attachmentSummary.trimmingCharacters(in: .whitespacesAndNewlines) : content + attachmentSummary
+        }
+        return Message(
+            id: UUID(),
+            role: .tool,
+            content: content,
+            images: response.images,
+            toolCalls: response.toolCalls,
+            toolCallId: response.toolCallId
+        )
     }
     
     /// Execute tool calls using available managers

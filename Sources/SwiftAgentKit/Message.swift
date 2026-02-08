@@ -10,6 +10,8 @@ public enum MessageRole: String, Codable, Sendable {
 }
 
 // TODO: Support images, audio, resources
+// TODO: Add explicit property for file references (local or remote URLs) so messages can carry file references without overloading images.
+// TODO: Add property for generic binary file attachments (non-image data) so messages can carry arbitrary file data.
 public struct Message: Identifiable, Codable, Sendable {
     
     public struct Image: Codable, Equatable, Sendable {
@@ -195,6 +197,8 @@ public struct Message: Identifiable, Codable, Sendable {
     }
     public var timestamp: Date = Date()
     public var images: [Image] = []
+    // TODO: fileReferences: [URL] or similar for local/remote file references
+    // TODO: fileAttachments: [(name: String?, mimeType: String?, data: Data)] or similar for generic binary files
     /// a list of tools in JSON that the model wants to use
     public var toolCalls: [ToolCall] = []
     /// When this message is a response to a tool call, this id represents the id of the original tool call

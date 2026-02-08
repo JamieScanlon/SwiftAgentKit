@@ -65,6 +65,91 @@ struct MockLLM: LLMProtocol {
     }
 }
 
+// MARK: - Capturing Mock LLM (records messages sent for assertions)
+
+actor SendCapture {
+    private(set) var invocations: [[Message]] = []
+    func append(_ messages: [Message]) {
+        invocations.append(messages)
+    }
+    func getInvocations() -> [[Message]] {
+        invocations
+    }
+}
+
+struct CapturingMockLLM: LLMProtocol {
+    let model: String
+    let logger: Logger
+    let toolCallsToReturn: [ToolCall]
+    let capture: SendCapture
+    
+    init(model: String = "capturing-model", logger: Logger, toolCallsToReturn: [ToolCall], capture: SendCapture = SendCapture()) {
+        self.model = model
+        self.logger = logger
+        self.toolCallsToReturn = toolCallsToReturn
+        self.capture = capture
+    }
+    
+    func getModelName() -> String { model }
+    func getCapabilities() -> [LLMCapability] { [.completion, .tools] }
+    
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        await capture.append(messages)
+        let hasToolMessage = messages.contains { $0.role == .tool }
+        if hasToolMessage {
+            return LLMResponse.complete(content: "Done after tool response")
+        }
+        return LLMResponse.withToolCalls(content: "", toolCalls: toolCallsToReturn)
+    }
+    
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        let capture = capture
+        let toolCallsToReturn = toolCallsToReturn
+        return AsyncThrowingStream { continuation in
+            Task {
+                await capture.append(messages)
+                let hasToolMessage = messages.contains { $0.role == .tool }
+                if hasToolMessage {
+                    continuation.yield(.complete(LLMResponse.complete(content: "Done after tool response")))
+                } else {
+                    continuation.yield(.complete(LLMResponse.withToolCalls(content: "", toolCalls: toolCallsToReturn)))
+                }
+                continuation.finish()
+            }
+        }
+    }
+    
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        throw LLMError.invalidRequest("Not implemented")
+    }
+}
+
+// MARK: - Mock A2A stream client (returns responses with images/files for orchestrator tests)
+
+actor MockA2AStreamClientForOrchestrator: A2AAgentStreamClient {
+    var agentCard: AgentCard?
+    private let events: [SendStreamingMessageSuccessResponse<MessageResult>]
+    
+    init(agentCard: AgentCard?, events: [SendStreamingMessageSuccessResponse<MessageResult>]) {
+        self.agentCard = agentCard
+        self.events = events
+    }
+    
+    func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>> {
+        let events = self.events
+        return AsyncStream { continuation in
+            for event in events {
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+    }
+}
+
+func wrapMessageResult(_ result: MessageResult) -> SendStreamingMessageSuccessResponse<MessageResult> {
+    SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: result)
+}
+
 
 @Suite struct SwiftAgentKitOrchestratorTests {
     
@@ -602,5 +687,236 @@ struct MockLLM: LLMProtocol {
                 }
             }
         }
+    }
+    
+    // MARK: - Tool response content (images, files, data) tests
+    
+    func makeAgentCard(name: String) -> AgentCard {
+        AgentCard(
+            name: name,
+            description: "Test agent",
+            url: "https://example.com/\(name)",
+            version: "1.0",
+            capabilities: AgentCard.AgentCapabilities(streaming: true),
+            defaultInputModes: ["text/plain"],
+            defaultOutputModes: ["text/plain"],
+            skills: []
+        )
+    }
+    
+    @Test("Tool response message includes images when A2A returns image artifact")
+    func testToolResponseMessageIncludesImagesWhenA2AReturnsImages() async throws {
+        let agentName = "ImageAgent"
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let pngData = Data(base64Encoded: pngBase64) else { Issue.record("Bad PNG"); return }
+        
+        let card = makeAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.file(data: pngData, url: nil)],
+            name: "out.png"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mockClient = MockA2AStreamClientForOrchestrator(agentCard: card, events: [wrapMessageResult(.taskArtifactUpdate(event))])
+        
+        let a2aManager = A2AManager(logger: Logger(label: "TestA2A"))
+        try await a2aManager.initialize(clients: [mockClient])
+        
+        let toolCall = ToolCall(
+            name: agentName,
+            arguments: .object(["instructions": .string("Generate image")]),
+            id: "call-1"
+        )
+        let capture = SendCapture()
+        let capturingLLM = CapturingMockLLM(logger: Logger(label: "Capture"), toolCallsToReturn: [toolCall], capture: capture)
+        
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config, a2aManager: a2aManager)
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "Generate an image")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        let invocations = await capture.getInvocations()
+        #expect(invocations.count >= 2)
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.images.count == 1)
+        #expect(toolMessage!.images[0].imageData == pngData)
+    }
+    
+    @Test("Tool response message includes file summary when A2A returns file reference")
+    func testToolResponseMessageIncludesFileSummaryWhenA2AReturnsFiles() async throws {
+        let agentName = "FileAgent"
+        let fileURL = URL(string: "https://example.com/doc.pdf")!
+        let card = makeAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.file(data: nil, url: fileURL)],
+            name: "doc.pdf"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mockClient = MockA2AStreamClientForOrchestrator(agentCard: card, events: [wrapMessageResult(.taskArtifactUpdate(event))])
+        
+        let a2aManager = A2AManager(logger: Logger(label: "TestA2A"))
+        try await a2aManager.initialize(clients: [mockClient])
+        
+        let toolCall = ToolCall(
+            name: agentName,
+            arguments: .object(["instructions": .string("Get file")]),
+            id: "call-1"
+        )
+        let capture = SendCapture()
+        let capturingLLM = CapturingMockLLM(logger: Logger(label: "Capture"), toolCallsToReturn: [toolCall], capture: capture)
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config, a2aManager: a2aManager)
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "Get the document")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        let invocations = await capture.getInvocations()
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.content.contains("Attachments:") == true)
+        #expect(toolMessage!.content.contains("doc.pdf") == true)
+        #expect(toolMessage!.content.contains(fileURL.absoluteString) == true)
+    }
+    
+    @Test("Tool response message includes both images and file summary when A2A returns both")
+    func testToolResponseMessageIncludesImagesAndFileSummaryWhenA2AReturnsBoth() async throws {
+        let agentName = "MediaAgent"
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let pngData = Data(base64Encoded: pngBase64) else { Issue.record("Bad PNG"); return }
+        let fileURL = URL(string: "https://example.com/ref.pdf")!
+        
+        let card = makeAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [
+                .text(text: "Here is the result"),
+                .file(data: pngData, url: nil),
+                .file(data: nil, url: fileURL)
+            ],
+            name: "media"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mockClient = MockA2AStreamClientForOrchestrator(agentCard: card, events: [wrapMessageResult(.taskArtifactUpdate(event))])
+        
+        let a2aManager = A2AManager(logger: Logger(label: "TestA2A"))
+        try await a2aManager.initialize(clients: [mockClient])
+        
+        let toolCall = ToolCall(
+            name: agentName,
+            arguments: .object(["instructions": .string("Generate")]),
+            id: "call-1"
+        )
+        let capture = SendCapture()
+        let capturingLLM = CapturingMockLLM(logger: Logger(label: "Capture"), toolCallsToReturn: [toolCall], capture: capture)
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config, a2aManager: a2aManager)
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "Generate media")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        let invocations = await capture.getInvocations()
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.content.contains("Here is the result") == true)
+        #expect(toolMessage!.content.contains("Attachments:") == true)
+        #expect(toolMessage!.images.count == 1)
+        #expect(toolMessage!.images[0].imageData == pngData)
+    }
+    
+    @Test("Tool response message with only images has attachment-style content when no text")
+    func testToolResponseMessageOnlyImagesNoText() async throws {
+        let agentName = "ImageOnlyAgent"
+        let pngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        guard let pngData = Data(base64Encoded: pngBase64) else { Issue.record("Bad PNG"); return }
+        
+        let card = makeAgentCard(name: agentName)
+        let artifact = Artifact(
+            artifactId: UUID().uuidString,
+            parts: [.file(data: pngData, url: nil)],
+            name: "only.png"
+        )
+        let event = TaskArtifactUpdateEvent(
+            taskId: UUID().uuidString,
+            contextId: UUID().uuidString,
+            artifact: artifact,
+            append: false,
+            lastChunk: true
+        )
+        let mockClient = MockA2AStreamClientForOrchestrator(agentCard: card, events: [wrapMessageResult(.taskArtifactUpdate(event))])
+        
+        let a2aManager = A2AManager(logger: Logger(label: "TestA2A"))
+        try await a2aManager.initialize(clients: [mockClient])
+        
+        let toolCall = ToolCall(
+            name: agentName,
+            arguments: .object(["instructions": .string("Image only")]),
+            id: "call-1"
+        )
+        let capture = SendCapture()
+        let capturingLLM = CapturingMockLLM(logger: Logger(label: "Capture"), toolCallsToReturn: [toolCall], capture: capture)
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config, a2aManager: a2aManager)
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "Send image only")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        let invocations = await capture.getInvocations()
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.images.count == 1)
+        #expect(toolMessage!.content.isEmpty || toolMessage!.content.contains("Attachments:") == true)
     }
 } 
