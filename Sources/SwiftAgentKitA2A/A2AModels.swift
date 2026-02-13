@@ -394,7 +394,11 @@ public enum A2AMessagePart: Sendable, Codable, Equatable {
                         )
                     )
                 }
-                if let url = URL(string: file) {
+                // Only treat as URL when it is a valid remote (http/https) or local (file:) URL.
+                // Base64-encoded file content must be parsed into data, not stored in url.
+                if let url = URL(string: file),
+                   let scheme = url.scheme?.lowercased(),
+                   ["http", "https", "file"].contains(scheme) {
                     self = .file(data: nil, url: url)
                 } else if let data = Data(base64Encoded: file) {
                     self = .file(data: data, url: nil)

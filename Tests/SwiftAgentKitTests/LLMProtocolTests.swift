@@ -95,7 +95,8 @@ import EasyJSON
         let modelNotFound = LLMError.modelNotFound("gpt-5")
         let authFailed = LLMError.authenticationFailed
         let timeout = LLMError.timeout
-        let unsupportedCapability = LLMError.unsupportedCapability(.vision)
+        let unsupportedCapabilityVision = LLMError.unsupportedCapability(.vision)
+        let unsupportedCapabilityImageGen = LLMError.unsupportedCapability(.imageGeneration)
         
         #expect(invalidRequest.localizedDescription.contains("Invalid request"))
         #expect(invalidRequest.localizedDescription.contains("test message"))
@@ -104,8 +105,13 @@ import EasyJSON
         #expect(modelNotFound.localizedDescription.contains("gpt-5"))
         #expect(authFailed.localizedDescription.contains("Authentication failed"))
         #expect(timeout.localizedDescription.contains("Request timeout"))
-        #expect(unsupportedCapability.localizedDescription.contains("Unsupported capability"))
-        #expect(unsupportedCapability.localizedDescription.contains("vision"))
+        #expect(unsupportedCapabilityVision.localizedDescription.contains("Unsupported capability"))
+        #expect(unsupportedCapabilityVision.localizedDescription.contains("vision"))
+        #expect(unsupportedCapabilityImageGen.localizedDescription.contains("Unsupported capability"))
+        #expect(unsupportedCapabilityImageGen.localizedDescription.contains("imageGeneration"))
+        
+        let imageGenError = LLMError.imageGenerationError(.noImagesGenerated)
+        #expect(imageGenError.localizedDescription.contains("No images were generated") == true)
     }
     
     @Test("LLMRequestConfig can be initialized with available tools")
@@ -168,5 +174,178 @@ import EasyJSON
         let testLLM = TestLLM(modelName: "test-model-v1")
         
         #expect(testLLM.getModelName() == "test-model-v1")
+    }
+    
+    @Test("ImageGenerationRequestConfig can be initialized")
+    func testImageGenerationRequestConfig() throws {
+        let imageData = Data("test image data".utf8)
+        let maskData = Data("test mask data".utf8)
+        
+        let config = ImageGenerationRequestConfig(
+            image: imageData,
+            fileName: "test.png",
+            mask: maskData,
+            maskFileName: "mask.png",
+            prompt: "A beautiful sunset",
+            n: 3,
+            size: "512x512"
+        )
+        
+        #expect(config.image == imageData)
+        #expect(config.fileName == "test.png")
+        #expect(config.mask == maskData)
+        #expect(config.maskFileName == "mask.png")
+        #expect(config.prompt == "A beautiful sunset")
+        #expect(config.n == 3)
+        #expect(config.size == "512x512")
+    }
+    
+    @Test("ImageGenerationRequestConfig can be initialized with optional parameters")
+    func testImageGenerationRequestConfigOptional() throws {
+        let imageData = Data("test image data".utf8)
+        
+        let config = ImageGenerationRequestConfig(
+            image: imageData,
+            fileName: "test.png",
+            prompt: "A beautiful sunset"
+        )
+        
+        #expect(config.image == imageData)
+        #expect(config.fileName == "test.png")
+        #expect(config.mask == nil)
+        #expect(config.maskFileName == nil)
+        #expect(config.prompt == "A beautiful sunset")
+        #expect(config.n == nil)
+        #expect(config.size == nil)
+    }
+    
+    @Test("ImageGenerationRequestConfig can be initialized for pure generation without image")
+    func testImageGenerationRequestConfigPureGeneration() throws {
+        // Pure image generation - no input image required
+        let config = ImageGenerationRequestConfig(
+            prompt: "A beautiful sunset",
+            n: 2,
+            size: "512x512"
+        )
+        
+        #expect(config.image == nil)
+        #expect(config.fileName == nil)
+        #expect(config.mask == nil)
+        #expect(config.maskFileName == nil)
+        #expect(config.prompt == "A beautiful sunset")
+        #expect(config.n == 2)
+        #expect(config.size == "512x512")
+    }
+    
+    @Test("ImageGenerationResponse can be initialized")
+    func testImageGenerationResponse() throws {
+        let imageURL1 = URL(fileURLWithPath: "/tmp/image1.png")
+        let imageURL2 = URL(fileURLWithPath: "/tmp/image2.png")
+        let metadata = LLMMetadata(totalTokens: 100)
+        let createdAt = Date()
+        
+        let response = ImageGenerationResponse(
+            images: [imageURL1, imageURL2],
+            createdAt: createdAt,
+            metadata: metadata
+        )
+        
+        #expect(response.images.count == 2)
+        #expect(response.images[0] == imageURL1)
+        #expect(response.images[1] == imageURL2)
+        #expect(response.createdAt == createdAt)
+        #expect(response.metadata?.totalTokens == 100)
+    }
+    
+    @Test("ImageGenerationResponse can be initialized with default createdAt")
+    func testImageGenerationResponseDefaultCreatedAt() throws {
+        let imageURL = URL(fileURLWithPath: "/tmp/image.png")
+        let beforeCreation = Date()
+        
+        let response = ImageGenerationResponse(images: [imageURL])
+        
+        let afterCreation = Date()
+        
+        #expect(response.images.count == 1)
+        #expect(response.images[0] == imageURL)
+        #expect(response.createdAt >= beforeCreation)
+        #expect(response.createdAt <= afterCreation)
+        #expect(response.metadata == nil)
+    }
+    
+    @Test("Default generateImage implementation throws unsupported capability error")
+    func testDefaultGenerateImageThrowsError() async throws {
+        struct TestLLM: LLMProtocol {
+            func getModelName() -> String { "test-model" }
+            func getCapabilities() -> [LLMCapability] { [.completion] }
+            func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+                return LLMResponse.complete(content: "Test")
+            }
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+                return AsyncThrowingStream { continuation in
+                    continuation.finish()
+                }
+            }
+        }
+        
+        let llm = TestLLM()
+        let config = ImageGenerationRequestConfig(
+            prompt: "test prompt"
+        )
+        
+        do {
+            _ = try await llm.generateImage(config)
+            Issue.record("Expected error to be thrown")
+        } catch let error as LLMError {
+            if case .unsupportedCapability(.imageGeneration) = error {
+                // Expected error
+            } else {
+                Issue.record("Unexpected error type: \(error)")
+            }
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+    
+    @Test("ImageGenerationError provides proper error descriptions")
+    func testImageGenerationErrorDescriptions() throws {
+        let invalidPrompt = ImageGenerationError.invalidPrompt("Prompt exceeds 1000 characters")
+        #expect(invalidPrompt.errorDescription?.contains("Invalid image generation prompt") == true)
+        
+        let invalidSize = ImageGenerationError.invalidSize("2000x2000")
+        #expect(invalidSize.errorDescription?.contains("Invalid image size") == true)
+        #expect(invalidSize.errorDescription?.contains("256x256") == true)
+        
+        let invalidCount = ImageGenerationError.invalidCount(15)
+        #expect(invalidCount.errorDescription?.contains("Invalid image count") == true)
+        #expect(invalidCount.errorDescription?.contains("15") == true)
+        
+        let noImages = ImageGenerationError.noImagesGenerated
+        #expect(noImages.errorDescription?.contains("No images were generated") == true)
+        
+        let testURL = URL(string: "https://example.com/image.png")!
+        let testError = NSError(domain: "TestError", code: 404, userInfo: nil)
+        let downloadFailed = ImageGenerationError.downloadFailed(testURL, testError)
+        #expect(downloadFailed.errorDescription?.contains("Failed to download image") == true)
+        #expect(downloadFailed.errorDescription?.contains("example.com") == true)
+    }
+    
+    @Test("LLMError.imageGenerationError wraps ImageGenerationError")
+    func testLLMErrorImageGenerationError() throws {
+        let imageError = ImageGenerationError.noImagesGenerated
+        let llmError = LLMError.imageGenerationError(imageError)
+        
+        #expect(llmError.errorDescription == imageError.errorDescription)
+        
+        if case .imageGenerationError(let wrappedError) = llmError {
+            // Verify wrapped error matches
+            if case .noImagesGenerated = wrappedError {
+                // Expected
+            } else {
+                Issue.record("Expected noImagesGenerated error")
+            }
+        } else {
+            Issue.record("Expected imageGenerationError case")
+        }
     }
 } 

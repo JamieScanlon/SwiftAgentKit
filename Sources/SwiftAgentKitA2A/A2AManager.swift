@@ -8,6 +8,13 @@
 import Foundation
 import Logging
 import SwiftAgentKit
+import EasyJSON
+
+/// Protocol for A2A clients that support streaming; allows injection of test doubles.
+public protocol A2AAgentStreamClient: Sendable {
+    var agentCard: AgentCard? { get async }
+    func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>>
+}
 
 public actor A2AManager {
     private let logger: Logger
@@ -43,15 +50,15 @@ public actor A2AManager {
         }
     }
     
-    /// Initialize the A2AManager with an arrat of `A2AClient` objects
-    public func initialize(clients: [A2AClient]) async throws {
+    /// Initialize the A2AManager with an array of stream-capable A2A clients (e.g. `A2AClient` or test doubles).
+    public func initialize(clients: [any A2AAgentStreamClient]) async throws {
         self.clients = clients
         await buildToolsJson()
     }
     
     public func agentCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
         // Find the client whose agent card name matches the tool call name
-        var matchingClient: A2AClient?
+        var matchingClient: (any A2AAgentStreamClient)?
         for client in clients {
             guard let agentCard = await client.agentCard else { continue }
             if agentCard.name == toolCall.name {
@@ -74,37 +81,207 @@ public actor A2AManager {
         let contents = try await client.streamMessage(params: params)
         var returnResponses: [LLMResponse] = []
         var responseText: String = ""
+        var accumulatedImages: [Message.Image] = []
+        var accumulatedFiles: [LLMResponseFile] = []
+        
         for await content in contents {
             switch content.result {
             case .message(let aMessage):
-                let text = aMessage.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
-                returnResponses.append(LLMResponse.complete(content: text))
+                let (text, images, files) = extractTextImagesAndFiles(from: aMessage.parts)
+                accumulatedImages.append(contentsOf: images)
+                accumulatedFiles.append(contentsOf: files)
+                let metadata = createMetadata(images: images, files: files)
+                returnResponses.append(LLMResponse.complete(content: text, metadata: metadata))
             case .task(let task):
                 var text: String = ""
+                var taskImages: [Message.Image] = []
+                var taskFiles: [LLMResponseFile] = []
                 if let artifacts = task.artifacts {
                     for artifact in artifacts {
-                        text += artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                        let (artifactText, artifactImages, artifactFiles) = extractTextImagesAndFiles(from: artifact.parts, artifactName: artifact.name)
+                        text += artifactText
+                        taskImages.append(contentsOf: artifactImages)
+                        taskFiles.append(contentsOf: artifactFiles)
                     }
                 }
-                returnResponses.append(LLMResponse.complete(content: text))
+                accumulatedImages.append(contentsOf: taskImages)
+                accumulatedFiles.append(contentsOf: taskFiles)
+                let metadata = createMetadata(images: taskImages, files: taskFiles)
+                returnResponses.append(LLMResponse.complete(content: text, metadata: metadata))
             case .taskArtifactUpdate(let event):
+                let (artifactText, artifactImages, artifactFiles) = extractTextImagesAndFiles(from: event.artifact.parts, artifactName: event.artifact.name)
+                accumulatedImages.append(contentsOf: artifactImages)
+                accumulatedFiles.append(contentsOf: artifactFiles)
+                
                 if event.append == true {
-                    responseText += event.artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                    responseText += artifactText
                 } else {
-                    responseText = event.artifact.parts.compactMap({ if case .text(let text) = $0, !text.isEmpty { return text } else { return nil }}).joined(separator: " ")
+                    responseText = artifactText
                 }
                 if event.lastChunk == true {
-                    returnResponses.append(LLMResponse.complete(content: responseText))
+                    let metadata = createMetadata(images: accumulatedImages, files: accumulatedFiles)
+                    returnResponses.append(LLMResponse.complete(content: responseText, metadata: metadata))
                     responseText = ""
+                    accumulatedImages = []
+                    accumulatedFiles = []
                 }
             case .taskStatusUpdate(let event):
-                if event.status.state == .completed, !responseText.isEmpty {
-                    returnResponses.append(LLMResponse.complete(content: responseText))
+                if event.status.state == .completed, (!responseText.isEmpty || !accumulatedImages.isEmpty || !accumulatedFiles.isEmpty) {
+                    let metadata = createMetadata(images: accumulatedImages, files: accumulatedFiles)
+                    returnResponses.append(LLMResponse.complete(content: responseText, metadata: metadata))
                     responseText = ""
+                    accumulatedImages = []
+                    accumulatedFiles = []
                 }
             }
         }
         return returnResponses
+    }
+    
+    // MARK: - Helper Methods for Content Extraction
+    
+    /// Extracts text, images, and file/data content from A2A message parts.
+    /// Image parts go to `images`; other file/data parts go to `files`.
+    private func extractTextImagesAndFiles(from parts: [A2AMessagePart], artifactName: String? = nil) -> (text: String, images: [Message.Image], files: [LLMResponseFile]) {
+        var textParts: [String] = []
+        var images: [Message.Image] = []
+        var files: [LLMResponseFile] = []
+        let baseName = artifactName ?? "part"
+        
+        for (index, part) in parts.enumerated() {
+            switch part {
+            case .text(let text):
+                if !text.isEmpty {
+                    textParts.append(text)
+                }
+            case .file(let data, let url):
+                if let imageData = data {
+                    let mimeType = detectMIMEType(from: imageData)
+                    let name = artifactName ?? "\(baseName)-\(index + 1)"
+                    if mimeType?.hasPrefix("image/") == true {
+                        let image = Message.Image(
+                            name: name,
+                            path: url?.absoluteString,
+                            imageData: imageData,
+                            thumbData: nil
+                        )
+                        images.append(image)
+                        logger.debug(
+                            "Extracted image from file part",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("imageName", .string(name)),
+                                ("dataSize", .stringConvertible(imageData.count)),
+                                ("mimeType", .string(mimeType ?? "unknown"))
+                            )
+                        )
+                    } else {
+                        files.append(LLMResponseFile(name: name, mimeType: mimeType, data: imageData, url: url))
+                        logger.debug(
+                            "Extracted file from file part",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("name", .string(name)),
+                                ("dataSize", .stringConvertible(imageData.count)),
+                                ("mimeType", .string(mimeType ?? "unknown"))
+                            )
+                        )
+                    }
+                } else if let url = url {
+                    let name = artifactName ?? "\(baseName)-\(index + 1)"
+                    files.append(LLMResponseFile(name: name, mimeType: nil, data: nil, url: url))
+                    logger.debug(
+                        "Extracted file URL from file part",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("name", .string(name)),
+                            ("url", .string(url.absoluteString))
+                        )
+                    )
+                }
+            case .data(let data):
+                let mimeType = detectMIMEType(from: data)
+                let name = artifactName ?? "\(baseName)-\(index + 1)"
+                if mimeType?.hasPrefix("image/") == true {
+                    let image = Message.Image(
+                        name: name,
+                        path: nil,
+                        imageData: data,
+                        thumbData: nil
+                    )
+                    images.append(image)
+                    logger.debug(
+                        "Extracted image from data part",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("imageName", .string(name)),
+                            ("dataSize", .stringConvertible(data.count)),
+                            ("mimeType", .string(mimeType ?? "unknown"))
+                        )
+                    )
+                } else {
+                    files.append(LLMResponseFile(name: name, mimeType: mimeType, data: data, url: nil))
+                    logger.debug(
+                        "Extracted file from data part",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("name", .string(name)),
+                            ("dataSize", .stringConvertible(data.count)),
+                            ("mimeType", .string(mimeType ?? "unknown"))
+                        )
+                    )
+                }
+            }
+        }
+        
+        let text = textParts.joined(separator: " ")
+        return (text, images, files)
+    }
+    
+    /// Creates LLMMetadata with images and/or files in modelMetadata
+    private func createMetadata(images: [Message.Image], files: [LLMResponseFile]) -> LLMMetadata? {
+        var entries: [String: JSON] = [:]
+        if !images.isEmpty {
+            entries["images"] = .array(images.map { $0.toEasyJSON(includeImageData: true, includeThumbData: false) })
+        }
+        if !files.isEmpty {
+            entries["files"] = .array(files.map { $0.toJSON() })
+        }
+        guard !entries.isEmpty else { return nil }
+        return LLMMetadata(modelMetadata: .object(entries))
+    }
+    
+    /// Detects MIME type from image data by checking magic bytes
+    private func detectMIMEType(from data: Data) -> String? {
+        guard data.count >= 8 else { return nil }
+        
+        // Check for common image magic bytes
+        let firstBytes = Array(data.prefix(8))
+        
+        // PNG: 89 50 4E 47 0D 0A 1A 0A
+        if firstBytes.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+            return "image/png"
+        }
+        
+        // JPEG: FF D8 FF
+        if firstBytes.prefix(3).starts(with: [0xFF, 0xD8, 0xFF]) {
+            return "image/jpeg"
+        }
+        
+        // GIF: 47 49 46 38 (GIF8)
+        if firstBytes.prefix(4).starts(with: [0x47, 0x49, 0x46, 0x38]) {
+            return "image/gif"
+        }
+        
+        // WebP: 52 49 46 46 (RIFF) followed by WEBP
+        if firstBytes.prefix(4).starts(with: [0x52, 0x49, 0x46, 0x46]) && data.count >= 12 {
+            let webpBytes = Array(data.prefix(12).suffix(4))
+            if String(bytes: webpBytes, encoding: .ascii) == "WEBP" {
+                return "image/webp"
+            }
+        }
+        
+        // BMP: 42 4D (BM)
+        if firstBytes.prefix(2).starts(with: [0x42, 0x4D]) {
+            return "image/bmp"
+        }
+        
+        return nil
     }
     
     /// Get all available tools from A2A clients
@@ -127,7 +304,7 @@ public actor A2AManager {
     
     // MARK: - Private
     
-    private var clients: [A2AClient] = []
+    private var clients: [any A2AAgentStreamClient] = []
     
     private func loadA2AConfiguration(configFileURL: URL) async throws {
         do {

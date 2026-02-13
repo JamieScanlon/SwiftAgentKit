@@ -30,6 +30,7 @@ The `LLMProtocolAdapter` allows you to:
 - **A2A Compatibility**: Full integration with the A2A protocol
 - **Conversation History**: Maintains context across multiple messages
 - **Streaming Support**: Real-time streaming responses
+- **Image Generation**: Automatic detection and support for image generation requests
 - **Configurable**: Customizable parameters and system prompts
 - **Error Handling**: Graceful error handling and recovery
 
@@ -45,13 +46,14 @@ import SwiftAgentKitAdapters
 // Create your LLM implementation
 let myLLM = MyCustomLLM(model: "my-model")
 
-// Create the adapter
+// Create the adapter with DynamicPrompt
+var prompt = DynamicPrompt(template: "You are a helpful assistant.")
 let adapter = LLMProtocolAdapter(
     llm: myLLM,
     model: "my-model",
     maxTokens: 1000,
     temperature: 0.7,
-    systemPrompt: "You are a helpful assistant."
+    systemPrompt: prompt
 )
 
 // Use with A2A server
@@ -69,7 +71,7 @@ public struct Configuration: Sendable {
     public let maxTokens: Int?                  // Maximum tokens to generate
     public let temperature: Double?             // Response randomness (0.0-2.0)
     public let topP: Double?                    // Top-p sampling parameter
-    public let systemPrompt: String?            // System prompt for the LLM
+    public let systemPrompt: DynamicPrompt?     // System prompt for the LLM (supports token replacement)
     public let additionalParameters: JSON?      // Model-specific parameters
 }
 ```
@@ -79,13 +81,32 @@ public struct Configuration: Sendable {
 For simpler use cases, you can use the convenience initializer:
 
 ```swift
+var prompt = DynamicPrompt(template: "You are a helpful assistant.")
 let adapter = LLMProtocolAdapter(
     llm: myLLM,
     model: "my-model",
     maxTokens: 1000,
     temperature: 0.7,
-    systemPrompt: "You are a helpful assistant."
+    systemPrompt: prompt
 )
+```
+
+### Dynamic Prompts with Tokens
+
+You can use `DynamicPrompt` to create system prompts with replaceable tokens:
+
+```swift
+var prompt = DynamicPrompt(template: "You are {{role}} assistant. Your expertise is in {{domain}}.")
+prompt["role"] = "helpful"
+prompt["domain"] = "software development"
+
+let adapter = LLMProtocolAdapter(
+    llm: myLLM,
+    model: "my-model",
+    systemPrompt: prompt
+)
+
+// The prompt will be rendered as: "You are helpful assistant. Your expertise is in software development."
 ```
 
 ## Advanced Usage
@@ -109,7 +130,7 @@ struct MyCustomLLM: LLMProtocol {
     }
     
     func getCapabilities() -> [LLMCapability] {
-        return [.completion, .tools]
+        return [.completion, .tools, .imageGeneration]  // Include .imageGeneration if supported
     }
     
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
@@ -118,11 +139,17 @@ struct MyCustomLLM: LLMProtocol {
         return LLMResponse(content: response)
     }
     
-    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<LLMResponse, Error> {
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         // Your streaming implementation here
         return AsyncThrowingStream { continuation in
             // Stream implementation
         }
+    }
+    
+    // Optional: Implement image generation if your LLM supports it
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        // Your image generation implementation here
+        // Return ImageGenerationResponse with URLs to generated images
     }
 }
 ```
@@ -248,12 +275,13 @@ struct ExampleApp {
         
         // Create LLM and adapter
         let exampleLLM = ExampleLLM(model: "example-llm-v1")
+        var prompt = DynamicPrompt(template: "You are a helpful assistant.")
         let adapter = LLMProtocolAdapter(
             llm: exampleLLM,
             model: "example-llm-v1",
             maxTokens: 1000,
             temperature: 0.7,
-            systemPrompt: "You are a helpful assistant."
+            systemPrompt: prompt
         )
         
         // Create and start A2A server
@@ -268,16 +296,136 @@ struct ExampleApp {
 }
 ```
 
+## Image Generation Support
+
+The `LLMProtocolAdapter` automatically detects and handles image generation requests when:
+
+1. **LLM supports image generation**: The LLM's `getCapabilities()` includes `.imageGeneration`
+2. **Client accepts image output**: The request's `acceptedOutputModes` includes image MIME types (e.g., `"image/png"`, `"image/jpeg"`, `"image/*"`)
+3. **Message contains a prompt**: The message has text content to use as the image generation prompt
+
+### How It Works
+
+The adapter uses A2A-compliant detection by checking the `acceptedOutputModes` field in `MessageSendConfiguration`. This means any standard A2A client can request image generation by simply specifying image output modes.
+
+### Example: Client Requesting Image Generation
+
+```swift
+// Client sends a request accepting image output
+let config = MessageSendConfiguration(
+    acceptedOutputModes: ["image/png", "text/plain"]  // Client accepts images
+)
+
+let params = MessageSendParams(
+    message: A2AMessage(
+        role: "user",
+        parts: [.text(text: "Generate a beautiful sunset over mountains")],
+        messageId: UUID().uuidString
+    ),
+    configuration: config
+)
+
+// Optional: Pass additional parameters via metadata
+let paramsWithOptions = MessageSendParams(
+    message: message,
+    configuration: config,
+    metadata: try JSON([
+        "n": 2,           // Generate 2 images
+        "size": "512x512" // Image size
+    ])
+)
+```
+
+### Image Generation Response
+
+When image generation is detected and the LLM supports it:
+
+- The adapter calls `llm.generateImage(config)` instead of `llm.send()`
+- Generated images are returned as **artifacts** with `A2AMessagePart.file` parts
+- Each image URL is wrapped in a separate artifact
+- Artifacts include MIME type metadata and creation timestamps
+
+### Fallback Behavior
+
+If the client requests images but the LLM doesn't support image generation:
+- The adapter gracefully falls back to text generation
+- No error is thrown - the request is handled as a normal text request
+- This ensures compatibility with LLMs that don't support image generation
+
+### Implementing Image Generation in Your LLM
+
+To add image generation support to your custom LLM:
+
+```swift
+struct MyImageGeneratingLLM: LLMProtocol {
+    // ... other methods ...
+    
+    func getCapabilities() -> [LLMCapability] {
+        return [.completion, .tools, .imageGeneration]  // Add .imageGeneration
+    }
+    
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        // Your image generation logic here
+        // Generate images based on config.prompt, config.image, etc.
+        
+        // Save generated images to filesystem and return URLs
+        let imageURLs = try await generateImagesAndSaveToDisk(config)
+        
+        return ImageGenerationResponse(
+            images: imageURLs,
+            createdAt: Date(),
+            metadata: LLMMetadata(totalTokens: 100)
+        )
+    }
+}
+```
+
 ## Integration with Existing Adapters
 
 The `LLMProtocolAdapter` complements the existing adapters in SwiftAgentKitAdapters:
 
-- **OpenAIAdapter**: For OpenAI GPT models
+- **OpenAIAdapter**: For OpenAI GPT models (also supports DALL-E image generation)
 - **AnthropicAdapter**: For Anthropic Claude models  
 - **GeminiAdapter**: For Google Gemini models
 - **LLMProtocolAdapter**: For any custom LLM implementation
 
 This allows you to use the same A2A infrastructure with both commercial LLM providers and your own custom implementations.
+
+### Image Generation Across Adapters
+
+Both `LLMProtocolAdapter` and `OpenAIAdapter` support image generation using the same A2A-compliant detection mechanism:
+
+- **LLMProtocolAdapter**: Automatically supports image generation if the wrapped LLM implements `generateImage()`
+- **OpenAIAdapter**: Directly supports DALL-E image generation via OpenAI's API
+
+Both adapters use the same detection logic (checking `acceptedOutputModes`) and return images as file-based artifacts, ensuring a consistent experience across different LLM providers.
+
+### Error Handling for Image Generation
+
+The adapter provides comprehensive error handling for image generation:
+
+- **Invalid Parameters**: Invalid `n` (not 1-10) or `size` values are automatically clamped to valid ranges with warnings logged
+- **Prompt Length**: Prompts exceeding 1000 characters log warnings (LLM may truncate)
+- **LLM Errors**: Errors from the underlying LLM's `generateImage()` method are properly propagated
+- **No Images Generated**: If LLM returns no images, throws `LLMError.imageGenerationError(.noImagesGenerated)`
+
+### File Storage and Cleanup
+
+Generated images are saved to filesystem URLs returned by the LLM's `generateImage()` method. The adapter:
+
+- Creates artifacts with file URLs pointing to the generated images
+- Relies on the LLM implementation to manage file storage and cleanup
+- Does not automatically delete generated images (LLM implementation responsibility)
+
+For production use, ensure your LLM implementation handles file cleanup appropriately.
+
+### Tool-Aware Compatibility
+
+Image generation requests bypass tool handling - they are direct operations that don't require tool execution. When using `ToolAwareAdapter`:
+
+- Image generation requests are detected and handled before tool processing
+- Tools are not available during image generation (by design)
+- This ensures image generation is fast and direct without agentic loops
 
 ## Error Handling
 
@@ -332,7 +480,7 @@ LoggingSystem.bootstrap { label in
 ```swift
 public struct LLMProtocolAdapter: AgentAdapter {
     public init(llm: LLMProtocol, configuration: Configuration)
-    public init(llm: LLMProtocol, model: String?, maxTokens: Int?, temperature: Double?, topP: Double?, systemPrompt: String?, additionalParameters: JSON?)
+    public init(llm: LLMProtocol, model: String?, maxTokens: Int?, temperature: Double?, topP: Double?, systemPrompt: DynamicPrompt?, additionalParameters: JSON?)
     
     public var agentName: String
     public var agentDescription: String
@@ -354,9 +502,9 @@ public struct Configuration: Sendable {
     public let maxTokens: Int?
     public let temperature: Double?
     public let topP: Double?
-    public let systemPrompt: String?
+    public let systemPrompt: DynamicPrompt?
     public let additionalParameters: JSON?
     
-    public init(model: String, maxTokens: Int?, temperature: Double?, topP: Double?, systemPrompt: String?, additionalParameters: JSON?)
+    public init(model: String, maxTokens: Int?, temperature: Double?, topP: Double?, systemPrompt: DynamicPrompt?, additionalParameters: JSON?)
 }
 ``` 

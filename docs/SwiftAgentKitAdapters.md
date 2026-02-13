@@ -47,10 +47,21 @@ The `OpenAIAdapter` provides integration with OpenAI's GPT models through their 
 ### Basic Usage
 
 ```swift
+// Using DynamicPrompt (recommended)
+var prompt = DynamicPrompt(template: "You are a helpful assistant.")
 let adapter = OpenAIAdapter(
     apiKey: "your-openai-api-key",
     model: "gpt-4o",
-    systemPrompt: "You are a helpful assistant."
+    systemPrompt: prompt
+)
+
+// Or with tokens
+var dynamicPrompt = DynamicPrompt(template: "You are {{role}} assistant.")
+dynamicPrompt["role"] = "helpful"
+let adapterWithTokens = OpenAIAdapter(
+    apiKey: "your-openai-api-key",
+    model: "gpt-4o",
+    systemPrompt: dynamicPrompt
 )
 ```
 
@@ -61,7 +72,7 @@ let adapter = OpenAIAdapter(
 - `baseURL`: Custom base URL for the API (default: OpenAI's official URL)
 - `maxTokens`: Maximum number of tokens to generate
 - `temperature`: Controls randomness (0.0 to 2.0)
-- `systemPrompt`: System message to set the assistant's behavior
+- `systemPrompt`: System message as a `DynamicPrompt?` to set the assistant's behavior (supports token replacement)
 - `topP`: Nucleus sampling parameter (0.0 to 1.0)
 - `frequencyPenalty`: Reduces repetition of frequent tokens (-2.0 to 2.0)
 - `presencePenalty`: Reduces repetition of any token (-2.0 to 2.0)
@@ -76,7 +87,7 @@ let config = OpenAIAdapter.Configuration(
     model: "gpt-4o",
     maxTokens: 1000,
     temperature: 0.7,
-    systemPrompt: "You are an expert software developer. Provide detailed technical explanations.",
+    systemPrompt: DynamicPrompt(template: "You are an expert software developer. Provide detailed technical explanations."),
     topP: 0.9,
     frequencyPenalty: 0.1,
     presencePenalty: 0.1,
@@ -86,13 +97,112 @@ let config = OpenAIAdapter.Configuration(
 let adapter = OpenAIAdapter(configuration: config)
 ```
 
+### Dynamic Prompts with Tokens
+
+You can use `DynamicPrompt` to create system prompts with replaceable tokens:
+
+```swift
+var prompt = DynamicPrompt(template: "You are {{role}} assistant. Your expertise is in {{domain}}.")
+prompt["role"] = "helpful"
+prompt["domain"] = "software development"
+
+let adapter = OpenAIAdapter(
+    apiKey: "your-key",
+    model: "gpt-4o",
+    systemPrompt: prompt
+)
+
+// The prompt will be rendered as: "You are helpful assistant. Your expertise is in software development."
+```
+
 ### Features
 
 - **System Prompts**: Configure the assistant's behavior and role
 - **Conversation History**: Maintains context across multiple messages
+- **Image Generation**: Automatic DALL-E image generation support via A2A-compliant detection
 - **Comprehensive Parameters**: Support for all OpenAI API parameters
 - **Error Handling**: Detailed error types for different failure scenarios
 - **Cross-Provider Compatibility**: Works with any service that adopts OpenAI's API format
+
+### Image Generation Support
+
+The `OpenAIAdapter` automatically detects and handles image generation requests when:
+
+1. **Client accepts image output**: The request's `acceptedOutputModes` includes image MIME types (e.g., `"image/png"`, `"image/jpeg"`, `"image/*"`)
+2. **Message contains a prompt**: The message has text content to use as the image generation prompt
+
+#### How It Works
+
+The adapter uses A2A-compliant detection by checking the `acceptedOutputModes` field in `MessageSendConfiguration`. When image generation is detected, it calls OpenAI's DALL-E API to generate images, downloads them, and returns them as file-based artifacts.
+
+#### Example: Client Requesting Image Generation
+
+```swift
+// Client sends a request accepting image output
+let config = MessageSendConfiguration(
+    acceptedOutputModes: ["image/png", "text/plain"]  // Client accepts images
+)
+
+let params = MessageSendParams(
+    message: A2AMessage(
+        role: "user",
+        parts: [.text(text: "Generate a beautiful sunset over mountains")],
+        messageId: UUID().uuidString
+    ),
+    configuration: config,
+    metadata: try JSON([
+        "n": 2,           // Generate 2 images
+        "size": "1024x1024" // Image size (256x256, 512x512, or 1024x1024)
+    ])
+)
+```
+
+#### Image Generation Response
+
+When image generation is detected:
+
+- The adapter calls OpenAI's DALL-E API instead of the chat completions API
+- Generated images are downloaded and saved to the filesystem
+- Images are returned as **artifacts** with `A2AMessagePart.file` parts
+- Each image URL is wrapped in a separate artifact
+- Artifacts include MIME type metadata and creation timestamps
+
+#### Supported Parameters
+
+- `n`: Number of images to generate (1-10, default: 1)
+- `size`: Image size - `"256x256"`, `"512x512"`, or `"1024x1024"` (default: `"1024x1024"`)
+
+#### Fallback Behavior
+
+If the client requests images but the message doesn't contain a valid prompt, the adapter gracefully falls back to text generation.
+
+#### Error Handling
+
+The adapter provides specific error handling for image generation:
+
+- **Invalid Parameters**: Invalid `n` (not 1-10) or `size` values are automatically clamped to valid ranges with warnings logged
+- **Prompt Length**: Prompts exceeding 1000 characters log warnings (API may truncate)
+- **Download Failures**: Network errors during image download throw `LLMError.imageGenerationError(.downloadFailed)`
+- **No Images Generated**: If API returns no images, throws `LLMError.imageGenerationError(.noImagesGenerated)`
+- **Invalid Image Data**: Downloaded data that doesn't appear to be image data logs warnings but continues
+
+#### File Storage and Cleanup
+
+Generated images are saved to the system's temporary directory (`FileManager.default.temporaryDirectory`). These files:
+
+- Are automatically cleaned up by the operating system based on system policies
+- May persist until system cleanup runs (typically on reboot or when disk space is needed)
+- Can be accessed via the URLs returned in artifacts until cleaned up
+
+For production use, consider implementing a custom storage location and cleanup policy if you need more control over file lifecycle.
+
+#### Tool-Aware Compatibility
+
+Image generation requests bypass tool handling - they are direct operations that don't require tool execution. When using `ToolAwareAdapter`:
+
+- Image generation requests are detected and handled before tool processing
+- Tools are not available during image generation (by design)
+- This ensures image generation is fast and direct without agentic loops
 
 ### Error Types
 
@@ -102,6 +212,18 @@ The adapter provides specific error types for different scenarios:
 - `modelNotFound`: When the specified model doesn't exist
 - `invalidApiKey`: When the API key is invalid
 - `contextLengthExceeded`: When the conversation exceeds token limits
+- `imageGenerationError`: Wraps `ImageGenerationError` for image generation failures
+
+#### Image Generation Error Types
+
+When image generation fails, the adapter throws `LLMError.imageGenerationError` wrapping one of these specific errors:
+
+- `ImageGenerationError.invalidPrompt(String)`: Prompt validation failed (too long, empty, etc.)
+- `ImageGenerationError.invalidSize(String)`: Unsupported image size
+- `ImageGenerationError.invalidCount(Int)`: Invalid `n` parameter (not 1-10)
+- `ImageGenerationError.downloadFailed(URL, Error)`: Failed to download generated image from URL
+- `ImageGenerationError.noImagesGenerated`: API returned no images
+- `ImageGenerationError.invalidImageData(URL)`: Downloaded data is not valid image data
 
 ## Anthropic Adapter
 
@@ -149,10 +271,11 @@ All adapters can be used with A2A servers to create standardized AI endpoints:
 
 ```swift
 // Create an adapter
+var prompt = DynamicPrompt(template: "You are a helpful coding assistant.")
 let openAIAdapter = OpenAIAdapter(
     apiKey: "your-key",
     model: "gpt-4o",
-    systemPrompt: "You are a helpful coding assistant."
+    systemPrompt: prompt
 )
 
 // Create an A2A server with the adapter

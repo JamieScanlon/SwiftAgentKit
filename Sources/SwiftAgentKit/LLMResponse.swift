@@ -1,6 +1,41 @@
 import Foundation
 import EasyJSON
 
+/// Represents a file or opaque data part in an LLM response (non-image).
+/// Stored in metadata as base64 when carrying binary data.
+public struct LLMResponseFile: Sendable {
+    public var name: String?
+    public var mimeType: String?
+    public var data: Data?
+    public var url: URL?
+    
+    public init(name: String? = nil, mimeType: String? = nil, data: Data? = nil, url: URL? = nil) {
+        self.name = name
+        self.mimeType = mimeType
+        self.data = data
+        self.url = url
+    }
+    
+    /// Decode from JSON (e.g. from metadata.modelMetadata["files"]).
+    public init?(from json: JSON) {
+        guard case .object(let dict) = json else { return nil }
+        if case .string(let n) = dict["name"] { name = n } else { name = nil }
+        if case .string(let m) = dict["mimeType"] { mimeType = m } else { mimeType = nil }
+        if case .string(let b64) = dict["data"], let d = Data(base64Encoded: b64) { data = d } else { data = nil }
+        if case .string(let s) = dict["url"] { url = URL(string: s) } else { url = nil }
+    }
+    
+    /// Encode for storage in metadata (data as base64).
+    public func toJSON() -> JSON {
+        var d: [String: JSON] = [:]
+        if let name { d["name"] = .string(name) }
+        if let mimeType { d["mimeType"] = .string(mimeType) }
+        if let data { d["data"] = .string(data.base64EncodedString()) }
+        if let url { d["url"] = .string(url.absoluteString) }
+        return .object(d)
+    }
+}
+
 /// Represents a comprehensive response from an LLM
 public struct LLMResponse: Sendable {
     /// The content of the response (text content)
@@ -193,5 +228,33 @@ public extension LLMResponse {
     /// The finish reason for the response
     var finishReason: String? {
         return metadata?.finishReason
+    }
+    
+    /// Extracts Message.Image objects from the response metadata
+    /// Images are stored in metadata.modelMetadata["images"] as a JSON array
+    var images: [Message.Image] {
+        guard let modelMetadata = metadata?.modelMetadata,
+              case .object(let dict) = modelMetadata,
+              case .array(let imagesArray) = dict["images"] else {
+            return []
+        }
+        
+        return imagesArray.compactMap { imageJSON in
+            Message.Image(from: imageJSON)
+        }
+    }
+    
+    /// Extracts file/data content from the response metadata
+    /// Files are stored in metadata.modelMetadata["files"] as a JSON array (data as base64)
+    var files: [LLMResponseFile] {
+        guard let modelMetadata = metadata?.modelMetadata,
+              case .object(let dict) = modelMetadata,
+              case .array(let filesArray) = dict["files"] else {
+            return []
+        }
+        
+        return filesArray.compactMap { fileJSON in
+            LLMResponseFile(from: fileJSON)
+        }
     }
 } 

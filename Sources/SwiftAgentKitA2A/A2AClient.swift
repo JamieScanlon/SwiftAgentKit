@@ -161,7 +161,7 @@ public actor A2AClient {
     
     /// Streams messages from the agent using Server-Sent Events
     /// Implements the message/stream RPC method from A2A spec
-    func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>> {
+    public func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>> {
         
         guard let apiManager else {
             throw A2AClientError.notInitialized
@@ -606,6 +606,8 @@ public enum MessageResult: Encodable, Sendable {
     case taskStatusUpdate(TaskStatusUpdateEvent)
     case taskArtifactUpdate(TaskArtifactUpdateEvent)
 }
+
+extension A2AClient: A2AAgentStreamClient {}
 
 // MARK: - Custom Errors
 

@@ -175,11 +175,11 @@ public actor MCPServer {
                 arguments: params.arguments ?? [:]
             )
             
-            // Convert MCPToolResult to MCP Tool.Content
+            // Convert MCPToolResult to MCP Tool.Content array
             let content = await self.convertToMCPContent(result)
             
             return MCP.CallTool.Result(
-                content: [content],
+                content: content,
                 isError: result.isError
             )
         }
@@ -247,14 +247,48 @@ public actor MCPServer {
     
     // MARK: - Private Methods
     
-    /// Convert MCPToolResult to MCP Tool.Content
-    private func convertToMCPContent(_ result: MCPToolResult) -> MCP.Tool.Content {
+    /// Convert MCPToolResult to MCP Tool.Content array
+    /// Supports both plain text and structured JSON content
+    internal func convertToMCPContent(_ result: MCPToolResult) -> [MCP.Tool.Content] {
         switch result {
         case .success(let message):
-            return .text(message)
+            // Try to parse as JSON array of content parts
+            if let data = message.data(using: .utf8),
+               let jsonArray = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+                var contentParts: [MCP.Tool.Content] = []
+                for part in jsonArray {
+                    if let type = part["type"] as? String {
+                        switch type {
+                        case "text":
+                            if let text = part["text"] as? String {
+                                contentParts.append(.text(text))
+                            }
+                        case "resource":
+                            if let resource = part["resource"] as? [String: Any],
+                               let uri = resource["uri"] as? String,
+                               let mimeType = resource["mimeType"] as? String {
+                                let text = resource["name"] as? String
+                                contentParts.append(.resource(uri: uri, mimeType: mimeType, text: text))
+                            }
+                        case "image":
+                            if let data = part["data"] as? String,
+                               let mimeType = part["mimeType"] as? String {
+                                let metadata = part["metadata"] as? [String: String]
+                                contentParts.append(.image(data: data, mimeType: mimeType, metadata: metadata))
+                            }
+                        default:
+                            break
+                        }
+                    }
+                }
+                if !contentParts.isEmpty {
+                    return contentParts
+                }
+            }
+            // Fallback to plain text if not valid JSON or parsing fails
+            return [.text(message)]
         case .error(let code, let message):
-            // For errors, we return text content but mark it as an error
-            return .text("Error [\(code)]: \(message)")
+            return [.text("Error [\(code)]: \(message)")]
         }
     }
     
