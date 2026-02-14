@@ -1,0 +1,150 @@
+# SwiftAgentKitSkills
+
+Add-on library for the [Agent Skills specification](https://agentskills.io/specification). Provides parsing and loading of skills from directories containing `SKILL.md` files with YAML frontmatter.
+
+## Overview
+
+A skill is a directory containing at minimum a `SKILL.md` file:
+
+```
+skill-name/
+└── SKILL.md          # Required
+```
+
+Optional directories: `scripts/`, `references/`, `assets/`
+
+## SKILL.md Format
+
+```yaml
+---
+name: pdf-processing
+description: Extract text and tables from PDF files, fill forms, merge documents.
+license: Apache-2.0
+metadata:
+  author: example-org
+  version: "1.0"
+---
+```
+
+Followed by Markdown body content (skill instructions).
+
+## Usage
+
+```swift
+import SwiftAgentKitSkills
+
+// Parse a single skill
+let parser = SkillParser()
+let skill = try parser.parse(directoryURL: URL(fileURLWithPath: "./my-skill"))
+
+// Load all skills from a directory
+let loader = SkillLoader()
+let skills = try await loader.loadSkills(from: URL(fileURLWithPath: "./skills"))
+
+// Load metadata only (for progressive disclosure)
+let metadata = try await loader.loadMetadata(from: skillsDirectory)
+```
+
+## Injecting Skills into the System Prompt
+
+Use `SkillLoader.loadMetadata(from:)` to get a lightweight index of available skills, then format it for injection into your LLM system prompt. This lets the agent know which skills exist and when to use them, without loading full instructions until a skill is activated.
+
+`SkillPromptFormatter` supports three output formats: `formatAsXML`, `formatAsYAML`, and `formatAsJSON`.
+
+### XML Format
+
+Format skill metadata as XML for inclusion in the system prompt:
+
+```swift
+import SwiftAgentKitSkills
+
+let skillsDirectory = URL(fileURLWithPath: "/path/to/skills")
+let loader = SkillLoader()
+let metadata = try await loader.loadMetadata(from: skillsDirectory)
+
+let availableSkillsXML = SkillPromptFormatter.formatAsXML(metadata)
+// Inject availableSkillsXML into your system prompt
+```
+
+This produces:
+
+```xml
+<available_skills>
+  <skill>
+    <name>pdf-processing</name>
+    <description>Extracts text and tables from PDF files, fills forms, merges documents.</description>
+    <location>/path/to/skills/pdf-processing/SKILL.md</location>
+  </skill>
+  <skill>
+    <name>data-analysis</name>
+    <description>Analyzes datasets, generates charts, and creates summary reports.</description>
+    <location>/path/to/skills/data-analysis/SKILL.md</location>
+  </skill>
+</available_skills>
+```
+
+### YAML and JSON Formats
+
+```swift
+let yaml = SkillPromptFormatter.formatAsYAML(metadata)
+let json = SkillPromptFormatter.formatAsJSON(metadata)
+```
+
+YAML output:
+```yaml
+available_skills:
+- name: pdf-processing
+  description: Extracts text and tables from PDF files...
+  location: /path/to/skills/pdf-processing/SKILL.md
+```
+
+JSON output:
+```json
+{"available_skills":[{"name":"pdf-processing","description":"...","location":"/path/to/skills/pdf-processing/SKILL.md"}]}
+```
+
+### Full Integration Example
+
+```swift
+// 1. At startup: load metadata and inject into system prompt
+let loader = SkillLoader()
+let metadata = try await loader.loadMetadata(from: skillsDirectory)
+let skillsSection = SkillPromptFormatter.formatAsXML(metadata)
+
+let systemPrompt = """
+You are a helpful assistant with access to the following skills.
+When the user's task matches a skill, activate it by loading the full instructions.
+
+\(skillsSection)
+
+To use a skill, read its SKILL.md file at the location given above.
+"""
+
+// 2. When the agent decides to activate a skill (e.g., based on user intent):
+let skill = try await loader.loadSkill(named: "pdf-processing", from: skillsDirectory)
+if let skill {
+    // Append full instructions to context
+    let instructions = skill.fullInstructions
+    // Send to LLM as additional context...
+}
+```
+
+### Custom Formatting
+
+If you need a different format than XML, YAML, or JSON:
+
+```swift
+for m in metadata {
+    print("\(m.name): \(m.description) -> \(m.skillFileURL.path)")
+}
+```
+
+## Progressive Disclosure
+
+Per the spec, skills should be structured for efficient context use:
+
+1. **Metadata** (~100 tokens): Load `name` and `description` at startup for all skills
+2. **Instructions** (< 5000 tokens): Load full `SKILL.md` body when skill is activated
+3. **Resources** (as needed): Load `scripts/`, `references/`, `assets/` on demand
+
+Use `loadMetadata(from:)` for indexing, then `loadSkill(named:from:)` when activating a skill.
