@@ -139,6 +139,30 @@ for m in metadata {
 }
 ```
 
+## Activation Tracking
+
+`SkillLoader` tracks which skills have been "activated" (fully loaded into context). Call `activate(_:)` after injecting a skill's instructions into your agent, and `deactivateSkill(named:)` when removing it.
+
+```swift
+// Load and activate
+let skill = try await loader.loadSkill(named: "pdf-processing", from: skillsDirectory)
+if let skill {
+    // Inject skill.fullInstructions into context...
+    await loader.activate(skill)
+}
+
+// Or use the convenience method
+let skill = try await loader.loadAndActivateSkill(named: "pdf-processing", from: skillsDirectory)
+
+// Query activated skills
+let active = await loader.activatedSkills  // Set<String>
+await loader.isActivated(name: "pdf-processing")  // Bool
+
+// Deactivate when removing from context
+await loader.deactivateSkill(named: "pdf-processing")
+await loader.deactivateAllSkills()
+```
+
 ## Progressive Disclosure
 
 Per the spec, skills should be structured for efficient context use:

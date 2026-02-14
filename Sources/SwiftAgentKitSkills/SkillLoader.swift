@@ -28,16 +28,78 @@ public struct SkillMetadata: Sendable {
 }
 
 /// Loads and manages skills from directories conforming to the [Agent Skills specification](https://agentskills.io/specification).
+///
+/// Tracks which skills have been "activated" (fully loaded into context). Use `activate(_:)` when
+/// you've loaded a skill and injected its instructions into the agent context, and `deactivateSkill(named:)`
+/// when removing it from context.
 public actor SkillLoader {
     
     private let parser: SkillParser
     private let logger: Logger
+    
+    /// Names of skills that have been activated (fully loaded into context).
+    private var activatedSkillNames: Set<String> = []
     
     public init(parser: SkillParser = SkillParser(), logger: Logger? = nil) {
         self.parser = parser
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .custom(subsystem: "swiftagentkit.skills", component: "SkillLoader")
         )
+    }
+    
+    // MARK: - Activation Tracking
+    
+    /// Marks a skill as activated (fully loaded into context).
+    /// Call this after loading a skill and injecting its instructions into the agent.
+    /// - Parameter skill: The skill that was loaded and injected.
+    public func activate(_ skill: Skill) {
+        activatedSkillNames.insert(skill.name)
+        logger.info("Activated skill", metadata: SwiftAgentKitLogging.metadata(
+            ("skill", .string(skill.name))
+        ))
+    }
+    
+    /// Marks a skill as activated by name.
+    /// Use when you have activated a skill without holding a `Skill` instance.
+    /// - Parameter name: The skill name to mark as activated.
+    public func activateSkill(named name: String) {
+        activatedSkillNames.insert(name)
+        logger.info("Activated skill", metadata: SwiftAgentKitLogging.metadata(
+            ("skill", .string(name))
+        ))
+    }
+    
+    /// Removes a skill from the activated set.
+    /// Call when removing the skill's instructions from context.
+    /// - Parameter name: The skill name to deactivate.
+    public func deactivateSkill(named name: String) {
+        if activatedSkillNames.remove(name) != nil {
+            logger.info("Deactivated skill", metadata: SwiftAgentKitLogging.metadata(
+                ("skill", .string(name))
+            ))
+        }
+    }
+    
+    /// Removes all skills from the activated set.
+    public func deactivateAllSkills() {
+        let count = activatedSkillNames.count
+        activatedSkillNames.removeAll()
+        if count > 0 {
+            logger.info("Deactivated all skills", metadata: SwiftAgentKitLogging.metadata(
+                ("count", .stringConvertible(count))
+            ))
+        }
+    }
+    
+    /// Returns the set of skill names currently activated.
+    public var activatedSkills: Set<String> {
+        activatedSkillNames
+    }
+    
+    /// Returns whether a skill is currently activated.
+    /// - Parameter name: The skill name to check.
+    public func isActivated(name: String) -> Bool {
+        activatedSkillNames.contains(name)
     }
     
     /// Discovers all skills in a directory.
@@ -153,5 +215,19 @@ public actor SkillLoader {
         }
         
         return try parser.parse(skillFileURL: skillFileURL)
+    }
+    
+    /// Loads a skill and marks it as activated in one call.
+    /// Convenience for load-then-activate workflows.
+    /// - Parameters:
+    ///   - name: Skill name (must match directory name).
+    ///   - directoryURL: Root directory containing skill subdirectories.
+    /// - Returns: The skill if found and valid, nil otherwise. If non-nil, the skill is also activated.
+    public func loadAndActivateSkill(named name: String, from directoryURL: URL) throws -> Skill? {
+        guard let skill = try loadSkill(named: name, from: directoryURL) else {
+            return nil
+        }
+        activate(skill)
+        return skill
     }
 }

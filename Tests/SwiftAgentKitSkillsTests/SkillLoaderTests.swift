@@ -98,4 +98,82 @@ struct SkillLoaderTests {
         
         #expect(skill == nil)
     }
+    
+    // MARK: - Activation Tracking
+    
+    @Test("Activate and deactivate skill")
+    func testActivateDeactivate() async throws {
+        let rootDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+        
+        let skillDir = rootDir.appendingPathComponent("activate-skill")
+        try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+        let content = """
+        ---
+        name: activate-skill
+        description: For activation test.
+        ---
+        Body.
+        """
+        try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        
+        let loader = SkillLoader()
+        let skill = try await loader.loadSkill(named: "activate-skill", from: rootDir)
+        #expect(skill != nil)
+        
+        #expect(await loader.activatedSkills.isEmpty)
+        #expect(await loader.isActivated(name: "activate-skill") == false)
+        
+        await loader.activate(skill!)
+        #expect(await loader.activatedSkills == Set(["activate-skill"]))
+        #expect(await loader.isActivated(name: "activate-skill") == true)
+        
+        await loader.deactivateSkill(named: "activate-skill")
+        #expect(await loader.activatedSkills.isEmpty)
+        #expect(await loader.isActivated(name: "activate-skill") == false)
+    }
+    
+    @Test("Activate skill by name")
+    func testActivateSkillByName() async throws {
+        let loader = SkillLoader()
+        await loader.activateSkill(named: "by-name-skill")
+        #expect(await loader.isActivated(name: "by-name-skill") == true)
+        await loader.deactivateSkill(named: "by-name-skill")
+        #expect(await loader.activatedSkills.isEmpty)
+    }
+    
+    @Test("Deactivate all skills")
+    func testDeactivateAll() async throws {
+        let loader = SkillLoader()
+        await loader.activateSkill(named: "skill-1")
+        await loader.activateSkill(named: "skill-2")
+        #expect(await loader.activatedSkills.count == 2)
+        
+        await loader.deactivateAllSkills()
+        #expect(await loader.activatedSkills.isEmpty)
+    }
+    
+    @Test("loadAndActivateSkill loads and activates in one call")
+    func testLoadAndActivate() async throws {
+        let rootDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+        
+        let skillDir = rootDir.appendingPathComponent("load-activate-skill")
+        try FileManager.default.createDirectory(at: skillDir, withIntermediateDirectories: true)
+        let content = """
+        ---
+        name: load-activate-skill
+        description: Load and activate test.
+        ---
+        Body.
+        """
+        try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        
+        let loader = SkillLoader()
+        let skill = try await loader.loadAndActivateSkill(named: "load-activate-skill", from: rootDir)
+        #expect(skill != nil)
+        #expect(await loader.isActivated(name: "load-activate-skill") == true)
+    }
 }
