@@ -154,6 +154,7 @@ let package = Package(
                 "SwiftAgentKit",
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Yams", package: "Yams"),
+                .product(name: "EasyJSON", package: "EasyJSON"),
             ],
             exclude: ["README.md"]),
         

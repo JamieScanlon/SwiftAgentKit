@@ -163,6 +163,41 @@ await loader.deactivateSkill(named: "pdf-processing")
 await loader.deactivateAllSkills()
 ```
 
+## SkillsToolProvider
+
+`SkillsToolProvider` implements `ToolProvider` so the LLM can activate and deactivate skills via tool calls. Add it alongside other tool providers (MCP, A2A) when using `ToolAwareAdapter` or `Orchestrator`.
+
+**Tools exposed:**
+- `agent-skill-activate(skill_name: "...")` — Loads a skill, marks it activated, and returns full instructions for context injection
+- `agent-skill-deactivate(skill_name: "...")` — Removes a skill from the activated set
+- `agent-skills-list-active()` — Returns names of currently activated skills
+
+```swift
+import SwiftAgentKitSkills
+import SwiftAgentKitAdapters
+
+let skillsDirectory = URL(fileURLWithPath: "/path/to/skills")
+let loader = SkillLoader()
+let skillsProvider = SkillsToolProvider(
+    loader: loader,
+    skillsDirectory: skillsDirectory,
+    onSkillActivated: { skill in
+        // Inject skill.fullInstructions into system context
+    },
+    onSkillDeactivated: { skillName in
+        // Remove skill instructions from system context
+    }
+)
+
+// Add to adapter's tool providers
+let adapter = try AdapterBuilder()
+    .withToolProvider(skillsProvider)
+    // ... other providers
+    .build()
+```
+
+The `onSkillActivated` callback receives the loaded `Skill` (use `skill.fullInstructions` to inject). The `onSkillDeactivated` callback receives the skill name for removal. Updating system context is beyond this library's scope; use these callbacks to integrate.
+
 ## Progressive Disclosure
 
 Per the spec, skills should be structured for efficient context use:
