@@ -150,6 +150,52 @@ func wrapMessageResult(_ result: MessageResult) -> SendStreamingMessageSuccessRe
     SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: result)
 }
 
+// MARK: - Mock ToolProvider for ToolManager orchestrator tests
+
+struct MockFunctionToolProvider: ToolProvider {
+    var name: String { "MockFunctionToolProvider" }
+    
+    private let toolName: String
+    private let resultContent: String
+    private let resultSuccess: Bool
+    private let resultError: String?
+    
+    init(
+        toolName: String = "get_current_time",
+        resultContent: String = "2025-02-14T12:00:00Z",
+        resultSuccess: Bool = true,
+        resultError: String? = nil
+    ) {
+        self.toolName = toolName
+        self.resultContent = resultContent
+        self.resultSuccess = resultSuccess
+        self.resultError = resultError
+    }
+    
+    func availableTools() async -> [ToolDefinition] {
+        [
+            ToolDefinition(
+                name: toolName,
+                description: "Returns the current date and time",
+                parameters: [],
+                type: .function
+            )
+        ]
+    }
+    
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        guard toolCall.name == toolName else {
+            return ToolResult(success: false, content: "", toolCallId: toolCall.id, error: "Unknown tool: \(toolCall.name)")
+        }
+        return ToolResult(
+            success: resultSuccess,
+            content: resultContent,
+            toolCallId: toolCall.id,
+            error: resultError
+        )
+    }
+}
+
 
 @Suite struct SwiftAgentKitOrchestratorTests {
     
@@ -918,5 +964,177 @@ func wrapMessageResult(_ result: MessageResult) -> SendStreamingMessageSuccessRe
         #expect(toolMessage != nil)
         #expect(toolMessage!.images.count == 1)
         #expect(toolMessage!.content.isEmpty || toolMessage!.content.contains("Attachments:") == true)
+    }
+    
+    // MARK: - ToolManager Tests
+    
+    @Test("SwiftAgentKitOrchestrator can be initialized with ToolManager")
+    func testOrchestratorWithToolManager() async throws {
+        let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let toolManager = ToolManager(providers: [MockFunctionToolProvider()])
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, toolManager: toolManager)
+        
+        #expect(await orchestrator.llm is MockLLM)
+        #expect(await orchestrator.toolManager != nil)
+    }
+    
+    @Test("availableTools includes ToolManager tools when configured")
+    func testAvailableToolsIncludesToolManagerTools() async throws {
+        let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let toolName = "get_current_time"
+        let toolManager = ToolManager(providers: [MockFunctionToolProvider(toolName: toolName)])
+        let config = OrchestratorConfig(mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+        
+        let tools = await orchestrator.allAvailableTools
+        #expect(!tools.isEmpty)
+        #expect(tools.contains { $0.name == toolName })
+        #expect(tools.first { $0.name == toolName }?.type == .function)
+    }
+    
+    @Test("ToolManager executes function tool calls and result is sent to LLM")
+    func testToolManagerExecutesFunctionToolCalls() async throws {
+        let toolCallId = "call-func-1"
+        let expectedContent = "2025-02-14T15:30:00Z"
+        let toolCall = ToolCall(
+            name: "get_current_time",
+            arguments: .object([:]),
+            id: toolCallId
+        )
+        
+        let capture = SendCapture()
+        let mockLLM = CapturingMockLLM(
+            logger: Logger(label: "Capture"),
+            toolCallsToReturn: [toolCall],
+            capture: capture
+        )
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time", resultContent: expectedContent, resultSuccess: true)
+        ])
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "What time is it?")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        let invocations = await capture.getInvocations()
+        #expect(invocations.count >= 2)
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.content == expectedContent)
+        #expect(toolMessage!.toolCallId == toolCallId)
+    }
+    
+    @Test("ToolManager passes error to LLM when tool is not found in any provider")
+    func testToolManagerPassesErrorWhenToolNotFound() async throws {
+        // ToolManager returns success: false when no provider handles the tool.
+        // Use a provider that doesn't know the requested tool - ToolManager falls through
+        // to "not found" and the error is sent to the LLM.
+        let toolCallId = "call-fail-1"
+        let toolCall = ToolCall(
+            name: "unknown_tool",  // No provider implements this
+            arguments: .object([:]),
+            id: toolCallId
+        )
+        
+        let capture = SendCapture()
+        let mockLLM = CapturingMockLLM(
+            logger: Logger(label: "Capture"),
+            toolCallsToReturn: [toolCall],
+            capture: capture
+        )
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time")  // Only knows get_current_time
+        ])
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "Use unknown_tool")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        let invocations = await capture.getInvocations()
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.content.contains("not found") || toolMessage!.content.contains("unknown_tool"))
+        #expect(toolMessage!.toolCallId == toolCallId)
+    }
+    
+    @Test("ToolManager is used when MCP and A2A do not handle the tool")
+    func testToolManagerUsedWhenMCPAndA2ADoNotHandleTool() async throws {
+        // MCP and A2A managers with no clients - they won't handle any tool
+        let mcpManager = MCPManager(connectionTimeout: 5.0, logger: Logger(label: "TestMCP"))
+        let a2aManager = A2AManager(logger: Logger(label: "TestA2A"))
+        
+        let toolCall = ToolCall(
+            name: "get_current_time",
+            arguments: .object([:]),
+            id: "call-fallback-1"
+        )
+        let capture = SendCapture()
+        let mockLLM = CapturingMockLLM(
+            logger: Logger(label: "Capture"),
+            toolCallsToReturn: [toolCall],
+            capture: capture
+        )
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time", resultContent: "fallback-success")
+        ])
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: true, a2aEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: mockLLM,
+            config: config,
+            mcpManager: mcpManager,
+            a2aManager: a2aManager,
+            toolManager: toolManager
+        )
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "What time is it?")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        // ToolManager should have handled it since MCP/A2A have no clients
+        let invocations = await capture.getInvocations()
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.content == "fallback-success")
+    }
+    
+    @Test("ToolManager with multiple providers aggregates tools")
+    func testToolManagerMultipleProvidersAggregatesTools() async throws {
+        let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time"),
+            MockFunctionToolProvider(toolName: "get_weather")
+        ])
+        let config = OrchestratorConfig(mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+        
+        let tools = await orchestrator.allAvailableTools
+        #expect(tools.count == 2)
+        #expect(tools.contains { $0.name == "get_current_time" })
+        #expect(tools.contains { $0.name == "get_weather" })
     }
 } 

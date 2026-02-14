@@ -31,13 +31,16 @@ public struct OrchestratorConfig: Sendable {
 }
 
 /// SwiftAgentKitOrchestrator provides building blocks for creating LLM orchestrators
-/// that can use tools through MCP and communicate with other agents through A2A.
+/// that can use tools through MCP, communicate with other agents through A2A,
+/// and execute generic function tools via a configurable ToolManager.
 public actor SwiftAgentKitOrchestrator {
     public let logger: Logger
     public let llm: LLMProtocol
     public let config: OrchestratorConfig
     public let mcpManager: MCPManager?
     public let a2aManager: A2AManager?
+    /// Optional ToolManager for executing generic function tools (non-MCP, non-A2A)
+    public let toolManager: ToolManager?
     
     /// All available tools from MCP and A2A managers
     public var allAvailableTools: [ToolDefinition] {
@@ -52,6 +55,11 @@ public actor SwiftAgentKitOrchestrator {
             // Get tools from A2A manager if enabled
             if let a2aManager = a2aManager, config.a2aEnabled {
                 allTools.append(contentsOf: await a2aManager.availableTools())
+            }
+            
+            // Get tools from generic ToolManager if configured
+            if let toolManager = toolManager {
+                allTools.append(contentsOf: await toolManager.allToolsAsync())
             }
             
             return allTools
@@ -77,6 +85,7 @@ public actor SwiftAgentKitOrchestrator {
         config: OrchestratorConfig = OrchestratorConfig(),
         mcpManager: MCPManager? = nil,
         a2aManager: A2AManager? = nil,
+        toolManager: ToolManager? = nil,
         logger: Logger? = nil
     ) {
         self.llm = llm
@@ -121,6 +130,8 @@ public actor SwiftAgentKitOrchestrator {
         } else {
             self.a2aManager = nil
         }
+        
+        self.toolManager = toolManager
     }
     
     /// Process a conversation thread and publish message updates to the message stream
@@ -353,6 +364,16 @@ public actor SwiftAgentKitOrchestrator {
         }
     }
     
+    /// Converts a ToolResult from ToolManager/ToolProvider into an LLMResponse for the conversation
+    private func llmResponseFromToolResult(_ result: ToolResult, toolCallId: String?) -> LLMResponse {
+        let content = result.success ? result.content : (result.error ?? "Tool execution failed")
+        let metadata: LLMMetadata? = {
+            guard case .object(let dict) = result.metadata, !dict.isEmpty else { return nil }
+            return LLMMetadata(modelMetadata: result.metadata)
+        }()
+        return LLMResponse.complete(content: content, metadata: metadata, toolCallId: toolCallId)
+    }
+    
     /// Builds a conversation Message from a tool call LLMResponse, including images and file references.
     /// When the response contains files (URLs or data), appends a text summary so the next LLM turn sees them.
     private func messageFromToolResponse(_ response: LLMResponse) -> Message {
@@ -463,6 +484,44 @@ public actor SwiftAgentKitOrchestrator {
                             "A2A agent call returned nil",
                             metadata: metadataForToolCall(toolCall, provider: "a2a")
                         )
+                    }
+                }
+                // Try generic ToolManager if MCP and A2A didn't handle the tool
+                if callResponses.isEmpty, let toolManager = toolManager {
+                    logger.debug(
+                        "Dispatching to ToolManager",
+                        metadata: metadataForToolCall(toolCall, provider: "toolManager")
+                    )
+                    do {
+                        let result = try await toolManager.executeTool(toolCall)
+                        let response = llmResponseFromToolResult(result, toolCallId: toolCall.id)
+                        if result.success {
+                            logger.debug(
+                                "ToolManager executed tool successfully",
+                                metadata: metadataForToolCall(toolCall, provider: "toolManager")
+                            )
+                        } else {
+                            logger.warning(
+                                "ToolManager reported tool execution failure",
+                                metadata: SwiftAgentKitLogging.metadata(
+                                    ("toolName", .string(toolCall.name)),
+                                    ("error", .string(result.error ?? "unknown"))
+                                )
+                            )
+                        }
+                        callResponses.append(response)
+                    } catch {
+                        logger.error(
+                            "ToolManager tool execution failed",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("toolName", .string(toolCall.name)),
+                                ("error", .string(String(describing: error)))
+                            )
+                        )
+                        callResponses.append(LLMResponse.complete(
+                            content: "Tool execution failed: \(error)",
+                            toolCallId: toolCall.id
+                        ))
                     }
                 }
                 
