@@ -25,8 +25,8 @@ struct SkillsToolProviderTests {
         try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: rootDir) }
         
-        let loader = SkillLoader()
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         let tools = await provider.availableTools()
         
         let names = tools.map { $0.name }.sorted()
@@ -56,10 +56,9 @@ struct SkillsToolProviderTests {
         try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         
         let capture = CallbackCapture()
-        let loader = SkillLoader()
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
         let provider = SkillsToolProvider(
             loader: loader,
-            skillsDirectory: rootDir,
             onSkillActivated: { skill in await capture.setActivated(skill) }
         )
         
@@ -93,14 +92,13 @@ struct SkillsToolProviderTests {
         try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         
         let capture = CallbackCapture()
-        let loader = SkillLoader()
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
         let provider = SkillsToolProvider(
             loader: loader,
-            skillsDirectory: rootDir,
             onSkillDeactivated: { name in await capture.setDeactivated(name) }
         )
         
-        _ = try await loader.loadAndActivateSkill(named: "deactivate-callback-skill", from: rootDir)
+        _ = try await loader.loadAndActivateSkill(named: "deactivate-callback-skill")
         
         let toolCall = ToolCall(
             name: SkillsToolProvider.deactivateToolName,
@@ -132,8 +130,8 @@ struct SkillsToolProviderTests {
         """
         try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         
-        let loader = SkillLoader()
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         
         let toolCall = ToolCall(
             name: SkillsToolProvider.activateToolName,
@@ -156,8 +154,8 @@ struct SkillsToolProviderTests {
         try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: rootDir) }
         
-        let loader = SkillLoader()
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         
         let toolCall = ToolCall(
             name: SkillsToolProvider.activateToolName,
@@ -179,8 +177,8 @@ struct SkillsToolProviderTests {
         try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: rootDir) }
         
-        let loader = SkillLoader()
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         
         let toolCall = ToolCall(
             name: SkillsToolProvider.activateToolName,
@@ -202,8 +200,8 @@ struct SkillsToolProviderTests {
         try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: rootDir) }
         
-        let loader = SkillLoader()
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         
         // Try to deactivate a skill that was never activated
         let toolCall = ToolCall(
@@ -237,11 +235,11 @@ struct SkillsToolProviderTests {
         """
         try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         
-        let loader = SkillLoader()
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         
         // Activate first
-        let skill = try await loader.loadAndActivateSkill(named: "deactivate-skill", from: rootDir)
+        let skill = try await loader.loadAndActivateSkill(named: "deactivate-skill")
         #expect(skill != nil)
         #expect(await loader.isActivated(name: "deactivate-skill") == true)
         
@@ -264,8 +262,8 @@ struct SkillsToolProviderTests {
         try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: rootDir) }
         
-        let loader = SkillLoader()
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         
         let toolCall = ToolCall(
             name: SkillsToolProvider.listActivatedToolName,
@@ -286,11 +284,11 @@ struct SkillsToolProviderTests {
         defer { try? FileManager.default.removeItem(at: rootDir) }
         
         await Task.yield()
-        let loader = SkillLoader()
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
         await loader.activateSkill(named: "skill-a")
         await loader.activateSkill(named: "skill-b")
         
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         let toolCall = ToolCall(
             name: SkillsToolProvider.listActivatedToolName,
             arguments: .object([:]),
@@ -310,8 +308,8 @@ struct SkillsToolProviderTests {
         try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: rootDir) }
         
-        let loader = SkillLoader()
-        let provider = SkillsToolProvider(loader: loader, skillsDirectory: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let provider = SkillsToolProvider(loader: loader)
         
         let toolCall = ToolCall(
             name: "unknown_tool",

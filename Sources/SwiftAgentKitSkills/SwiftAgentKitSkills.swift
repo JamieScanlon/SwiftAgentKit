@@ -22,8 +22,9 @@ import Foundation
 /// ```swift
 /// import SwiftAgentKitSkills
 ///
-/// let loader = SkillLoader()
-/// let skills = try await loader.loadSkills(from: URL(fileURLWithPath: "./skills"))
+/// let skillsDirectory = URL(fileURLWithPath: "./skills")
+/// let loader = SkillLoader(skillsDirectoryURL: skillsDirectory)
+/// let skills = try loader.loadSkills()
 ///
 /// for skill in skills {
 ///     print("\(skill.name): \(skill.description)")
@@ -36,8 +37,8 @@ import Foundation
 /// For efficient context usage, load metadata first at startup, then full skills on demand:
 ///
 /// ```swift
-/// let metadata = try await loader.loadMetadata(from: skillsDirectory)
+/// let metadata = try loader.loadMetadata()
 /// // Use metadata for skill selection...
-/// let skill = try await loader.loadSkill(named: "pdf-processing", from: skillsDirectory)
+/// let skill = try loader.loadSkill(named: "pdf-processing")
 /// ```
 public enum SwiftAgentKitSkills {}

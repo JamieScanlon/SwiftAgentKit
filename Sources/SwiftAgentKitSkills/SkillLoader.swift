@@ -37,10 +37,18 @@ public actor SkillLoader {
     private let parser: SkillParser
     private let logger: Logger
     
+    /// Root directory containing skill subdirectories (each with a SKILL.md file).
+    public let skillsDirectoryURL: URL
+    
     /// Names of skills that have been activated (fully loaded into context).
     private var activatedSkillNames: Set<String> = []
     
-    public init(parser: SkillParser = SkillParser(), logger: Logger? = nil) {
+    /// - Parameters:
+    ///   - skillsDirectoryURL: Root directory containing skill subdirectories (e.g. `~/.skills` or `./skills`).
+    ///   - parser: Parser for SKILL.md files.
+    ///   - logger: Optional logger.
+    public init(skillsDirectoryURL: URL, parser: SkillParser = SkillParser(), logger: Logger? = nil) {
+        self.skillsDirectoryURL = skillsDirectoryURL
         self.parser = parser
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .custom(subsystem: "swiftagentkit.skills", component: "SkillLoader")
@@ -102,16 +110,15 @@ public actor SkillLoader {
         activatedSkillNames.contains(name)
     }
     
-    /// Discovers all skills in a directory.
+    /// Discovers all skills in the root skills directory.
     /// A skill is a subdirectory containing a SKILL.md file.
-    /// - Parameter directoryURL: Root directory to scan (e.g. `~/.skills` or `./skills`).
     /// - Returns: URLs of skill directories (each contains SKILL.md).
-    public func discoverSkills(in directoryURL: URL) throws -> [URL] {
+    public func discoverSkills() throws -> [URL] {
         let fm = FileManager.default
         var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: directoryURL.path, isDirectory: &isDir), isDir.boolValue else {
+        guard fm.fileExists(atPath: skillsDirectoryURL.path, isDirectory: &isDir), isDir.boolValue else {
             logger.warning("Skill directory does not exist or is not a directory", metadata: SwiftAgentKitLogging.metadata(
-                ("path", .string(directoryURL.path))
+                ("path", .string(skillsDirectoryURL.path))
             ))
             return []
         }
@@ -119,13 +126,13 @@ public actor SkillLoader {
         let contents: [URL]
         do {
             contents = try fm.contentsOfDirectory(
-                at: directoryURL,
+                at: skillsDirectoryURL,
                 includingPropertiesForKeys: [.isDirectoryKey],
                 options: [.skipsHiddenFiles]
             )
         } catch {
             logger.error("Failed to list skill directory", metadata: SwiftAgentKitLogging.metadata(
-                ("path", .string(directoryURL.path)),
+                ("path", .string(skillsDirectoryURL.path)),
                 ("error", .string(String(describing: error)))
             ))
             throw error
@@ -143,19 +150,18 @@ public actor SkillLoader {
         }
         
         logger.info("Discovered \(skillURLs.count) skills", metadata: SwiftAgentKitLogging.metadata(
-            ("directory", .string(directoryURL.path)),
+            ("directory", .string(skillsDirectoryURL.path)),
             ("count", .stringConvertible(skillURLs.count))
         ))
         
         return skillURLs.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
     
-    /// Loads metadata only (name, description) for all skills in a directory.
+    /// Loads metadata only (name, description) for all skills.
     /// Suitable for startup indexing and skill selection.
-    /// - Parameter directoryURL: Root directory containing skill subdirectories.
     /// - Returns: Array of metadata, or empty if directory doesn't exist.
-    public func loadMetadata(from directoryURL: URL) throws -> [SkillMetadata] {
-        let skillURLs = try discoverSkills(in: directoryURL)
+    public func loadMetadata() throws -> [SkillMetadata] {
+        let skillURLs = try discoverSkills()
         var results: [SkillMetadata] = []
         
         for skillDirURL in skillURLs {
@@ -178,11 +184,10 @@ public actor SkillLoader {
         return results
     }
     
-    /// Loads full skills (including body content) from a directory.
-    /// - Parameter directoryURL: Root directory containing skill subdirectories.
+    /// Loads full skills (including body content).
     /// - Returns: Array of fully loaded skills.
-    public func loadSkills(from directoryURL: URL) throws -> [Skill] {
-        let skillURLs = try discoverSkills(in: directoryURL)
+    public func loadSkills() throws -> [Skill] {
+        let skillURLs = try discoverSkills()
         var results: [Skill] = []
         
         for skillDirURL in skillURLs {
@@ -200,13 +205,11 @@ public actor SkillLoader {
         return results
     }
     
-    /// Loads a single skill by name from a directory.
-    /// - Parameters:
-    ///   - name: Skill name (must match directory name).
-    ///   - directoryURL: Root directory containing skill subdirectories.
+    /// Loads a single skill by name.
+    /// - Parameter name: Skill name (must match directory name).
     /// - Returns: The skill if found and valid, nil otherwise.
-    public func loadSkill(named name: String, from directoryURL: URL) throws -> Skill? {
-        let skillDirURL = directoryURL.appendingPathComponent(name)
+    public func loadSkill(named name: String) throws -> Skill? {
+        let skillDirURL = skillsDirectoryURL.appendingPathComponent(name)
         let skillFileURL = skillDirURL.appendingPathComponent("SKILL.md")
         
         let fm = FileManager.default
@@ -219,12 +222,10 @@ public actor SkillLoader {
     
     /// Loads a skill and marks it as activated in one call.
     /// Convenience for load-then-activate workflows.
-    /// - Parameters:
-    ///   - name: Skill name (must match directory name).
-    ///   - directoryURL: Root directory containing skill subdirectories.
+    /// - Parameter name: Skill name (must match directory name).
     /// - Returns: The skill if found and valid, nil otherwise. If non-nil, the skill is also activated.
-    public func loadAndActivateSkill(named name: String, from directoryURL: URL) throws -> Skill? {
-        guard let skill = try loadSkill(named: name, from: directoryURL) else {
+    public func loadAndActivateSkill(named name: String) throws -> Skill? {
+        guard let skill = try loadSkill(named: name) else {
             return nil
         }
         activate(skill)

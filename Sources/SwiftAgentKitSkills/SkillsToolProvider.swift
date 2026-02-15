@@ -40,7 +40,6 @@ public struct SkillsToolProvider: ToolProvider {
     public static let listActivatedToolName = "agent-skills-list-active"
     
     private let loader: SkillLoader
-    private let skillsDirectory: URL
     private let logger: Logger
     private let onSkillActivated: OnSkillActivated?
     private let onSkillDeactivated: OnSkillDeactivated?
@@ -48,8 +47,7 @@ public struct SkillsToolProvider: ToolProvider {
     public var name: String { "Agent Skills" }
     
     /// - Parameters:
-    ///   - loader: The skill loader for loading and tracking skills.
-    ///   - skillsDirectory: Root directory containing skill subdirectories.
+    ///   - loader: The skill loader (configured with the root skills directory).
     ///   - logger: Optional logger.
     ///   - onSkillActivated: Callback invoked when a skill is activated. Use to inject the skill's
     ///     instructions into system context. Receives the loaded `Skill`.
@@ -57,13 +55,11 @@ public struct SkillsToolProvider: ToolProvider {
     ///     skill's instructions from system context. Receives the skill name.
     public init(
         loader: SkillLoader,
-        skillsDirectory: URL,
         logger: Logger? = nil,
         onSkillActivated: OnSkillActivated? = nil,
         onSkillDeactivated: OnSkillDeactivated? = nil
     ) {
         self.loader = loader
-        self.skillsDirectory = skillsDirectory
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .custom(subsystem: "swiftagentkit.skills", component: "SkillsToolProvider")
         )
@@ -120,7 +116,7 @@ public struct SkillsToolProvider: ToolProvider {
             throw Error.missingParameter("skill_name")
         }
         
-        guard let skill = try await loader.loadAndActivateSkill(named: skillName, from: skillsDirectory) else {
+        guard let skill = try await loader.loadAndActivateSkill(named: skillName) else {
             throw Error.skillNotFound(skillName)
         }
         

@@ -30,8 +30,8 @@ struct SkillLoaderTests {
             try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         }
         
-        let loader = SkillLoader()
-        let urls = try await loader.discoverSkills(in: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let urls = try await loader.discoverSkills()
         
         #expect(urls.count == 2)
         #expect(urls.map { $0.lastPathComponent }.sorted() == ["skill-a", "skill-b"])
@@ -54,8 +54,8 @@ struct SkillLoaderTests {
         """
         try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         
-        let loader = SkillLoader()
-        let metadata = try await loader.loadMetadata(from: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let metadata = try await loader.loadMetadata()
         
         #expect(metadata.count == 1)
         #expect(metadata[0].name == "meta-skill")
@@ -79,8 +79,8 @@ struct SkillLoaderTests {
         """
         try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         
-        let loader = SkillLoader()
-        let skill = try await loader.loadSkill(named: "named-skill", from: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let skill = try await loader.loadSkill(named: "named-skill")
         
         #expect(skill != nil)
         #expect(skill?.name == "named-skill")
@@ -93,8 +93,8 @@ struct SkillLoaderTests {
         try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: rootDir) }
         
-        let loader = SkillLoader()
-        let skill = try await loader.loadSkill(named: "does-not-exist", from: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let skill = try await loader.loadSkill(named: "does-not-exist")
         
         #expect(skill == nil)
     }
@@ -118,8 +118,8 @@ struct SkillLoaderTests {
         """
         try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         
-        let loader = SkillLoader()
-        let skill = try await loader.loadSkill(named: "activate-skill", from: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let skill = try await loader.loadSkill(named: "activate-skill")
         #expect(skill != nil)
         
         #expect(await loader.activatedSkills.isEmpty)
@@ -136,7 +136,10 @@ struct SkillLoaderTests {
     
     @Test("Activate skill by name")
     func testActivateSkillByName() async throws {
-        let loader = SkillLoader()
+        let rootDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
         await loader.activateSkill(named: "by-name-skill")
         #expect(await loader.isActivated(name: "by-name-skill") == true)
         await loader.deactivateSkill(named: "by-name-skill")
@@ -145,7 +148,10 @@ struct SkillLoaderTests {
     
     @Test("Deactivate all skills")
     func testDeactivateAll() async throws {
-        let loader = SkillLoader()
+        let rootDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
         await loader.activateSkill(named: "skill-1")
         await loader.activateSkill(named: "skill-2")
         #expect(await loader.activatedSkills.count == 2)
@@ -171,8 +177,8 @@ struct SkillLoaderTests {
         """
         try content.write(to: skillDir.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         
-        let loader = SkillLoader()
-        let skill = try await loader.loadAndActivateSkill(named: "load-activate-skill", from: rootDir)
+        let loader = SkillLoader(skillsDirectoryURL: rootDir)
+        let skill = try await loader.loadAndActivateSkill(named: "load-activate-skill")
         #expect(skill != nil)
         #expect(await loader.isActivated(name: "load-activate-skill") == true)
     }

@@ -60,7 +60,7 @@ public enum SkillPromptFormatter {
     /// and location (path to SKILL.md). Use this at startup to inform the agent
     /// which skills are available without loading full instructions.
     ///
-    /// - Parameter metadata: Array of skill metadata from `SkillLoader.loadMetadata(from:)`.
+    /// - Parameter metadata: Array of skill metadata from `SkillLoader.loadMetadata()`.
     /// - Returns: XML string suitable for embedding in a system prompt.
     public static func formatAsXML(_ metadata: [SkillMetadata]) -> String {
         guard !metadata.isEmpty else {
@@ -89,7 +89,7 @@ public enum SkillPromptFormatter {
     /// Produces an `available_skills` list with each skill's name, description,
     /// and location. Use this at startup to inform the agent which skills are available.
     ///
-    /// - Parameter metadata: Array of skill metadata from `SkillLoader.loadMetadata(from:)`.
+    /// - Parameter metadata: Array of skill metadata from `SkillLoader.loadMetadata()`.
     /// - Returns: YAML string suitable for embedding in a system prompt.
     public static func formatAsYAML(_ metadata: [SkillMetadata]) -> String {
         guard !metadata.isEmpty else {
@@ -112,7 +112,7 @@ public enum SkillPromptFormatter {
     /// Produces an `available_skills` array with each skill's name, description,
     /// and location. Use this at startup to inform the agent which skills are available.
     ///
-    /// - Parameter metadata: Array of skill metadata from `SkillLoader.loadMetadata(from:)`.
+    /// - Parameter metadata: Array of skill metadata from `SkillLoader.loadMetadata()`.
     /// - Returns: JSON string suitable for embedding in a system prompt.
     public static func formatAsJSON(_ metadata: [SkillMetadata]) -> String {
         guard !metadata.isEmpty else {

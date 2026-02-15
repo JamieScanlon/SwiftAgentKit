@@ -38,16 +38,17 @@ let parser = SkillParser()
 let skill = try parser.parse(directoryURL: URL(fileURLWithPath: "./my-skill"))
 
 // Load all skills from a directory
-let loader = SkillLoader()
-let skills = try await loader.loadSkills(from: URL(fileURLWithPath: "./skills"))
+let skillsDirectory = URL(fileURLWithPath: "./skills")
+let loader = SkillLoader(skillsDirectoryURL: skillsDirectory)
+let skills = try loader.loadSkills()
 
 // Load metadata only (for progressive disclosure)
-let metadata = try await loader.loadMetadata(from: skillsDirectory)
+let metadata = try loader.loadMetadata()
 ```
 
 ## Injecting Skills into the System Prompt
 
-Use `SkillLoader.loadMetadata(from:)` to get a lightweight index of available skills, then format it for injection into your LLM system prompt. This lets the agent know which skills exist and when to use them, without loading full instructions until a skill is activated.
+Use `SkillLoader.loadMetadata()` to get a lightweight index of available skills, then format it for injection into your LLM system prompt. This lets the agent know which skills exist and when to use them, without loading full instructions until a skill is activated.
 
 `SkillPromptFormatter` supports three output formats: `formatAsXML`, `formatAsYAML`, and `formatAsJSON`.
 
@@ -59,8 +60,8 @@ Format skill metadata as XML for inclusion in the system prompt:
 import SwiftAgentKitSkills
 
 let skillsDirectory = URL(fileURLWithPath: "/path/to/skills")
-let loader = SkillLoader()
-let metadata = try await loader.loadMetadata(from: skillsDirectory)
+let loader = SkillLoader(skillsDirectoryURL: skillsDirectory)
+let metadata = try loader.loadMetadata()
 
 let availableSkillsXML = SkillPromptFormatter.formatAsXML(metadata)
 // Inject availableSkillsXML into your system prompt
@@ -107,8 +108,9 @@ JSON output:
 
 ```swift
 // 1. At startup: load metadata and inject into system prompt
-let loader = SkillLoader()
-let metadata = try await loader.loadMetadata(from: skillsDirectory)
+let skillsDirectory = URL(fileURLWithPath: "/path/to/skills")
+let loader = SkillLoader(skillsDirectoryURL: skillsDirectory)
+let metadata = try loader.loadMetadata()
 let skillsSection = SkillPromptFormatter.formatAsXML(metadata)
 
 let systemPrompt = """
@@ -121,7 +123,7 @@ To use a skill, read its SKILL.md file at the location given above.
 """
 
 // 2. When the agent decides to activate a skill (e.g., based on user intent):
-let skill = try await loader.loadSkill(named: "pdf-processing", from: skillsDirectory)
+let skill = try loader.loadSkill(named: "pdf-processing")
 if let skill {
     // Append full instructions to context
     let instructions = skill.fullInstructions
@@ -145,14 +147,14 @@ for m in metadata {
 
 ```swift
 // Load and activate
-let skill = try await loader.loadSkill(named: "pdf-processing", from: skillsDirectory)
+let skill = try loader.loadSkill(named: "pdf-processing")
 if let skill {
     // Inject skill.fullInstructions into context...
     await loader.activate(skill)
 }
 
 // Or use the convenience method
-let skill = try await loader.loadAndActivateSkill(named: "pdf-processing", from: skillsDirectory)
+let skill = try loader.loadAndActivateSkill(named: "pdf-processing")
 
 // Query activated skills
 let active = await loader.activatedSkills  // Set<String>
@@ -177,10 +179,9 @@ import SwiftAgentKitSkills
 import SwiftAgentKitAdapters
 
 let skillsDirectory = URL(fileURLWithPath: "/path/to/skills")
-let loader = SkillLoader()
+let loader = SkillLoader(skillsDirectoryURL: skillsDirectory)
 let skillsProvider = SkillsToolProvider(
     loader: loader,
-    skillsDirectory: skillsDirectory,
     onSkillActivated: { skill in
         // Inject skill.fullInstructions into system context
     },
@@ -206,4 +207,4 @@ Per the spec, skills should be structured for efficient context use:
 2. **Instructions** (< 5000 tokens): Load full `SKILL.md` body when skill is activated
 3. **Resources** (as needed): Load `scripts/`, `references/`, `assets/` on demand
 
-Use `loadMetadata(from:)` for indexing, then `loadSkill(named:from:)` when activating a skill.
+Use `loadMetadata()` for indexing, then `loadSkill(named:)` when activating a skill.
