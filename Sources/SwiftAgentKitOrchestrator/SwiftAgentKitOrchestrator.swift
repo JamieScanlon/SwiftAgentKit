@@ -16,17 +16,33 @@ public struct OrchestratorConfig: Sendable {
     public let a2aEnabled: Bool
     /// Connection timeout for MCP servers in seconds
     public let mcpConnectionTimeout: TimeInterval
+    /// Maximum number of tokens to generate (passed to LLM requests)
+    public let maxTokens: Int?
+    /// Temperature for response randomness, 0.0 to 2.0 (passed to LLM requests)
+    public let temperature: Double?
+    /// Top-p sampling parameter (passed to LLM requests)
+    public let topP: Double?
+    /// Additional model-specific parameters (passed to LLM requests)
+    public let additionalParameters: JSON?
     
     public init(
         streamingEnabled: Bool = false,
         mcpEnabled: Bool = false,
         a2aEnabled: Bool = false,
-        mcpConnectionTimeout: TimeInterval = 30.0
+        mcpConnectionTimeout: TimeInterval = 30.0,
+        maxTokens: Int? = nil,
+        temperature: Double? = nil,
+        topP: Double? = nil,
+        additionalParameters: JSON? = nil
     ) {
         self.streamingEnabled = streamingEnabled
         self.mcpEnabled = mcpEnabled
         self.a2aEnabled = a2aEnabled
         self.mcpConnectionTimeout = mcpConnectionTimeout
+        self.maxTokens = maxTokens
+        self.temperature = temperature
+        self.topP = topP
+        self.additionalParameters = additionalParameters
     }
 }
 
@@ -161,7 +177,14 @@ public actor SwiftAgentKitOrchestrator {
         var updatedMessages = messages
         
         // Determine if we should use streaming based on configuration
-        let requestConfig = LLMRequestConfig(stream: config.streamingEnabled, availableTools: availableTools)
+        let requestConfig = LLMRequestConfig(
+            maxTokens: config.maxTokens,
+            temperature: config.temperature,
+            topP: config.topP,
+            stream: config.streamingEnabled,
+            availableTools: availableTools,
+            additionalParameters: config.additionalParameters
+        )
                 
         if config.streamingEnabled {
             // Handle streaming response

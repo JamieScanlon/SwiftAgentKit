@@ -65,6 +65,18 @@ struct MockLLM: LLMProtocol {
     }
 }
 
+// MARK: - Config capture (records LLMRequestConfig for assertions)
+
+actor ConfigCapture {
+    private(set) var configs: [LLMRequestConfig] = []
+    func append(_ config: LLMRequestConfig) {
+        configs.append(config)
+    }
+    func getConfigs() -> [LLMRequestConfig] {
+        configs
+    }
+}
+
 // MARK: - Capturing Mock LLM (records messages sent for assertions)
 
 actor SendCapture {
@@ -82,12 +94,14 @@ struct CapturingMockLLM: LLMProtocol {
     let logger: Logger
     let toolCallsToReturn: [ToolCall]
     let capture: SendCapture
+    let configCapture: ConfigCapture?
     
-    init(model: String = "capturing-model", logger: Logger, toolCallsToReturn: [ToolCall], capture: SendCapture = SendCapture()) {
+    init(model: String = "capturing-model", logger: Logger, toolCallsToReturn: [ToolCall], capture: SendCapture = SendCapture(), configCapture: ConfigCapture? = nil) {
         self.model = model
         self.logger = logger
         self.toolCallsToReturn = toolCallsToReturn
         self.capture = capture
+        self.configCapture = configCapture
     }
     
     func getModelName() -> String { model }
@@ -95,6 +109,9 @@ struct CapturingMockLLM: LLMProtocol {
     
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         await capture.append(messages)
+        if let configCapture {
+            await configCapture.append(config)
+        }
         let hasToolMessage = messages.contains { $0.role == .tool }
         if hasToolMessage {
             return LLMResponse.complete(content: "Done after tool response")
@@ -104,10 +121,14 @@ struct CapturingMockLLM: LLMProtocol {
     
     func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         let capture = capture
+        let configCapture = configCapture
         let toolCallsToReturn = toolCallsToReturn
         return AsyncThrowingStream { continuation in
             Task {
                 await capture.append(messages)
+                if let configCapture {
+                    await configCapture.append(config)
+                }
                 let hasToolMessage = messages.contains { $0.role == .tool }
                 if hasToolMessage {
                     continuation.yield(.complete(LLMResponse.complete(content: "Done after tool response")))
@@ -215,6 +236,10 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(config.streamingEnabled == false)
         #expect(config.mcpEnabled == false)
         #expect(config.a2aEnabled == false)
+        #expect(config.maxTokens == nil)
+        #expect(config.temperature == nil)
+        #expect(config.topP == nil)
+        #expect(config.additionalParameters == nil)
     }
     
     @Test("OrchestratorConfig can be initialized with custom values")
@@ -228,6 +253,117 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(config.streamingEnabled == true)
         #expect(config.mcpEnabled == true)
         #expect(config.a2aEnabled == true)
+    }
+    
+    @Test("OrchestratorConfig can be initialized with LLM request params")
+    func testOrchestratorConfigLLMRequestParams() throws {
+        let extraParams = JSON.object(["frequency_penalty": .double(0.5)])
+        let config = OrchestratorConfig(
+            maxTokens: 4096,
+            temperature: 0.7,
+            topP: 0.9,
+            additionalParameters: extraParams
+        )
+        
+        #expect(config.maxTokens == 4096)
+        #expect(config.temperature == 0.7)
+        #expect(config.topP == 0.9)
+        #expect(config.additionalParameters != nil)
+        if case .object(let dict) = config.additionalParameters!,
+           case .double(let val) = dict["frequency_penalty"] {
+            #expect(val == 0.5)
+        }
+    }
+    
+    @Test("updateConversation passes maxTokens, temperature, topP, and additionalParameters to LLM")
+    func testUpdateConversationPassesLLMRequestParams() async throws {
+        let configCapture = ConfigCapture()
+        let extraParams = JSON.object(["frequency_penalty": .double(0.3)])
+        let config = OrchestratorConfig(
+            streamingEnabled: false,
+            maxTokens: 2048,
+            temperature: 0.5,
+            topP: 0.95,
+            additionalParameters: extraParams
+        )
+        let capturingLLM = CapturingMockLLM(
+            logger: Logger(label: "ConfigCaptureLLM"),
+            toolCallsToReturn: [],
+            configCapture: configCapture
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config)
+        
+        let initialMessages = [Message(id: UUID(), role: .user, content: "Hello")]
+        let messageStream = await orchestrator.messageStream
+        
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) { messages.append(message) }
+        }
+        let collector = MessageCollector()
+        _ = Task {
+            for await message in messageStream {
+                await collector.append(message)
+            }
+        }
+        
+        try await orchestrator.updateConversation(initialMessages, availableTools: [])
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        
+        let configs = await configCapture.getConfigs()
+        #expect(configs.count >= 1)
+        let requestConfig = configs[0]
+        #expect(requestConfig.maxTokens == 2048)
+        #expect(requestConfig.temperature == 0.5)
+        #expect(requestConfig.topP == 0.95)
+        #expect(requestConfig.additionalParameters != nil)
+        if case .object(let dict) = requestConfig.additionalParameters!,
+           case .double(let val) = dict["frequency_penalty"] {
+            #expect(val == 0.3)
+        }
+        #expect(requestConfig.stream == false)
+    }
+    
+    @Test("updateConversation passes LLM request params when streaming")
+    func testUpdateConversationPassesLLMRequestParamsStreaming() async throws {
+        let configCapture = ConfigCapture()
+        let config = OrchestratorConfig(
+            streamingEnabled: true,
+            maxTokens: 1024,
+            temperature: 0.8,
+            topP: 0.85
+        )
+        let capturingLLM = CapturingMockLLM(
+            logger: Logger(label: "ConfigCaptureLLM"),
+            toolCallsToReturn: [],
+            configCapture: configCapture
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config)
+        
+        let initialMessages = [Message(id: UUID(), role: .user, content: "Hi")]
+        let messageStream = await orchestrator.messageStream
+        
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) { messages.append(message) }
+        }
+        let collector = MessageCollector()
+        _ = Task {
+            for await message in messageStream {
+                await collector.append(message)
+            }
+        }
+        
+        try await orchestrator.updateConversation(initialMessages, availableTools: [])
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        
+        let configs = await configCapture.getConfigs()
+        #expect(configs.count >= 1)
+        let requestConfig = configs[0]
+        #expect(requestConfig.maxTokens == 1024)
+        #expect(requestConfig.temperature == 0.8)
+        #expect(requestConfig.topP == 0.85)
+        #expect(requestConfig.stream == true)
     }
     
     @Test("SwiftAgentKitOrchestrator can be initialized with custom config")
