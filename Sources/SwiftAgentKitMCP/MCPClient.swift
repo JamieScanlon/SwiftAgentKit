@@ -447,8 +447,8 @@ public actor MCPClient {
                     )
                 )
             case .image(_, let mimeType, let metadata):
-                if let width = metadata?["width"] as? Int,
-                   let height = metadata?["height"] as? Int {
+                if let width = metadata?["width"]?.intValue ?? metadata?["width"]?.stringValue.flatMap(Int.init),
+                   let height = metadata?["height"]?.intValue ?? metadata?["height"]?.stringValue.flatMap(Int.init) {
                     logger.info(
                         "Generated image content",
                         metadata: SwiftAgentKitLogging.metadata(
@@ -468,7 +468,9 @@ public actor MCPClient {
                         ("mimeType", .string(mimeType))
                     )
                 )
-            case .resource(let uri, let mimeType, let text):
+            case .resource(let resourceContent, _, _):
+                let uri = resourceContent.uri
+                let mimeType = resourceContent.mimeType ?? ""
                 logger.info(
                     "Received resource content",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -477,7 +479,7 @@ public actor MCPClient {
                         ("mimeType", .string(mimeType))
                     )
                 )
-                if let text = text {
+                if let text = resourceContent.text {
                     logger.info(
                         "Resource text content",
                         metadata: SwiftAgentKitLogging.metadata(
@@ -487,6 +489,16 @@ public actor MCPClient {
                         )
                     )
                 }
+            case .resourceLink(let uri, let name, _, _, let mimeType, _):
+                logger.info(
+                    "Received resource link",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("tool", .string(toolName)),
+                        ("uri", .string(uri)),
+                        ("name", .string(name)),
+                        ("mimeType", .string(mimeType ?? ""))
+                    )
+                )
             }
         }
         return content

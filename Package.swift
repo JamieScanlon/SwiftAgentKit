@@ -29,6 +29,9 @@ let package = Package(
         .library(
             name: "SwiftAgentKitOrchestrator",
             targets: ["SwiftAgentKitOrchestrator"]),
+        .library(
+            name: "SwiftAgentKitSkills",
+            targets: ["SwiftAgentKitSkills"]),
         
         // Example executables
         .executable(
@@ -78,11 +81,14 @@ let package = Package(
         // Optional dependencies for specific modules
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
         
-        // MCP dependency
-        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.9.0"),
+        // MCP dependency (0.11+ for Tool.Content API)
+        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.11.0"),
         
         // OpenAI dependency
         .package(url: "https://github.com/MacPaw/OpenAI.git", from: "0.4.5"),
+        
+        // YAML parsing for Agent Skills
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.0.0"),
     ],
     targets: [
         // Core target - minimal functionality
@@ -138,6 +144,17 @@ let package = Package(
                 "SwiftAgentKitMCP",
                 "SwiftAgentKitAdapters",
                 .product(name: "Logging", package: "swift-log"),
+            ],
+            exclude: ["README.md"]),
+        
+        // Skills module - Agent Skills spec support (https://agentskills.io/specification)
+        .target(
+            name: "SwiftAgentKitSkills",
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Yams", package: "Yams"),
+                .product(name: "EasyJSON", package: "EasyJSON"),
             ],
             exclude: ["README.md"]),
         
@@ -270,6 +287,10 @@ let package = Package(
         .testTarget(
             name: "SwiftAgentKitOrchestratorTests",
             dependencies: ["SwiftAgentKitOrchestrator"]
+        ),
+        .testTarget(
+            name: "SwiftAgentKitSkillsTests",
+            dependencies: ["SwiftAgentKitSkills"]
         ),
     ]
 ) 

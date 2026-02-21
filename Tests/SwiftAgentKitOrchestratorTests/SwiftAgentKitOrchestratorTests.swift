@@ -65,6 +65,18 @@ struct MockLLM: LLMProtocol {
     }
 }
 
+// MARK: - Config capture (records LLMRequestConfig for assertions)
+
+actor ConfigCapture {
+    private(set) var configs: [LLMRequestConfig] = []
+    func append(_ config: LLMRequestConfig) {
+        configs.append(config)
+    }
+    func getConfigs() -> [LLMRequestConfig] {
+        configs
+    }
+}
+
 // MARK: - Capturing Mock LLM (records messages sent for assertions)
 
 actor SendCapture {
@@ -82,12 +94,14 @@ struct CapturingMockLLM: LLMProtocol {
     let logger: Logger
     let toolCallsToReturn: [ToolCall]
     let capture: SendCapture
+    let configCapture: ConfigCapture?
     
-    init(model: String = "capturing-model", logger: Logger, toolCallsToReturn: [ToolCall], capture: SendCapture = SendCapture()) {
+    init(model: String = "capturing-model", logger: Logger, toolCallsToReturn: [ToolCall], capture: SendCapture = SendCapture(), configCapture: ConfigCapture? = nil) {
         self.model = model
         self.logger = logger
         self.toolCallsToReturn = toolCallsToReturn
         self.capture = capture
+        self.configCapture = configCapture
     }
     
     func getModelName() -> String { model }
@@ -95,6 +109,9 @@ struct CapturingMockLLM: LLMProtocol {
     
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         await capture.append(messages)
+        if let configCapture {
+            await configCapture.append(config)
+        }
         let hasToolMessage = messages.contains { $0.role == .tool }
         if hasToolMessage {
             return LLMResponse.complete(content: "Done after tool response")
@@ -104,10 +121,14 @@ struct CapturingMockLLM: LLMProtocol {
     
     func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         let capture = capture
+        let configCapture = configCapture
         let toolCallsToReturn = toolCallsToReturn
         return AsyncThrowingStream { continuation in
             Task {
                 await capture.append(messages)
+                if let configCapture {
+                    await configCapture.append(config)
+                }
                 let hasToolMessage = messages.contains { $0.role == .tool }
                 if hasToolMessage {
                     continuation.yield(.complete(LLMResponse.complete(content: "Done after tool response")))
@@ -150,6 +171,52 @@ func wrapMessageResult(_ result: MessageResult) -> SendStreamingMessageSuccessRe
     SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: result)
 }
 
+// MARK: - Mock ToolProvider for ToolManager orchestrator tests
+
+struct MockFunctionToolProvider: ToolProvider {
+    var name: String { "MockFunctionToolProvider" }
+    
+    private let toolName: String
+    private let resultContent: String
+    private let resultSuccess: Bool
+    private let resultError: String?
+    
+    init(
+        toolName: String = "get_current_time",
+        resultContent: String = "2025-02-14T12:00:00Z",
+        resultSuccess: Bool = true,
+        resultError: String? = nil
+    ) {
+        self.toolName = toolName
+        self.resultContent = resultContent
+        self.resultSuccess = resultSuccess
+        self.resultError = resultError
+    }
+    
+    func availableTools() async -> [ToolDefinition] {
+        [
+            ToolDefinition(
+                name: toolName,
+                description: "Returns the current date and time",
+                parameters: [],
+                type: .function
+            )
+        ]
+    }
+    
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        guard toolCall.name == toolName else {
+            return ToolResult(success: false, content: "", toolCallId: toolCall.id, error: "Unknown tool: \(toolCall.name)")
+        }
+        return ToolResult(
+            success: resultSuccess,
+            content: resultContent,
+            toolCallId: toolCall.id,
+            error: resultError
+        )
+    }
+}
+
 
 @Suite struct SwiftAgentKitOrchestratorTests {
     
@@ -169,6 +236,10 @@ func wrapMessageResult(_ result: MessageResult) -> SendStreamingMessageSuccessRe
         #expect(config.streamingEnabled == false)
         #expect(config.mcpEnabled == false)
         #expect(config.a2aEnabled == false)
+        #expect(config.maxTokens == nil)
+        #expect(config.temperature == nil)
+        #expect(config.topP == nil)
+        #expect(config.additionalParameters == nil)
     }
     
     @Test("OrchestratorConfig can be initialized with custom values")
@@ -182,6 +253,117 @@ func wrapMessageResult(_ result: MessageResult) -> SendStreamingMessageSuccessRe
         #expect(config.streamingEnabled == true)
         #expect(config.mcpEnabled == true)
         #expect(config.a2aEnabled == true)
+    }
+    
+    @Test("OrchestratorConfig can be initialized with LLM request params")
+    func testOrchestratorConfigLLMRequestParams() throws {
+        let extraParams = JSON.object(["frequency_penalty": .double(0.5)])
+        let config = OrchestratorConfig(
+            maxTokens: 4096,
+            temperature: 0.7,
+            topP: 0.9,
+            additionalParameters: extraParams
+        )
+        
+        #expect(config.maxTokens == 4096)
+        #expect(config.temperature == 0.7)
+        #expect(config.topP == 0.9)
+        #expect(config.additionalParameters != nil)
+        if case .object(let dict) = config.additionalParameters!,
+           case .double(let val) = dict["frequency_penalty"] {
+            #expect(val == 0.5)
+        }
+    }
+    
+    @Test("updateConversation passes maxTokens, temperature, topP, and additionalParameters to LLM")
+    func testUpdateConversationPassesLLMRequestParams() async throws {
+        let configCapture = ConfigCapture()
+        let extraParams = JSON.object(["frequency_penalty": .double(0.3)])
+        let config = OrchestratorConfig(
+            streamingEnabled: false,
+            maxTokens: 2048,
+            temperature: 0.5,
+            topP: 0.95,
+            additionalParameters: extraParams
+        )
+        let capturingLLM = CapturingMockLLM(
+            logger: Logger(label: "ConfigCaptureLLM"),
+            toolCallsToReturn: [],
+            configCapture: configCapture
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config)
+        
+        let initialMessages = [Message(id: UUID(), role: .user, content: "Hello")]
+        let messageStream = await orchestrator.messageStream
+        
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) { messages.append(message) }
+        }
+        let collector = MessageCollector()
+        _ = Task {
+            for await message in messageStream {
+                await collector.append(message)
+            }
+        }
+        
+        try await orchestrator.updateConversation(initialMessages, availableTools: [])
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        
+        let configs = await configCapture.getConfigs()
+        #expect(configs.count >= 1)
+        let requestConfig = configs[0]
+        #expect(requestConfig.maxTokens == 2048)
+        #expect(requestConfig.temperature == 0.5)
+        #expect(requestConfig.topP == 0.95)
+        #expect(requestConfig.additionalParameters != nil)
+        if case .object(let dict) = requestConfig.additionalParameters!,
+           case .double(let val) = dict["frequency_penalty"] {
+            #expect(val == 0.3)
+        }
+        #expect(requestConfig.stream == false)
+    }
+    
+    @Test("updateConversation passes LLM request params when streaming")
+    func testUpdateConversationPassesLLMRequestParamsStreaming() async throws {
+        let configCapture = ConfigCapture()
+        let config = OrchestratorConfig(
+            streamingEnabled: true,
+            maxTokens: 1024,
+            temperature: 0.8,
+            topP: 0.85
+        )
+        let capturingLLM = CapturingMockLLM(
+            logger: Logger(label: "ConfigCaptureLLM"),
+            toolCallsToReturn: [],
+            configCapture: configCapture
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config)
+        
+        let initialMessages = [Message(id: UUID(), role: .user, content: "Hi")]
+        let messageStream = await orchestrator.messageStream
+        
+        actor MessageCollector {
+            var messages: [Message] = []
+            func append(_ message: Message) { messages.append(message) }
+        }
+        let collector = MessageCollector()
+        _ = Task {
+            for await message in messageStream {
+                await collector.append(message)
+            }
+        }
+        
+        try await orchestrator.updateConversation(initialMessages, availableTools: [])
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        
+        let configs = await configCapture.getConfigs()
+        #expect(configs.count >= 1)
+        let requestConfig = configs[0]
+        #expect(requestConfig.maxTokens == 1024)
+        #expect(requestConfig.temperature == 0.8)
+        #expect(requestConfig.topP == 0.85)
+        #expect(requestConfig.stream == true)
     }
     
     @Test("SwiftAgentKitOrchestrator can be initialized with custom config")
@@ -918,5 +1100,177 @@ func wrapMessageResult(_ result: MessageResult) -> SendStreamingMessageSuccessRe
         #expect(toolMessage != nil)
         #expect(toolMessage!.images.count == 1)
         #expect(toolMessage!.content.isEmpty || toolMessage!.content.contains("Attachments:") == true)
+    }
+    
+    // MARK: - ToolManager Tests
+    
+    @Test("SwiftAgentKitOrchestrator can be initialized with ToolManager")
+    func testOrchestratorWithToolManager() async throws {
+        let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let toolManager = ToolManager(providers: [MockFunctionToolProvider()])
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, toolManager: toolManager)
+        
+        #expect(await orchestrator.llm is MockLLM)
+        #expect(await orchestrator.toolManager != nil)
+    }
+    
+    @Test("availableTools includes ToolManager tools when configured")
+    func testAvailableToolsIncludesToolManagerTools() async throws {
+        let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let toolName = "get_current_time"
+        let toolManager = ToolManager(providers: [MockFunctionToolProvider(toolName: toolName)])
+        let config = OrchestratorConfig(mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+        
+        let tools = await orchestrator.allAvailableTools
+        #expect(!tools.isEmpty)
+        #expect(tools.contains { $0.name == toolName })
+        #expect(tools.first { $0.name == toolName }?.type == .function)
+    }
+    
+    @Test("ToolManager executes function tool calls and result is sent to LLM")
+    func testToolManagerExecutesFunctionToolCalls() async throws {
+        let toolCallId = "call-func-1"
+        let expectedContent = "2025-02-14T15:30:00Z"
+        let toolCall = ToolCall(
+            name: "get_current_time",
+            arguments: .object([:]),
+            id: toolCallId
+        )
+        
+        let capture = SendCapture()
+        let mockLLM = CapturingMockLLM(
+            logger: Logger(label: "Capture"),
+            toolCallsToReturn: [toolCall],
+            capture: capture
+        )
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time", resultContent: expectedContent, resultSuccess: true)
+        ])
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "What time is it?")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        let invocations = await capture.getInvocations()
+        #expect(invocations.count >= 2)
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.content == expectedContent)
+        #expect(toolMessage!.toolCallId == toolCallId)
+    }
+    
+    @Test("ToolManager passes error to LLM when tool is not found in any provider")
+    func testToolManagerPassesErrorWhenToolNotFound() async throws {
+        // ToolManager returns success: false when no provider handles the tool.
+        // Use a provider that doesn't know the requested tool - ToolManager falls through
+        // to "not found" and the error is sent to the LLM.
+        let toolCallId = "call-fail-1"
+        let toolCall = ToolCall(
+            name: "unknown_tool",  // No provider implements this
+            arguments: .object([:]),
+            id: toolCallId
+        )
+        
+        let capture = SendCapture()
+        let mockLLM = CapturingMockLLM(
+            logger: Logger(label: "Capture"),
+            toolCallsToReturn: [toolCall],
+            capture: capture
+        )
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time")  // Only knows get_current_time
+        ])
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "Use unknown_tool")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        let invocations = await capture.getInvocations()
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.content.contains("not found") || toolMessage!.content.contains("unknown_tool"))
+        #expect(toolMessage!.toolCallId == toolCallId)
+    }
+    
+    @Test("ToolManager is used when MCP and A2A do not handle the tool")
+    func testToolManagerUsedWhenMCPAndA2ADoNotHandleTool() async throws {
+        // MCP and A2A managers with no clients - they won't handle any tool
+        let mcpManager = MCPManager(connectionTimeout: 5.0, logger: Logger(label: "TestMCP"))
+        let a2aManager = A2AManager(logger: Logger(label: "TestA2A"))
+        
+        let toolCall = ToolCall(
+            name: "get_current_time",
+            arguments: .object([:]),
+            id: "call-fallback-1"
+        )
+        let capture = SendCapture()
+        let mockLLM = CapturingMockLLM(
+            logger: Logger(label: "Capture"),
+            toolCallsToReturn: [toolCall],
+            capture: capture
+        )
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time", resultContent: "fallback-success")
+        ])
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: true, a2aEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: mockLLM,
+            config: config,
+            mcpManager: mcpManager,
+            a2aManager: a2aManager,
+            toolManager: toolManager
+        )
+        
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+        
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "What time is it?")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        
+        // ToolManager should have handled it since MCP/A2A have no clients
+        let invocations = await capture.getInvocations()
+        let invocationWithTool = invocations.first { $0.contains { $0.role == .tool } }
+        #expect(invocationWithTool != nil)
+        let toolMessage = invocationWithTool!.first { $0.role == .tool }
+        #expect(toolMessage != nil)
+        #expect(toolMessage!.content == "fallback-success")
+    }
+    
+    @Test("ToolManager with multiple providers aggregates tools")
+    func testToolManagerMultipleProvidersAggregatesTools() async throws {
+        let mockLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time"),
+            MockFunctionToolProvider(toolName: "get_weather")
+        ])
+        let config = OrchestratorConfig(mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+        
+        let tools = await orchestrator.allAvailableTools
+        #expect(tools.count == 2)
+        #expect(tools.contains { $0.name == "get_current_time" })
+        #expect(tools.contains { $0.name == "get_weather" })
     }
 } 
