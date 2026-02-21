@@ -2,6 +2,8 @@
 
 Add-on library for the [Agent Skills specification](https://agentskills.io/specification). Provides parsing and loading of skills from directories containing `SKILL.md` files with YAML frontmatter.
 
+> 📖 **Full documentation:** [SwiftAgentKitSkills.md](../../docs/SwiftAgentKitSkills.md)
+
 ## Overview
 
 A skill is a directory containing at minimum a `SKILL.md` file:

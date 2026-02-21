@@ -12,6 +12,7 @@ SwiftAgentKit provides a modular foundation for building AI agents that can:
 - Use structured logging for debugging and monitoring
 - Integrate with popular AI providers (OpenAI, Anthropic, Gemini)
 - Build composable tool-aware adapters with A2A and MCP capabilities
+- Extend agents with [Agent Skills](https://agentskills.io/specification) for modular, on-demand instruction sets
 
 The framework is designed with a simple, direct API - no unnecessary abstractions or configuration objects.
 
@@ -24,6 +25,7 @@ The framework is designed with a simple, direct API - no unnecessary abstraction
 | **SwiftAgentKitA2A** | Agent-to-Agent communication | [A2A.md](docs/A2A.md) |
 | **SwiftAgentKitAdapters** | AI provider adapters and tool-aware architecture | [SwiftAgentKitAdapters.md](docs/SwiftAgentKitAdapters.md) |
 | **SwiftAgentKitOrchestrator** | LLM orchestrator with MCP and A2A support | [README](Sources/SwiftAgentKitOrchestrator/README.md) |
+| **SwiftAgentKitSkills** | Agent Skills specification support | [SwiftAgentKitSkills.md](docs/SwiftAgentKitSkills.md) |
 
 ## Quick Start
 
@@ -49,6 +51,7 @@ Add the products you want to use to your target dependencies:
         .product(name: "SwiftAgentKitA2A", package: "SwiftAgentKit"),  // Optional
         .product(name: "SwiftAgentKitMCP", package: "SwiftAgentKit"),  // Optional
         .product(name: "SwiftAgentKitAdapters", package: "SwiftAgentKit"),  // Optional
+        .product(name: "SwiftAgentKitSkills", package: "SwiftAgentKit"),  // Optional
     ]
 )
 ```
@@ -105,6 +108,7 @@ For detailed documentation on each module, see:
 - [MCP Module](docs/MCP.md) - Model Context Protocol support
 - [A2A Module](docs/A2A.md) - Agent-to-Agent communication
 - [SwiftAgentKitAdapters Module](docs/SwiftAgentKitAdapters.md) - AI provider adapters and tool-aware architecture
+- [SwiftAgentKitSkills Module](docs/SwiftAgentKitSkills.md) - Agent Skills specification support
 
 ## Logging
 
