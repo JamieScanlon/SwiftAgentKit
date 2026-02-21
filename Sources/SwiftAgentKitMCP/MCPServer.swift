@@ -267,13 +267,16 @@ public actor MCPServer {
                             if let resource = part["resource"] as? [String: Any],
                                let uri = resource["uri"] as? String,
                                let mimeType = resource["mimeType"] as? String {
-                                let text = resource["name"] as? String
-                                contentParts.append(.resource(uri: uri, mimeType: mimeType, text: text))
+                                let text = resource["text"] as? String ?? resource["name"] as? String ?? ""
+                                let resourceContent = MCP.Resource.Content.text(text, uri: uri, mimeType: mimeType)
+                                contentParts.append(.resource(resource: resourceContent))
                             }
                         case "image":
                             if let data = part["data"] as? String,
                                let mimeType = part["mimeType"] as? String {
-                                let metadata = part["metadata"] as? [String: String]
+                                let metadata: MCP.Metadata? = (part["metadata"] as? [String: String]).map { dict in
+                                    MCP.Metadata(additionalFields: dict.mapValues { MCP.Value.string($0) })
+                                }
                                 contentParts.append(.image(data: data, mimeType: mimeType, metadata: metadata))
                             }
                         default:

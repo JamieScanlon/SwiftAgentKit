@@ -134,10 +134,10 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .resource(let uri, let mimeType, let text) = content[0] {
-            #expect(uri == "file:///path/to/image.png")
-            #expect(mimeType == "image/png")
-            #expect(text == "image.png")
+        if case .resource(let resourceContent, _, _) = content[0] {
+            #expect(resourceContent.uri == "file:///path/to/image.png")
+            #expect(resourceContent.mimeType == "image/png")
+            #expect(resourceContent.text == "image.png")
         } else {
             Issue.record("Expected resource content, got \(content[0])")
         }
@@ -162,10 +162,11 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .resource(let uri, let mimeType, let text) = content[0] {
-            #expect(uri == "file:///path/to/document.pdf")
-            #expect(mimeType == "application/pdf")
-            #expect(text == nil)
+        if case .resource(let resourceContent, _, _) = content[0] {
+            #expect(resourceContent.uri == "file:///path/to/document.pdf")
+            #expect(resourceContent.mimeType == "application/pdf")
+            // When no name/text in JSON, we pass empty string to Resource.Content.text()
+            #expect(resourceContent.text == nil || resourceContent.text == "")
         } else {
             Issue.record("Expected resource content, got \(content[0])")
         }
@@ -196,8 +197,8 @@ import MCP
         if case .image(let data, let mimeType, let metadata) = content[0] {
             #expect(data == base64Data)
             #expect(mimeType == "image/png")
-            #expect(metadata?["width"] == "512")
-            #expect(metadata?["height"] == "512")
+            #expect(metadata?["width"]?.stringValue == "512")
+            #expect(metadata?["height"]?.stringValue == "512")
         } else {
             Issue.record("Expected image content, got \(content[0])")
         }
@@ -263,10 +264,10 @@ import MCP
         }
         
         // Second content should be resource
-        if case .resource(let uri, let mimeType, let text) = content[1] {
-            #expect(uri == "file:///path/to/image.png")
-            #expect(mimeType == "image/png")
-            #expect(text == "image.png")
+        if case .resource(let resourceContent, _, _) = content[1] {
+            #expect(resourceContent.uri == "file:///path/to/image.png")
+            #expect(resourceContent.mimeType == "image/png")
+            #expect(resourceContent.text == "image.png")
         } else {
             Issue.record("Expected resource content at index 1, got \(content[1])")
         }
@@ -315,10 +316,10 @@ import MCP
         }
         
         // Verify resource
-        if case .resource(let uri, let mimeType, let text) = content[1] {
-            #expect(uri == "file:///path/to/file.pdf")
-            #expect(mimeType == "application/pdf")
-            #expect(text == "document.pdf")
+        if case .resource(let resourceContent, _, _) = content[1] {
+            #expect(resourceContent.uri == "file:///path/to/file.pdf")
+            #expect(resourceContent.mimeType == "application/pdf")
+            #expect(resourceContent.text == "document.pdf")
         } else {
             Issue.record("Expected resource content at index 1")
         }
@@ -327,7 +328,7 @@ import MCP
         if case .image(let data, let mimeType, let metadata) = content[2] {
             #expect(data == base64Data)
             #expect(mimeType == "image/png")
-            #expect(metadata?["width"] == "256")
+            #expect(metadata?["width"]?.stringValue == "256")
         } else {
             Issue.record("Expected image content at index 2")
         }

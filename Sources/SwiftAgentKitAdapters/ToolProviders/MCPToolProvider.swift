@@ -58,9 +58,24 @@ public struct MCPToolProvider: ToolProvider {
                     // Extract resource content (file:// URIs)
                     var fileResources: [[String: JSON]] = []
                     for content in contents {
-                        if case .resource(let uri, let mimeType, let text) = content {
-                            // Only handle file:// URIs
-                            if uri.hasPrefix("file://") {
+                        let uri: String?
+                        let mimeType: String
+                        let text: String?
+                        switch content {
+                        case .resource(let resourceContent, _, _):
+                            uri = resourceContent.uri
+                            mimeType = resourceContent.mimeType ?? ""
+                            text = resourceContent.text
+                        case .resourceLink(let linkUri, let name, _, _, let linkMimeType, _):
+                            uri = linkUri
+                            mimeType = linkMimeType ?? ""
+                            text = name
+                        default:
+                            uri = nil
+                            mimeType = ""
+                            text = nil
+                        }
+                        if let uri = uri, uri.hasPrefix("file://") {
                                 do {
                                     let fileURL = URL(string: uri)
                                     if let fileURL = fileURL, fileURL.scheme == "file" {
@@ -100,7 +115,6 @@ public struct MCPToolProvider: ToolProvider {
                                         )
                                     )
                                 }
-                            }
                         }
                     }
                     
