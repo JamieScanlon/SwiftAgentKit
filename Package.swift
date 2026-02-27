@@ -67,6 +67,9 @@ let package = Package(
         .executable(
             name: "DynamicClientRegistrationExample",
             targets: ["DynamicClientRegistrationExample"]),
+        .executable(
+            name: "OAuthDiscoveryTest",
+            targets: ["OAuthDiscoveryTest"]),
 
     ],
     dependencies: [
@@ -265,6 +268,15 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ],
             path: "Examples/DynamicClientRegistrationExample"),
+        .executableTarget(
+            name: "OAuthDiscoveryTest",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitMCP",
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "EasyJSON", package: "EasyJSON"),
+            ],
+            path: "Examples/OAuthDiscoveryTest"),
 
         
         // Test targets
