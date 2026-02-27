@@ -202,7 +202,7 @@ public actor MCPClient {
             throw MCPClientError.connectionFailed("Invalid server URL: \(config.url)")
         }
         
-        // Create authentication provider if auth configuration is provided
+        // Create authentication provider: config first, then environment-based (so OAuth discovery still runs when server returns 401 + resource_metadata)
         let authProvider: (any AuthenticationProvider)?
         if let authType = config.authType, let authConfig = config.authConfig {
             do {
@@ -228,6 +228,12 @@ public actor MCPClient {
                 )
                 throw MCPClientError.connectionFailed("Authentication configuration error: \(error.localizedDescription)")
             }
+        } else if let envAuthProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: config.name) {
+            authProvider = envAuthProvider
+            logger.info(
+                "Using environment-based authentication for server",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
         } else {
             authProvider = nil
         }

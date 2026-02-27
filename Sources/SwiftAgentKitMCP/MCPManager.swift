@@ -141,6 +141,7 @@ public actor MCPManager {
         }
         
         // Create clients for remote servers (HTTP/HTTPS)
+        // Use connectToRemoteServer(config:) so OAuth discovery runs when server returns 401 with resource_metadata (e.g. Todoist, Zapier).
         for remoteConfig in config.remoteServers {
             do {
                 let client = MCPClient(
@@ -149,28 +150,7 @@ public actor MCPManager {
                     connectionTimeout: remoteConfig.connectionTimeout ?? connectionTimeout
                 )
                 
-                guard let serverURL = URL(string: remoteConfig.url) else {
-                    logger.error(
-                        "Invalid URL for remote server",
-                        metadata: SwiftAgentKitLogging.metadata(
-                            ("server", .string(remoteConfig.name)),
-                            ("url", .string(remoteConfig.url))
-                        )
-                    )
-                    failedServers.append(remoteConfig.name)
-                    continue
-                }
-                
-                // Create authentication provider if configured
-                let authProvider = try createAuthProvider(for: remoteConfig)
-                
-                try await client.connectToRemoteServer(
-                    serverURL: serverURL,
-                    authProvider: authProvider,
-                    connectionTimeout: remoteConfig.connectionTimeout,
-                    requestTimeout: remoteConfig.requestTimeout,
-                    maxRetries: remoteConfig.maxRetries
-                )
+                try await client.connectToRemoteServer(config: remoteConfig)
                 
                 clients.append(client)
                 logger.info(
@@ -180,6 +160,15 @@ public actor MCPManager {
                 
             } catch let mcpError as MCPClient.MCPClientError {
                 logMCPClientError(mcpError, serverName: remoteConfig.name)
+                failedServers.append(remoteConfig.name)
+            } catch let oauthFlowError as OAuthManualFlowRequired {
+                logger.warning(
+                    "OAuth sign-in required for MCP server — open the authorization URL in a browser",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(remoteConfig.name)),
+                        ("authorizationURL", .string(oauthFlowError.authorizationURL.absoluteString))
+                    )
+                )
                 failedServers.append(remoteConfig.name)
             } catch {
                 logger.error(

@@ -276,6 +276,53 @@ struct OAuthDiscoveryFlowTests {
         }
     }
     
+    @Test("OAuth discovery flow should work with Todoist-style MCP config")
+    func testTodoistStyleOAuthDiscovery() async throws {
+        // Mirrors the real-world \"todoist\" config used in MCPManager / CLI:
+        // \"todoist\": { \"url\": \"https://ai.todoist.net/mcp\" }
+        let client = MCPClient(name: "test-client", version: "1.0.0")
+        
+        let todoistConfig = MCPConfig.RemoteServerConfig(
+            name: "todoist",
+            url: "https://ai.todoist.net/mcp",
+            authType: nil, // No auth provider configured – should rely on OAuth discovery
+            authConfig: nil
+        )
+        
+        do {
+            try await client.connectToRemoteServer(config: todoistConfig)
+            #expect(Bool(false), "Expected connection to fail (no control over real Todoist server in tests)")
+        } catch let error as MCPClient.MCPClientError {
+            switch error {
+            case .connectionFailed(let message):
+                // As with the Zapier-style test, we accept either:
+                // 1. OAuth/discovery-related messaging (if we can talk to the server), or
+                // 2. Network/hostname/server errors (if we can't).
+                let isValidError =
+                    message.contains("OAuth") ||
+                    message.contains("discovery") ||
+                    message.contains("authorization") ||
+                    message.contains("manual intervention") ||
+                    message.contains("server") ||
+                    message.contains("network") ||
+                    message.contains("hostname")
+                
+                #expect(isValidError,
+                       "Expected OAuth discovery or network error for Todoist-style config, got: \(message)")
+                
+                // Critically, we should never regress to the old generic auth error that
+                // hid OAuth discovery opportunities.
+                #expect(!message.contains("No authentication provider available for 401 challenge"),
+                       "Should not see old authentication error for Todoist-style config: \(message)")
+            default:
+                // Other error types are acceptable; we're guarding against the old generic error.
+                break
+            }
+        } catch {
+            // Network / TLS errors etc. are acceptable – the key is avoiding the old generic auth error.
+        }
+    }
+    
     @Test("OAuth discovery should be skipped when auth provider is already configured")
     func testOAuthDiscoverySkippedWithExistingAuth() async throws {
         let client = MCPClient(name: "test-client", version: "1.0.0")
