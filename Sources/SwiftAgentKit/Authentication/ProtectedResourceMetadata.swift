@@ -367,6 +367,14 @@ public actor ProtectedResourceMetadataClient {
     public init(urlSession: URLSession = .shared) {
         self.init(urlSession: urlSession, logger: nil)
     }
+
+    /// Discover protected resource metadata from a known resource_metadata URL
+    /// - Parameter url: The resource_metadata URL (e.g. from a WWW-Authenticate header)
+    /// - Returns: Protected resource metadata
+    /// - Throws: ProtectedResourceMetadataError if discovery fails
+    public func discoverFromResourceMetadataURL(_ url: URL) async throws -> ProtectedResourceMetadata {
+        return try await fetchProtectedResourceMetadata(from: url)
+    }
     
     /// Discover protected resource metadata from WWW-Authenticate header
     /// - Parameter challenge: Authentication challenge containing WWW-Authenticate header

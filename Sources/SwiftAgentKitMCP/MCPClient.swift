@@ -340,7 +340,10 @@ public actor MCPClient {
             clientId: clientID,
             scope: scopeString,
             redirectURI: redirectURI,
-            resourceType: "mcp"
+            resourceType: "mcp",
+            preConfiguredAuthServerURL: nil,
+            resourceURI: nil,
+            resourceMetadataURL: URL(string: resourceMetadataURL)
         )
         
         // Create new transport with OAuth discovery provider

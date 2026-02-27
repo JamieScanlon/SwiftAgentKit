@@ -24,6 +24,10 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     private let redirectURI: URL
     private let preConfiguredAuthServerURL: URL?
     private let resourceURI: String?
+    /// Optional resource_metadata URL (from a WWW-Authenticate header). When provided,
+    /// discovery can skip the unauthenticated probe against the MCP URL and go straight
+    /// to the protected resource metadata document.
+    private let resourceMetadataURL: URL?
     
     // Discovery state
     private var oauthServerMetadata: OAuthServerMetadata?
@@ -45,6 +49,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     ///   - resourceType: Type of resource (e.g., "mcp" for MCP servers)
     ///   - preConfiguredAuthServerURL: Pre-configured authorization server URL (optional)
     ///   - resourceURI: Resource URI for RFC 8707 Resource Indicators (optional, will use resourceServerURL if not provided)
+    ///   - resourceMetadataURL: Optional resource_metadata URL for protected resource metadata
     public init(
         resourceServerURL: URL,
         clientId: String,
@@ -53,7 +58,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         redirectURI: URL,
         resourceType: String? = "mcp",
         preConfiguredAuthServerURL: URL? = nil,
-        resourceURI: String? = nil
+        resourceURI: String? = nil,
+        resourceMetadataURL: URL? = nil
     ) throws {
         try self.init(
             resourceServerURL: resourceServerURL,
@@ -64,7 +70,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             resourceType: resourceType,
             preConfiguredAuthServerURL: preConfiguredAuthServerURL,
             discoveryManager: OAuthDiscoveryManager(),
-            resourceURI: resourceURI
+            resourceURI: resourceURI,
+            resourceMetadataURL: resourceMetadataURL
         )
     }
     
@@ -77,7 +84,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         resourceType: String? = "mcp",
         preConfiguredAuthServerURL: URL? = nil,
         discoveryManager: OAuthDiscoveryManager,
-        resourceURI: String? = nil
+        resourceURI: String? = nil,
+        resourceMetadataURL: URL? = nil
     ) throws {
         self.resourceServerURL = resourceServerURL
         self.clientId = clientId
@@ -87,6 +95,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         self.resourceType = resourceType
         self.preConfiguredAuthServerURL = preConfiguredAuthServerURL
         self.discoveryManager = discoveryManager
+        self.resourceMetadataURL = resourceMetadataURL
         
         // Use provided resourceURI or derive from resourceServerURL
         let targetResourceURI = resourceURI ?? resourceServerURL.absoluteString
@@ -203,11 +212,21 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     private func performDiscovery() async throws {
         logger.info("Performing OAuth server discovery")
         
-        oauthServerMetadata = try await discoveryManager.discoverAuthorizationServerMetadata(
-            resourceServerURL: resourceServerURL,
-            resourceType: resourceType,
-            preConfiguredAuthServerURL: preConfiguredAuthServerURL
-        )
+        if let metadataURL = resourceMetadataURL {
+            // When we already have a resource_metadata URL (from a 401 challenge),
+            // skip the unauthenticated probe against the MCP URL and go straight
+            // to the protected resource metadata document. This avoids issues with
+            // servers that only allow POST on their MCP endpoint (e.g. Todoist).
+            oauthServerMetadata = try await discoveryManager.discoverAuthorizationServerMetadata(
+                resourceMetadataURL: metadataURL
+            )
+        } else {
+            oauthServerMetadata = try await discoveryManager.discoverAuthorizationServerMetadata(
+                resourceServerURL: resourceServerURL,
+                resourceType: resourceType,
+                preConfiguredAuthServerURL: preConfiguredAuthServerURL
+            )
+        }
         
         // Validate that the authorization server supports PKCE as required by MCP spec
         _ = try oauthServerMetadata?.validatePKCESupport()

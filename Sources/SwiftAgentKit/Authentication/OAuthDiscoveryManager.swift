@@ -100,6 +100,31 @@ public actor OAuthDiscoveryManager {
         logger.info("OAuth discovery process completed successfully")
         return authServerMetadata
     }
+
+    /// Discover authorization server metadata when a resource_metadata URL is already known.
+    /// This skips the unauthenticated probe (GET on the MCP URL), which is important for
+    /// servers that only support POST on their MCP endpoint (e.g. Todoist-style servers).
+    /// - Parameter resourceMetadataURL: URL of the protected resource metadata document
+    /// - Returns: Complete OAuth server metadata for authentication
+    /// - Throws: OAuthDiscoveryError if discovery fails
+    public func discoverAuthorizationServerMetadata(
+        resourceMetadataURL: URL
+    ) async throws -> OAuthServerMetadata {
+
+        logger.info(
+            "Starting OAuth discovery process from resource_metadata URL",
+            metadata: ["resourceMetadataURL": .string(resourceMetadataURL.absoluteString)]
+        )
+
+        // Fetch protected resource metadata directly from the provided URL
+        let protectedResourceMetadata = try await protectedResourceClient.discoverFromResourceMetadataURL(resourceMetadataURL)
+
+        // Discover authorization server metadata from protected resource metadata
+        let authServerMetadata = try await oauthServerClient.discoverFromProtectedResourceMetadata(protectedResourceMetadata)
+
+        logger.info("OAuth discovery process from resource_metadata URL completed successfully")
+        return authServerMetadata
+    }
     
     /// Make an unauthenticated request to trigger 401 response with WWW-Authenticate header
     /// - Parameter resourceServerURL: URL of the resource server
