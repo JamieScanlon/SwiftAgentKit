@@ -10,6 +10,9 @@ import Logging
 import MCP
 import SwiftAgentKit
 import EasyJSON
+#if canImport(AppKit)
+import AppKit
+#endif
 
 /// Manages tool calling via MCP
 /// Loads a configuration of available MCP servers
@@ -169,6 +172,8 @@ public actor MCPManager {
                         ("authorizationURL", .string(oauthFlowError.authorizationURL.absoluteString))
                     )
                 )
+                // Best-effort: automatically open the authorization URL in the system browser
+                openAuthorizationURLInBrowser(oauthFlowError.authorizationURL)
                 failedServers.append(remoteConfig.name)
             } catch {
                 logger.error(
@@ -193,6 +198,17 @@ public actor MCPManager {
         }
         
         await buildToolsJson()
+    }
+
+    /// Attempt to open the OAuth authorization URL in the system browser.
+    /// On macOS this uses NSWorkspace; on other platforms this is a no-op and
+    /// the host application is expected to handle the URL manually.
+    private func openAuthorizationURLInBrowser(_ url: URL) {
+        #if os(macOS)
+        NSWorkspace.shared.open(url)
+        #else
+        _ = url // suppress unused warning on non-macOS platforms
+        #endif
     }
     
     private func logMCPClientError(_ mcpError: MCPClient.MCPClientError, serverName: String) {
