@@ -657,7 +657,44 @@ struct AuthenticationFactoryTests {
         // Note: We can't easily test the async methods without mocking the URLSession
         // The provider should be created successfully
     }
-    
+
+    @Test("Factory should create Dynamic Client Registration provider")
+    func testCreateDynamicClientRegistrationProvider() async throws {
+        let config = JSON.object([
+            "registrationEndpoint": .string("https://auth.example.com/register"),
+            "redirectUris": .array([.string("https://client.example.com/callback")]),
+            "useDynamicClientRegistration": .boolean(true)
+        ])
+
+        let provider = try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+
+        #expect(provider.scheme == .oauth)
+    }
+
+    @Test("Factory should throw for Dynamic Client Registration with missing registrationEndpoint")
+    func testCreateDCRMissingRegistrationEndpoint() async throws {
+        let config = JSON.object([
+            "redirectUris": .array([.string("https://client.example.com/callback")]),
+            "useDynamicClientRegistration": .boolean(true)
+        ])
+
+        #expect(throws: AuthenticationError.self) {
+            try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        }
+    }
+
+    @Test("Factory should throw for Dynamic Client Registration with missing redirectUris")
+    func testCreateDCRMissingRedirectUris() async throws {
+        let config = JSON.object([
+            "registrationEndpoint": .string("https://auth.example.com/register"),
+            "useDynamicClientRegistration": .boolean(true)
+        ])
+
+        #expect(throws: AuthenticationError.self) {
+            try AuthenticationFactory.createAuthProvider(authType: "oauth", config: config)
+        }
+    }
+
     @Test("Factory should create OAuth Discovery provider with minimal config")
     func testCreateOAuthDiscoveryProviderWithMinimalConfig() async throws {
         let config = JSON.object([

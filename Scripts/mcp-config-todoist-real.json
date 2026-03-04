@@ -1,0 +1,12 @@
+{
+  "mcpServers": {},
+  "remoteServers": {
+    "todoist": {
+      "url": "https://ai.todoist.net/mcp",
+      "clientID": "a3d484e35cd340be84359161748b25cb",
+      "authConfig": {
+        "redirectUris": ["http://localhost:8080/oauth/callback"]
+      }
+    }
+  }
+}

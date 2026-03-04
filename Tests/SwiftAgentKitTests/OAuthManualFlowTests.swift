@@ -100,5 +100,73 @@ struct OAuthManualFlowTests {
             }
         }
     }
-    
+
+    // MARK: - OAuthToken (manual flow)
+
+    @Test("OAuthToken init and Codable roundtrip")
+    func oauthTokenCodable() throws {
+        let token = OAuthToken(
+            accessToken: "at_123",
+            tokenType: "Bearer",
+            expiresIn: 3600,
+            refreshToken: "rt_456",
+            scope: "read write"
+        )
+        let data = try JSONEncoder().encode(token)
+        let decoded = try JSONDecoder().decode(OAuthToken.self, from: data)
+        #expect(decoded.accessToken == token.accessToken)
+        #expect(decoded.tokenType == token.tokenType)
+        #expect(decoded.expiresIn == token.expiresIn)
+        #expect(decoded.refreshToken == token.refreshToken)
+        #expect(decoded.scope == token.scope)
+    }
+
+    @Test("OAuthToken CodingKeys use snake_case")
+    func oauthTokenCodingKeys() throws {
+        let token = OAuthToken(accessToken: "at", tokenType: "Bearer", expiresIn: 60, refreshToken: "rt", scope: "s")
+        let data = try JSONEncoder().encode(token)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        #expect(json?["access_token"] as? String == "at")
+        #expect(json?["token_type"] as? String == "Bearer")
+        #expect(json?["expires_in"] as? Int == 60)
+        #expect(json?["refresh_token"] as? String == "rt")
+        #expect(json?["scope"] as? String == "s")
+    }
+
+    @Test("OAuthToken optional fields")
+    func oauthTokenOptionalFields() throws {
+        let token = OAuthToken(accessToken: "at", tokenType: "Bearer")
+        #expect(token.expiresIn == nil)
+        #expect(token.refreshToken == nil)
+        #expect(token.scope == nil)
+    }
+
+    // MARK: - OAuthError (manual flow)
+
+    @Test("OAuthError has descriptions for key cases")
+    func oauthErrorDescriptions() throws {
+        #expect(OAuthError.invalidURL.localizedDescription.contains("Invalid OAuth URL"))
+        #expect(OAuthError.userCancelled.localizedDescription.contains("cancelled"))
+        #expect(OAuthError.authorizationCodeNotFound.localizedDescription.contains("Authorization code not found"))
+        #expect(OAuthError.invalidTokenResponse.localizedDescription.contains("Invalid token response"))
+        #expect(OAuthError.incorrectClientCredentials.localizedDescription.contains("client_id") || OAuthError.incorrectClientCredentials.localizedDescription.contains("client_secret"))
+        #expect(OAuthError.invalidGrant.localizedDescription.contains("Invalid grant"))
+        #expect(OAuthError.invalidConfiguration("x").localizedDescription.contains("x"))
+    }
+
+    @Test("OAuthError networkError and tokenExchangeFailed include message")
+    func oauthErrorMessages() throws {
+        let msg = "Connection failed"
+        #expect(OAuthError.networkError(msg).localizedDescription.contains(msg))
+        #expect(OAuthError.tokenExchangeFailed(msg).localizedDescription.contains(msg))
+    }
+
+    @Test("OAuthError oauthError includes error and optional description")
+    func oauthErrorOAuthErrorCase() throws {
+        let e = OAuthError.oauthError("invalid_scope", "Requested scope not allowed")
+        #expect(e.localizedDescription.contains("invalid_scope"))
+        #expect(e.localizedDescription.contains("Requested scope not allowed"))
+        let e2 = OAuthError.oauthError("server_error", nil)
+        #expect(e2.localizedDescription.contains("server_error"))
+    }
 }

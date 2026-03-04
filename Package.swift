@@ -290,7 +290,11 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftAgentKitMCPTests",
-            dependencies: ["SwiftAgentKitMCP"]
+            dependencies: [
+                "SwiftAgentKitMCP",
+                "SwiftAgentKit",
+                .product(name: "EasyJSON", package: "EasyJSON"),
+            ]
         ),
         .testTarget(
             name: "SwiftAgentKitAdaptersTests",
