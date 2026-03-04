@@ -94,8 +94,7 @@ public struct OAuthErrorResponse: Codable, Sendable {
 
 /// OAuth authenticator for manual flow (OAuthManualFlowRequired).
 /// Accepts optional callback receiver, token exchanger, and URL opener for composability.
-@MainActor
-public class OAuthAuthenticator: ObservableObject {
+public class OAuthAuthenticator {
     private let callbackReceiver: (any OAuthCallbackReceiver)?
     private let tokenExchanger: (any OAuthTokenExchanger)?
     private let urlOpener: (@Sendable (URL) -> Void)?

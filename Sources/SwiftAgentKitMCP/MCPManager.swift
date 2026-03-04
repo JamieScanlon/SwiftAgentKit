@@ -10,20 +10,34 @@ import Logging
 import MCP
 import SwiftAgentKit
 import EasyJSON
-#if canImport(AppKit)
-import AppKit
-#endif
 
 /// Manages tool calling via MCP
 /// Loads a configuration of available MCP servers
 /// Creates a MCPClient for every available server
 /// Dispatches tool calls to clients
+///
+/// For remote servers that require OAuth (e.g. Todoist, Zapier), pass an ``MCPOAuthHandler``
+/// so the manager can complete the manual OAuth flow (callback server, token exchange, storage)
+/// instead of only logging and failing. Without a handler, ``OAuthManualFlowRequired`` is
+/// surfaced and the server is added to the failed list.
 public actor MCPManager {
     private let logger: Logger
     private let connectionTimeout: TimeInterval
-    
-    public init(connectionTimeout: TimeInterval = 30.0, logger: Logger? = nil) {
+    private let oauthHandler: MCPOAuthHandler?
+
+    /// - Parameters:
+    ///   - connectionTimeout: Timeout for MCP connections.
+    ///   - logger: Optional logger; a default is created if nil.
+    ///   - oauthHandler: Optional OAuth handler. When set, remote servers that require manual OAuth
+    ///     are connected via the handler (callback server, token exchange, storage). When nil,
+    ///     such servers fail with ``OAuthManualFlowRequired`` and are not opened in a browser.
+    public init(
+        connectionTimeout: TimeInterval = 30.0,
+        logger: Logger? = nil,
+        oauthHandler: MCPOAuthHandler? = nil
+    ) {
         self.connectionTimeout = connectionTimeout
+        self.oauthHandler = oauthHandler
         let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
             for: .mcp("MCPManager"),
             metadata: SwiftAgentKitLogging.metadata(
@@ -31,6 +45,11 @@ public actor MCPManager {
             )
         )
         self.logger = resolvedLogger
+    }
+
+    /// Convenience initializer without an OAuth handler (same as passing `oauthHandler: nil`).
+    public init(connectionTimeout: TimeInterval = 30.0, logger: Logger? = nil) {
+        self.init(connectionTimeout: connectionTimeout, logger: logger, oauthHandler: nil)
     }
     
     public enum State: Sendable {
@@ -143,8 +162,16 @@ public actor MCPManager {
             }
         }
         
-        // Create clients for remote servers (HTTP/HTTPS)
-        // Use connectToRemoteServer(config:) so OAuth discovery runs when server returns 401 with resource_metadata (e.g. Todoist, Zapier).
+        // Create clients for remote servers (HTTP/HTTPS).
+        // Use the provided oauthHandler, or create a default so remote servers requiring
+        // manual OAuth (e.g. Todoist, Zapier) can complete the flow.
+        let effectiveOAuthHandler: MCPOAuthHandler?
+        if !config.remoteServers.isEmpty {
+            effectiveOAuthHandler = oauthHandler ?? MCPOAuthHandler()
+        } else {
+            effectiveOAuthHandler = nil
+        }
+
         for remoteConfig in config.remoteServers {
             do {
                 let client = MCPClient(
@@ -152,28 +179,30 @@ public actor MCPManager {
                     version: "0.1.3",
                     connectionTimeout: remoteConfig.connectionTimeout ?? connectionTimeout
                 )
-                
-                try await client.connectToRemoteServer(config: remoteConfig)
-                
+
+                if let handler = effectiveOAuthHandler {
+                    try await handler.connectToRemoteServer(client: client, config: remoteConfig)
+                } else {
+                    try await client.connectToRemoteServer(config: remoteConfig)
+                }
+
                 clients.append(client)
                 logger.info(
                     "Successfully connected to remote MCP server",
                     metadata: SwiftAgentKitLogging.metadata(("server", .string(remoteConfig.name)))
                 )
-                
+
             } catch let mcpError as MCPClient.MCPClientError {
                 logMCPClientError(mcpError, serverName: remoteConfig.name)
                 failedServers.append(remoteConfig.name)
             } catch let oauthFlowError as OAuthManualFlowRequired {
                 logger.warning(
-                    "OAuth sign-in required for MCP server — open the authorization URL in a browser",
+                    "OAuth sign-in required for MCP server — use MCPOAuthHandler to complete authentication",
                     metadata: SwiftAgentKitLogging.metadata(
                         ("server", .string(remoteConfig.name)),
                         ("authorizationURL", .string(oauthFlowError.authorizationURL.absoluteString))
                     )
                 )
-                // Best-effort: automatically open the authorization URL in the system browser
-                openAuthorizationURLInBrowser(oauthFlowError.authorizationURL)
                 failedServers.append(remoteConfig.name)
             } catch {
                 logger.error(
@@ -200,17 +229,6 @@ public actor MCPManager {
         await buildToolsJson()
     }
 
-    /// Attempt to open the OAuth authorization URL in the system browser.
-    /// On macOS this uses NSWorkspace; on other platforms this is a no-op and
-    /// the host application is expected to handle the URL manually.
-    private func openAuthorizationURLInBrowser(_ url: URL) {
-        #if os(macOS)
-        NSWorkspace.shared.open(url)
-        #else
-        _ = url // suppress unused warning on non-macOS platforms
-        #endif
-    }
-    
     private func logMCPClientError(_ mcpError: MCPClient.MCPClientError, serverName: String) {
         switch mcpError {
         case .connectionTimeout(let timeout):

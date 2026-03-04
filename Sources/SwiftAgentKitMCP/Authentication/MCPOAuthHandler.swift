@@ -2,16 +2,35 @@
 // Integrates OAuth authentication with SwiftAgentKit MCP client connections
 
 import Foundation
+import Logging
 import SwiftAgentKit
 import EasyJSON
 
-/// MCP OAuth handler that manages authentication for remote MCP servers
-@MainActor
-public class MCPOAuthHandler: ObservableObject {
+/// MCP OAuth handler that manages authentication for remote MCP servers.
+///
+/// **Sendable safety:** This type is `@unchecked Sendable` so it can be passed into `MCPManager` (an actor).
+/// It is safe to send across isolation boundaries only when the following rule is observed:
+///
+/// - **REQUIRED: One handler per manager.** Do *not* pass the same `MCPOAuthHandler` instance to more than
+///   one `MCPManager`, and do *not* use a single handler with multiple managers that might call
+///   `initialize(configFileURL:)` (or otherwise run `createClients`) concurrently. Sharing one handler across
+///   managers would allow concurrent access to the handler's state and can cause data races. Create a separate
+///   handler per manager (or let each manager create its own when none is provided).
+///
+/// When that rule is followed, safety holds because: (1) all use happens inside one `MCPManager`'s actor, and
+/// (2) the manager calls `handler.connectToRemoteServer(client:config:)` only from `createClients`, in a
+/// sequential `for` loop with `try await` on each call, so handler methods are never executed concurrently
+/// on the same instance.
+public final class MCPOAuthHandler: @unchecked Sendable {
     private let authenticator: OAuthAuthenticator
     public let tokenStorage: OAuthTokenStorage
+    private let logger: Logger
 
-    public init(tokenStorage: OAuthTokenStorage? = nil) {
+    /// - Parameters:
+    ///   - tokenStorage: Optional token storage; if nil, a default `RobustTokenStorage` is used.
+    ///   - logger: Optional logger; if nil, a default scoped to `.mcp("MCPOAuthHandler")` is used.
+    public init(tokenStorage: OAuthTokenStorage? = nil, logger: Logger? = nil) {
+        self.logger = logger ?? SwiftAgentKitLogging.logger(for: .mcp("MCPOAuthHandler"))
         self.authenticator = OAuthAuthenticator()
         // Use robust storage by default, which automatically handles keychain fallback
         if let tokenStorage = tokenStorage {
@@ -30,7 +49,10 @@ public class MCPOAuthHandler: ObservableObject {
         do {
             // Attempt to connect with the provided server config
             try await client.connectToRemoteServer(config: config)
-            print("Successfully connected to \(config.name) without OAuth")
+            logger.info(
+                "Successfully connected to remote MCP server without OAuth",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
             return
 
         } catch let oauthFlowError as OAuthManualFlowRequired {
@@ -39,11 +61,17 @@ public class MCPOAuthHandler: ObservableObject {
             // Because this involves user interaction it is our responsibility to capture the auth token
             // and call connectToRemoteServer again with the new infomation
 
-            print("Manual OAuth authentication required for \(config.name)")
+            logger.info(
+                "Manual OAuth authentication required for remote MCP server",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
 
             // Check if we have a stored token with configuration first
             if let storedTokenWithConfig = try await tokenStorage.retrieveTokenWithConfig(for: config.name) {
-                print("Found stored OAuth token with config for \(config.name), retrying connection...")
+                logger.info(
+                    "Found stored OAuth token with config, retrying connection",
+                    metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+                )
 
                 // Try to connect with the stored token and configuration
                 let authenticatedConfig = createAuthenticatedConfig(
@@ -53,19 +81,31 @@ public class MCPOAuthHandler: ObservableObject {
 
                 do {
                     try await client.connectToRemoteServer(config: authenticatedConfig)
-                    print("Successfully connected to \(config.name) with stored OAuth token")
+                    logger.info(
+                        "Successfully connected to remote MCP server with stored OAuth token",
+                        metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+                    )
                     return
                 } catch {
-                    print("Connection with stored token failed: \(error)")
-                    print("Error details: \(String(describing: error))")
+                    logger.warning(
+                        "Connection with stored token failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("server", .string(config.name)),
+                            ("error", .string(String(describing: error)))
+                        )
+                    )
 
                     // Check if it's a session-related error
                     let errorString = error.localizedDescription
                     if errorString.contains("Invalid session ID") {
-                        print("⚠️  Invalid session ID error detected - token may be expired or invalid")
-                        print("   Token details: accessToken=\(storedTokenWithConfig.token.accessToken.prefix(20))...")
-                        print("   Token type: \(storedTokenWithConfig.token.tokenType)")
-                        print("   Expires in: \(storedTokenWithConfig.token.expiresIn ?? 0) seconds")
+                        logger.warning(
+                            "Invalid session ID - token may be expired or invalid",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("server", .string(config.name)),
+                                ("tokenType", .string(storedTokenWithConfig.token.tokenType)),
+                                ("expiresIn", .stringConvertible(storedTokenWithConfig.token.expiresIn ?? 0))
+                            )
+                        )
                     }
 
                     // Token might be expired, remove it and continue to request new one
@@ -87,7 +127,13 @@ public class MCPOAuthHandler: ObservableObject {
                 // Discovery path: clientID at top level of server config
                 clientId = topLevelClientID
                 clientSecret = (try? extractOAuthCredentials(from: config))?.clientSecret
-                print("Using client ID from top-level config (discovery path): \(clientId)")
+                logger.debug(
+                    "Using client ID from top-level config (discovery path)",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(config.name)),
+                        ("clientId", .string(clientId))
+                    )
+                )
             } else if config.authConfig != nil {
                 // Static configuration - extract from authConfig
                 let credentials = try extractOAuthCredentials(from: config)
@@ -97,7 +143,13 @@ public class MCPOAuthHandler: ObservableObject {
                 // Dynamic registration - use from OAuth flow error
                 clientId = oauthFlowError.clientId
                 clientSecret = nil // Dynamic registration doesn't use client secrets
-                print("Using dynamically registered client ID: \(clientId)")
+                logger.debug(
+                    "Using dynamically registered client ID",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(config.name)),
+                        ("clientId", .string(clientId))
+                    )
+                )
             }
 
             // Perform OAuth flow using the information from OAuthManualFlowRequired error
@@ -127,19 +179,27 @@ public class MCPOAuthHandler: ObservableObject {
             )
 
             try await client.connectToRemoteServer(config: authenticatedConfig)
-            print("Successfully connected to \(config.name) with new OAuth token")
+            logger.info(
+                "Successfully connected to remote MCP server with new OAuth token",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+            )
         } catch {
             // Re-throw non-OAuth errors - no string parsing or fallback logic
-            print("Connection to \(config.name) failed: \(error)")
-            print("Error details: \(String(describing: error))")
+            logger.error(
+                "Connection to remote MCP server failed",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("server", .string(config.name)),
+                    ("error", .string(String(describing: error)))
+                )
+            )
 
             // Check if it's a session-related error
             let errorString = error.localizedDescription
             if errorString.contains("Invalid session ID") {
-                print("⚠️  Invalid session ID error detected with new token")
-                print("   This suggests the OAuth flow may not be working correctly")
-                print("   or the GitHub MCP server has specific requirements")
-                print("   This might be a GitHub MCP server configuration issue.")
+                logger.warning(
+                    "Invalid session ID with new token - OAuth flow or server configuration may need adjustment",
+                    metadata: SwiftAgentKitLogging.metadata(("server", .string(config.name)))
+                )
             }
 
             throw error
@@ -200,16 +260,16 @@ public class MCPOAuthHandler: ObservableObject {
 
         let authConfig = try? JSON(authConfigDict)
 
-        // Debug: Print the authentication configuration being created
-        print("🔐 Creating authenticated config for \(config.name):")
-        print("   URL: \(config.url)")
-        print("   Auth type: OAuth")
-        print("   Access token: \(tokenWithConfig.token.accessToken.prefix(20))...")
-        print("   Token type: \(tokenWithConfig.token.tokenType)")
-        print("   Client ID: \(tokenWithConfig.clientId)")
-        print("   Scope: \(tokenWithConfig.scope ?? tokenWithConfig.token.scope ?? "none")")
-        print("   Token endpoint: \(tokenWithConfig.tokenEndpoint)")
-        print("   Full auth config dict: \(authConfigDict)")
+        logger.debug(
+            "Creating authenticated config for remote MCP server",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(config.name)),
+                ("url", .string(config.url)),
+                ("tokenType", .string(tokenWithConfig.token.tokenType)),
+                ("clientId", .string(tokenWithConfig.clientId)),
+                ("tokenEndpoint", .string(tokenWithConfig.tokenEndpoint))
+            )
+        )
 
         // Create new configuration with OAuth authentication
         return MCPConfig.RemoteServerConfig(
@@ -231,9 +291,14 @@ public class MCPOAuthHandler: ObservableObject {
         clientId: String,
         clientSecret: String?
     ) async throws -> OAuthToken {
-        print("Starting OAuth flow (SwiftAgentKit PKCE + discovery metadata)...")
-        print("Redirect URI: \(oauthFlowError.redirectURI)")
-        print("Client ID: \(clientId)")
+        logger.info(
+            "Starting manual OAuth flow (PKCE + discovery metadata)",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("server", .string(config.name)),
+                ("redirectURI", .string(oauthFlowError.redirectURI.absoluteString)),
+                ("clientId", .string(clientId))
+            )
+        )
         return try await authenticator.completeManualOAuthFlow(
             oauthFlowError: oauthFlowError,
             clientId: clientId,
@@ -244,7 +309,10 @@ public class MCPOAuthHandler: ObservableObject {
     /// Removes stored authentication for a server
     public func removeAuthentication(for serverName: String) async throws {
         try await tokenStorage.removeToken(for: serverName)
-        print("Removed authentication for server: \(serverName)")
+        logger.info(
+            "Removed authentication for server",
+            metadata: SwiftAgentKitLogging.metadata(("server", .string(serverName)))
+        )
     }
 
     /// Checks if a server has stored authentication
@@ -260,7 +328,7 @@ public class MCPOAuthHandler: ObservableObject {
     /// Clears all stored authentication (useful for debugging)
     public func clearAllAuthentication() async throws {
         try await tokenStorage.clearAllTokens()
-        print("Cleared all stored OAuth tokens")
+        logger.info("Cleared all stored OAuth tokens")
     }
 
     /// Extracts OAuth credentials from the MCP config.

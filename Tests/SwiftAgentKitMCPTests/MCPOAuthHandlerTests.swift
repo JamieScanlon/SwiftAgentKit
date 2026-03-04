@@ -7,7 +7,6 @@ import SwiftAgentKitMCP
 import SwiftAgentKit
 import EasyJSON
 
-@MainActor
 struct MCPOAuthHandlerTests {
 
     // MARK: - Test Configuration

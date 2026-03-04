@@ -96,10 +96,21 @@ public actor SwiftAgentKitOrchestrator {
         }
     }
     
+    /// - Parameters:
+    ///   - llm: The LLM protocol implementation.
+    ///   - config: Orchestrator configuration (streaming, MCP, A2A, timeouts, etc.).
+    ///   - mcpManager: Pre-built MCP manager; if nil and `config.mcpEnabled` is true, one is created.
+    ///   - mcpOAuthHandler: Optional OAuth handler for remote MCP servers. When set and the orchestrator
+    ///     creates its own MCPManager, that manager will use this handler so remote servers requiring
+    ///     manual OAuth (e.g. Todoist, Zapier) can complete the flow. Ignored if `mcpManager` is provided.
+    ///   - a2aManager: Pre-built A2A manager; if nil and `config.a2aEnabled` is true, one is created.
+    ///   - toolManager: Optional ToolManager for generic function tools.
+    ///   - logger: Optional logger; a default is created if nil.
     public init(
         llm: LLMProtocol,
         config: OrchestratorConfig = OrchestratorConfig(),
         mcpManager: MCPManager? = nil,
+        mcpOAuthHandler: MCPOAuthHandler? = nil,
         a2aManager: A2AManager? = nil,
         toolManager: ToolManager? = nil,
         logger: Logger? = nil
@@ -126,7 +137,8 @@ public actor SwiftAgentKitOrchestrator {
                         ("source", .string("SwiftAgentKitOrchestrator")),
                         ("connectionTimeout", .stringConvertible(config.mcpConnectionTimeout))
                     )
-                )
+                ),
+                oauthHandler: mcpOAuthHandler
             )
         } else {
             self.mcpManager = nil
