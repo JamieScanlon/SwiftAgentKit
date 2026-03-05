@@ -29,9 +29,14 @@ public final class MCPOAuthHandler: @unchecked Sendable {
     /// - Parameters:
     ///   - tokenStorage: Optional token storage; if nil, a default `RobustTokenStorage` is used.
     ///   - logger: Optional logger; if nil, a default scoped to `.mcp("MCPOAuthHandler")` is used.
-    public init(tokenStorage: OAuthTokenStorage? = nil, logger: Logger? = nil) {
+    ///   - authenticator: Optional OAuth authenticator. If provided, it is used for the manual OAuth flow (e.g. to use a custom ``OAuthCallbackReceiver`` such as a Vapor route instead of the default callback server). If nil, a default ``OAuthAuthenticator()`` is used.
+    public init(
+        tokenStorage: OAuthTokenStorage? = nil,
+        logger: Logger? = nil,
+        authenticator: OAuthAuthenticator? = nil
+    ) {
         self.logger = logger ?? SwiftAgentKitLogging.logger(for: .mcp("MCPOAuthHandler"))
-        self.authenticator = OAuthAuthenticator()
+        self.authenticator = authenticator ?? OAuthAuthenticator()
         // Use robust storage by default, which automatically handles keychain fallback
         if let tokenStorage = tokenStorage {
             self.tokenStorage = tokenStorage

@@ -25,9 +25,105 @@ When an OAuth provider requires the user to sign in in a browser (authorization 
 3. Build `OAuthTokenWithConfig` from the returned `OAuthToken` and your token endpoint/client id/secret/scope, then store it with your chosen `OAuthTokenStorage` (e.g. `RobustTokenStorage()`).
 4. Retry the connection so the client can use the stored token (e.g. by creating a provider from the stored config or injecting the token into the next request).
 
+## Using an existing HTTP server (e.g. Vapor) for the callback
+
+If you already run an HTTP server (e.g. Vapor on port 8080), you can add a route (e.g. `/auth/callback`) and use it as the OAuth redirect target instead of starting the built-in `OAuthCallbackServer`.
+
+1. **Configure your OAuth app** so the redirect URI is your route (e.g. `http://localhost:8080/auth/callback`). Your MCP/OAuth config must use that same redirect URI so the provider redirects to your server.
+
+2. **Implement a callback receiver** that bridges your route to the manual flow. The receiver’s `waitForCallback(timeout:)` must suspend until the callback request arrives; when your route is hit, deliver the query parameters (e.g. `code`, `state`, `error`, `error_description`) into that receiver so it can return an `OAuthCallbackServer.CallbackResult`.
+
+   Example (shared between the flow and your route):
+
+   ```swift
+   import SwiftAgentKit
+
+   /// Receives the OAuth redirect via a callback you trigger from your own HTTP route.
+   public final class ExternalServerOAuthCallbackReceiver: OAuthCallbackReceiver, @unchecked Sendable {
+       private let lock = NSLock()
+       private var continuation: CheckedContinuation<OAuthCallbackServer.CallbackResult, Error>?
+
+       public init() {}
+
+       public func waitForCallback(timeout: TimeInterval) async throws -> OAuthCallbackServer.CallbackResult {
+           try await withCheckedThrowingContinuation { continuation in
+               lock.lock()
+               self.continuation = continuation
+               lock.unlock()
+
+               Task {
+                   try await Task.sleep(for: .seconds(timeout))
+                   lock.lock()
+                   if let c = self.continuation {
+                       self.continuation = nil
+                       lock.unlock()
+                       c.resume(throwing: OAuthError.networkError("OAuth callback timeout"))
+                   } else {
+                       lock.unlock()
+                   }
+               }
+           }
+       }
+
+       /// Call this from your HTTP route (e.g. Vapor GET /auth/callback) with the query parameters from the redirect.
+       public func deliver(authorizationCode: String?, state: String?, error: String?, errorDescription: String?) {
+           let result = OAuthCallbackServer.CallbackResult(
+               authorizationCode: authorizationCode,
+               state: state,
+               error: error,
+               errorDescription: errorDescription
+           )
+           lock.lock()
+           let c = continuation
+           continuation = nil
+           lock.unlock()
+           c?.resume(returning: result)
+       }
+   }
+   ```
+
+3. **In your Vapor app**, register the callback route and use the same receiver instance:
+
+   ```swift
+   // One receiver per app (or per flow); share it with the OAuth setup.
+   let oauthCallbackReceiver = ExternalServerOAuthCallbackReceiver()
+
+   // When configuring routes (e.g. in configure.swift or routes):
+   app.get("auth", "callback") { req -> EventLoopFuture<Response> in
+       let code = req.query[String.self, at: "code"]
+       let state = req.query[String.self, at: "state"]
+       let error = req.query[String.self, at: "error"]
+       let errorDescription = req.query[String.self, at: "error_description"]
+       oauthCallbackReceiver.deliver(
+           authorizationCode: code,
+           state: state,
+           error: error,
+           errorDescription: errorDescription
+       )
+       let body = (error == nil)
+           ? "Authentication successful. You can close this window."
+           : "Authentication failed: \(errorDescription ?? error ?? "unknown")"
+       return req.eventLoop.makeSucceededFuture(
+           Response(status: .ok, body: .init(string: body))
+       )
+   }
+   ```
+
+4. **Use the receiver when starting the manual flow** so no extra callback server is started:
+
+   ```swift
+   let authenticator = OAuthAuthenticator(callbackReceiver: oauthCallbackReceiver)
+   let oauthHandler = MCPOAuthHandler(authenticator: authenticator)
+   // Pass oauthHandler to MCPManager (or use it when connecting); when OAuth is required,
+   // the flow will open the auth URL and wait on oauthCallbackReceiver.waitForCallback.
+   // Your /auth/callback route will receive the redirect and call deliver(...), completing the flow.
+   ```
+
+   Ensure the redirect URI in your OAuth/MCP config matches your route (e.g. `http://localhost:8080/auth/callback`). Only one OAuth flow should be waiting at a time on a given receiver instance.
+
 ## Customization
 
-- **OAuthCallbackReceiver** — Use a custom implementation for a different callback mechanism or tests.
+- **OAuthCallbackReceiver** — Use a custom implementation for a different callback mechanism or tests (e.g. the Vapor example above).
 - **OAuthTokenExchanger** — Use a custom implementation for a different HTTP client or proxy.
 - **URL opener** — Pass a closure to `OAuthAuthenticator` to control how the auth URL is opened (e.g. log it on non-macOS or in tests).
 
