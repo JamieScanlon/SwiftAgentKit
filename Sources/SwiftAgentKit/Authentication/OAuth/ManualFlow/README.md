@@ -109,17 +109,26 @@ If you already run an HTTP server (e.g. Vapor on port 8080), you can add a route
    }
    ```
 
-4. **Use the receiver when starting the manual flow** so no extra callback server is started:
+4. **Pass the receiver into the OAuth handler** so no extra callback server is started. You can do this in two ways (same outcome for the callback):
+
+   **Convenience (custom callback only):** Use the `callbackReceiver` parameter. Best when you only need to plug in your own callback and are fine with default token exchange and URL opening.
 
    ```swift
-   let authenticator = OAuthAuthenticator(callbackReceiver: oauthCallbackReceiver)
-   let oauthHandler = MCPOAuthHandler(authenticator: authenticator)
-   // Pass oauthHandler to MCPManager (or use it when connecting); when OAuth is required,
-   // the flow will open the auth URL and wait on oauthCallbackReceiver.waitForCallback.
-   // Your /auth/callback route will receive the redirect and call deliver(...), completing the flow.
+   let oauthHandler = MCPOAuthHandler(callbackReceiver: oauthCallbackReceiver)
    ```
 
-   Ensure the redirect URI in your OAuth/MCP config matches your route (e.g. `http://localhost:8080/auth/callback`). Only one OAuth flow should be waiting at a time on a given receiver instance.
+   **Full control (custom callback and/or token exchanger and/or URL opener):** Use the `authenticator` parameter with a fully configured ``OAuthAuthenticator``. Best when you need to customize more than just where the redirect is received.
+
+   ```swift
+   let authenticator = OAuthAuthenticator(
+       callbackReceiver: oauthCallbackReceiver,
+       tokenExchanger: nil,  // or your custom exchanger
+       urlOpener: nil       // or your custom opener
+   )
+   let oauthHandler = MCPOAuthHandler(authenticator: authenticator)
+   ```
+
+   In both cases, when OAuth is required the flow opens the auth URL and waits on your receiver’s `waitForCallback`; your route receives the redirect and calls `deliver(...)`, completing the flow. Ensure the redirect URI in your OAuth/MCP config matches your route (e.g. `http://localhost:8080/auth/callback`). Only one OAuth flow should be waiting at a time on a given receiver instance.
 
 ## Customization
 

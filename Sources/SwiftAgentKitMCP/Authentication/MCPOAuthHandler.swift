@@ -26,17 +26,35 @@ public final class MCPOAuthHandler: @unchecked Sendable {
     public let tokenStorage: OAuthTokenStorage
     private let logger: Logger
 
+    /// **Customizing where the OAuth callback is received**
+    ///
+    /// You can control where the manual OAuth flow gets the redirect (authorization code) in two equivalent ways:
+    ///
+    /// 1. **Convenience: `callbackReceiver`** — Pass an ``OAuthCallbackReceiver`` (e.g. one that your existing HTTP server route calls). The handler builds an ``OAuthAuthenticator`` with that receiver internally. Use this when you only need to plug in a custom callback (e.g. Vapor on 8080) and are fine with default token exchange and URL opening.
+    ///
+    /// 2. **Full control: `authenticator`** — Pass a fully configured ``OAuthAuthenticator`` (with optional callback receiver, token exchanger, and URL opener). Use this when you need to customize more than just the callback (e.g. custom token exchanger or URL opener). If you pass both, `authenticator` is used and `callbackReceiver` is ignored.
+    ///
+    /// Both achieve the same goal for the callback: the flow waits on your receiver’s ``OAuthCallbackReceiver/waitForCallback(timeout:)`` instead of starting the built-in ``OAuthCallbackServer``, avoiding port conflicts when you already run a server.
+    ///
     /// - Parameters:
     ///   - tokenStorage: Optional token storage; if nil, a default `RobustTokenStorage` is used.
     ///   - logger: Optional logger; if nil, a default scoped to `.mcp("MCPOAuthHandler")` is used.
-    ///   - authenticator: Optional OAuth authenticator. If provided, it is used for the manual OAuth flow (e.g. to use a custom ``OAuthCallbackReceiver`` such as a Vapor route instead of the default callback server). If nil, a default ``OAuthAuthenticator()`` is used.
+    ///   - callbackReceiver: **Convenience:** Optional OAuth callback receiver. When provided (and `authenticator` is nil), the manual OAuth flow uses this instead of the built-in callback server. Ignored if `authenticator` is non-nil.
+    ///   - authenticator: Optional OAuth authenticator. When provided, it is used for the manual OAuth flow and `callbackReceiver` is ignored. When nil and `callbackReceiver` is non-nil, an ``OAuthAuthenticator(callbackReceiver:)`` is created. When both are nil, a default ``OAuthAuthenticator()`` is used (built-in callback server).
     public init(
         tokenStorage: OAuthTokenStorage? = nil,
         logger: Logger? = nil,
+        callbackReceiver: (any OAuthCallbackReceiver)? = nil,
         authenticator: OAuthAuthenticator? = nil
     ) {
         self.logger = logger ?? SwiftAgentKitLogging.logger(for: .mcp("MCPOAuthHandler"))
-        self.authenticator = authenticator ?? OAuthAuthenticator()
+        if let authenticator = authenticator {
+            self.authenticator = authenticator
+        } else if let callbackReceiver = callbackReceiver {
+            self.authenticator = OAuthAuthenticator(callbackReceiver: callbackReceiver)
+        } else {
+            self.authenticator = OAuthAuthenticator()
+        }
         // Use robust storage by default, which automatically handles keychain fallback
         if let tokenStorage = tokenStorage {
             self.tokenStorage = tokenStorage
