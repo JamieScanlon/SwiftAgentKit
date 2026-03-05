@@ -3,9 +3,17 @@
 
 import Testing
 import Foundation
+import Logging
 import SwiftAgentKitMCP
 import SwiftAgentKit
 import EasyJSON
+
+/// Minimal OAuthCallbackReceiver for testing that MCPOAuthHandler accepts a custom receiver.
+private struct MockOAuthCallbackReceiver: OAuthCallbackReceiver {
+    func waitForCallback(timeout: TimeInterval) async throws -> OAuthCallbackServer.CallbackResult {
+        OAuthCallbackServer.CallbackResult(authorizationCode: nil, state: nil, error: nil, errorDescription: nil)
+    }
+}
 
 struct MCPOAuthHandlerTests {
 
@@ -74,6 +82,34 @@ struct MCPOAuthHandlerTests {
 
         // Should use the provided storage
         #expect(handler.tokenStorage is InMemoryTokenStorage)
+    }
+
+    @Test("MCPOAuthHandler initializes with callbackReceiver convenience parameter")
+    func testInitializationWithCallbackReceiver() async throws {
+        let receiver = MockOAuthCallbackReceiver()
+        let handler = MCPOAuthHandler(callbackReceiver: receiver)
+        #expect(handler.tokenStorage is RobustTokenStorage)
+        // Handler uses OAuthAuthenticator(callbackReceiver:) internally; extractOAuthCredentials still works
+        let config = createMockMCPConfig()
+        let credentials = try handler.extractOAuthCredentials(from: config)
+        #expect(credentials.clientId == "test_client_id_123")
+    }
+
+    @Test("MCPOAuthHandler initializes with custom authenticator")
+    func testInitializationWithAuthenticator() async throws {
+        let authenticator = OAuthAuthenticator(callbackReceiver: nil)
+        let handler = MCPOAuthHandler(authenticator: authenticator)
+        #expect(handler.tokenStorage is RobustTokenStorage)
+        let config = createMockMCPConfig()
+        let credentials = try handler.extractOAuthCredentials(from: config)
+        #expect(credentials.clientId == "test_client_id_123")
+    }
+
+    @Test("MCPOAuthHandler initializes with logger")
+    func testInitializationWithLogger() async throws {
+        let logger = Logger(label: "test.mcp.oauth")
+        let handler = MCPOAuthHandler(logger: logger)
+        #expect(handler.tokenStorage is RobustTokenStorage)
     }
 
     // MARK: - Token Storage Integration Tests

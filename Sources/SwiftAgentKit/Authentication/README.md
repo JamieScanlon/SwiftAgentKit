@@ -51,6 +51,8 @@ Consumers typically use either config (e.g. from MCP config files) or environmen
 
 OAuth providers may throw `OAuthManualFlowRequired` when user interaction (e.g. opening a browser) is required; the host application is responsible for handling that and, if applicable, feeding back tokens or codes into the provider or config.
 
+When using OAuth Discovery (e.g. for remote MCP servers), the library may attempt **dynamic client registration (DCR)** if the auth server advertises a `registration_endpoint`. If the remote server config **already has a client ID** (top-level `clientID` or `clientId` in `authConfig`), the MCP client skips DCR and uses that client ID directly. That avoids DCR attempts against servers that do not support it (e.g. Todoist), preventing non-fatal errors such as "Server returned 200 but response was not valid DCR JSON".
+
 ## Folder structure
 
 - **Root**  

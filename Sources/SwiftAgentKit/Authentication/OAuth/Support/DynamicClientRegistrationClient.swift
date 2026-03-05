@@ -145,10 +145,21 @@ public actor DynamicClientRegistrationClient {
                 )
             }
             
-            // Handle response based on status code
+            // Handle response based on status code (RFC 7591 allows 200 OK or 201 Created)
             switch httpResponse.statusCode {
-            case 201: // Created - successful registration
-                return try handleSuccessfulRegistration(data: data, httpResponse: httpResponse)
+            case 200, 201: // OK or Created - successful registration
+                do {
+                    return try handleSuccessfulRegistration(data: data, httpResponse: httpResponse)
+                } catch {
+                    // Server returned 2xx but body was not valid DCR JSON (e.g. server does not support DCR)
+                    if httpResponse.statusCode == 200 {
+                        throw DynamicClientRegistrationError.serverError(
+                            httpResponse.statusCode,
+                            "Server returned 200 but response was not valid DCR JSON; server may not support dynamic client registration"
+                        )
+                    }
+                    throw error
+                }
                 
             case 400: // Bad Request - registration error
                 return try handleRegistrationError(data: data, httpResponse: httpResponse)

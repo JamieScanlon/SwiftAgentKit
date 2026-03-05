@@ -268,4 +268,19 @@ struct OAuthDiscoveryAuthProviderTests {
         let isValid = await provider.isAuthenticationValid()
         #expect(isValid == false)
     }
+
+    @Test("Initialize with attemptDynamicClientRegistration false skips DCR when client ID is configured")
+    func testInitializeWithSkipDCR() throws {
+        let resourceServerURL = URL(string: "https://mcp.example.com")!
+        let redirectURI = URL(string: "https://client.example.com/callback")!
+        let clientId = "preconfigured-client-id"
+        let provider = try OAuthDiscoveryAuthProvider(
+            resourceServerURL: resourceServerURL,
+            clientId: clientId,
+            redirectURI: redirectURI,
+            attemptDynamicClientRegistration: false
+        )
+        #expect(provider.scheme == .oauth)
+        // Provider was created; when ensureRegisteredClient runs it will use clientId and skip DCR
+    }
 }

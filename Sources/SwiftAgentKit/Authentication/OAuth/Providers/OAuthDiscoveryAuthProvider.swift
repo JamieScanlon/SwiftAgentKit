@@ -28,7 +28,12 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     /// discovery can skip the unauthenticated probe against the MCP URL and go straight
     /// to the protected resource metadata document.
     private let resourceMetadataURL: URL?
-    
+    /// When false, the provider uses the configured client ID only and does not attempt
+    /// dynamic client registration (DCR), even if the auth server advertises a registration_endpoint.
+    /// Set to false when the config already has a client ID (e.g. Todoist) to avoid DCR attempts
+    /// that the server does not support.
+    private let attemptDynamicClientRegistration: Bool
+
     // Discovery state
     private var oauthServerMetadata: OAuthServerMetadata?
     private var accessToken: String?
@@ -59,7 +64,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         resourceType: String? = "mcp",
         preConfiguredAuthServerURL: URL? = nil,
         resourceURI: String? = nil,
-        resourceMetadataURL: URL? = nil
+        resourceMetadataURL: URL? = nil,
+        attemptDynamicClientRegistration: Bool = true
     ) throws {
         try self.init(
             resourceServerURL: resourceServerURL,
@@ -71,7 +77,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             preConfiguredAuthServerURL: preConfiguredAuthServerURL,
             discoveryManager: OAuthDiscoveryManager(),
             resourceURI: resourceURI,
-            resourceMetadataURL: resourceMetadataURL
+            resourceMetadataURL: resourceMetadataURL,
+            attemptDynamicClientRegistration: attemptDynamicClientRegistration
         )
     }
     
@@ -85,7 +92,8 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         preConfiguredAuthServerURL: URL? = nil,
         discoveryManager: OAuthDiscoveryManager,
         resourceURI: String? = nil,
-        resourceMetadataURL: URL? = nil
+        resourceMetadataURL: URL? = nil,
+        attemptDynamicClientRegistration: Bool = true
     ) throws {
         self.resourceServerURL = resourceServerURL
         self.clientId = clientId
@@ -96,6 +104,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         self.preConfiguredAuthServerURL = preConfiguredAuthServerURL
         self.discoveryManager = discoveryManager
         self.resourceMetadataURL = resourceMetadataURL
+        self.attemptDynamicClientRegistration = attemptDynamicClientRegistration
         
         // Use provided resourceURI or derive from resourceServerURL
         let targetResourceURI = resourceURI ?? resourceServerURL.absoluteString
@@ -243,6 +252,15 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         // If we already have a registered client ID, use it
         if let registeredClientId = registeredClientId {
             logger.info("Using existing registered client ID: \(registeredClientId)")
+            return
+        }
+        
+        // When config already has a static client ID, skip DCR (e.g. Todoist does not support DCR)
+        if !attemptDynamicClientRegistration {
+            logger.info(
+                "Using configured client ID, skipping dynamic client registration",
+                metadata: SwiftAgentKitLogging.metadata(("clientId", .string(clientId)))
+            )
             return
         }
         

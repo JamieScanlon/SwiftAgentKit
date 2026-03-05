@@ -335,6 +335,16 @@ public actor MCPClient {
         }
         
         let clientID = config.clientID ?? self.clientID
+        // When config already has a client ID (top-level or in authConfig), skip DCR so we don't attempt
+        // registration against servers that don't support it (e.g. Todoist).
+        let hasExplicitClientId: Bool
+        if config.clientID != nil {
+            hasExplicitClientId = true
+        } else if let authConfig = config.authConfig, case .object(let authDict) = authConfig, case .string = authDict["clientId"] {
+            hasExplicitClientId = true
+        } else {
+            hasExplicitClientId = false
+        }
         let discoveryAuthProvider = try OAuthDiscoveryAuthProvider(
             resourceServerURL: serverURL,
             clientId: clientID,
@@ -343,7 +353,8 @@ public actor MCPClient {
             resourceType: "mcp",
             preConfiguredAuthServerURL: nil,
             resourceURI: nil,
-            resourceMetadataURL: URL(string: resourceMetadataURL)
+            resourceMetadataURL: URL(string: resourceMetadataURL),
+            attemptDynamicClientRegistration: !hasExplicitClientId
         )
         
         // Create new transport with OAuth discovery provider
