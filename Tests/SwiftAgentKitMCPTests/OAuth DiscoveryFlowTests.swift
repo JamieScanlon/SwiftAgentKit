@@ -666,4 +666,43 @@ struct OAuthDiscoveryFlowTests {
         print("📋 Test 3 - No Config + Server Supported: \(selectedScope3)")
         print("📋 Test 4 - No Config + No Server Support: \(selectedScope4)")
     }
+    
+    @Test("Scope selection should support multi-scope configuration (space-separated)")
+    func testMultiScopeSelection() async throws {
+        // Todoist-style: server lists individual scopes only (no combined "data:read data:read_write task:add" entry).
+        // Before the fix, configuredScope "data:read data:read_write task:add" was treated as one scope and
+        // serverSupportedScopes.contains(configuredScope) was false, producing: "Configured scope 'data:read data:read_write task:add' not supported by server".
+        let metadataTodoistStyle = OAuthServerMetadata(
+            scopesSupported: ["task:add", "task:read", "data:read", "data:read_write", "project:read"]
+        )
+        
+        let authProvider = try OAuthDiscoveryAuthProvider(
+            resourceServerURL: URL(string: "https://example.com")!,
+            clientId: "test-client",
+            scope: "data:read data:read_write task:add",
+            redirectURI: URL(string: "http://localhost:8080/callback")!
+        )
+        
+        // All configured scopes supported -> return space-separated combination (RFC 6749 §3.3)
+        let selected = await authProvider.selectOptimalScope(serverMetadata: metadataTodoistStyle, configuredScope: "data:read data:read_write task:add")
+        #expect(selected == "data:read data:read_write task:add", "Should use all configured scopes when server supports them (fixes Todoist multi-scope error)")
+        
+        // One scope unsupported -> drop unsupported, return the rest
+        let selectedPartial = await authProvider.selectOptimalScope(serverMetadata: metadataTodoistStyle, configuredScope: "data:read unknown:scope task:add")
+        #expect(selectedPartial == "data:read task:add", "Should drop unsupported scopes and return valid ones")
+        
+        // All configured scopes unsupported -> fall back to first available server scope
+        let selectedFallback = await authProvider.selectOptimalScope(serverMetadata: metadataTodoistStyle, configuredScope: "other:read other:write")
+        #expect(selectedFallback == "task:add", "Should fall back to first server scope when none of configured are supported")
+        
+        // Single scope in config (no spaces) still works
+        let selectedSingle = await authProvider.selectOptimalScope(serverMetadata: metadataTodoistStyle, configuredScope: "data:read_write")
+        #expect(selectedSingle == "data:read_write", "Single configured scope should work as before")
+        
+        // Order preserved when filtering
+        let selectedOrder = await authProvider.selectOptimalScope(serverMetadata: metadataTodoistStyle, configuredScope: "task:add data:read data:read_write")
+        #expect(selectedOrder == "task:add data:read data:read_write", "Order of scopes should be preserved")
+        
+        print("✅ Multi-Scope Selection Test Passed!")
+    }
 }

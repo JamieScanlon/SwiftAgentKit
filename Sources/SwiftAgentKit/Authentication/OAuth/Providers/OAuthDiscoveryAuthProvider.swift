@@ -30,7 +30,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
     private let resourceMetadataURL: URL?
     /// When false, the provider uses the configured client ID only and does not attempt
     /// dynamic client registration (DCR), even if the auth server advertises a registration_endpoint.
-    /// Set to false when the config already has a client ID (e.g. Todoist) to avoid DCR attempts
+    /// Set to false when the config already has a client ID to avoid DCR attempts
     /// that the server does not support.
     private let attemptDynamicClientRegistration: Bool
 
@@ -225,7 +225,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             // When we already have a resource_metadata URL (from a 401 challenge),
             // skip the unauthenticated probe against the MCP URL and go straight
             // to the protected resource metadata document. This avoids issues with
-            // servers that only allow POST on their MCP endpoint (e.g. Todoist).
+            // servers that only allow POST on their MCP endpoint.
             oauthServerMetadata = try await discoveryManager.discoverAuthorizationServerMetadata(
                 resourceMetadataURL: metadataURL
             )
@@ -255,7 +255,7 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
             return
         }
         
-        // When config already has a static client ID, skip DCR (e.g. Todoist does not support DCR)
+        // When config already has a static client ID, skip DCR
         if !attemptDynamicClientRegistration {
             logger.info(
                 "Using configured client ID, skipping dynamic client registration",
@@ -358,18 +358,55 @@ public actor OAuthDiscoveryAuthProvider: AuthenticationProvider {
         }
     }
     
-    /// Select optimal scope based on server capabilities and configuration
+    /// OAuth 2.0 scope delimiter per RFC 6749 §3.3: scope = scope-token *( SP scope-token ).
+    /// The authorization request and token request use a space-delimited list of scope values.
+    private static let scopeDelimiter: Character = " "
+    
+    /// Select optimal scope based on server capabilities and configuration.
+    /// Supports multi-scope configuration per RFC 6749 §3.3: if `configuredScope` is space-separated
+    /// (e.g. "data:read data:read_write task:add"), each token is validated against the server's
+    /// scopes_supported; only supported scopes are included in the result. The returned string is
+    /// suitable for the authorization URL and token request scope parameter (space-delimited).
     internal func selectOptimalScope(serverMetadata: OAuthServerMetadata, configuredScope: String?) -> String {
         let serverSupportedScopes = serverMetadata.scopesSupported ?? []
         
-        // If a scope is explicitly configured, check if the server supports it
+        // If a scope is explicitly configured, validate and use it (single or multi-scope)
         if let configuredScope = configuredScope, !configuredScope.isEmpty {
-            // Check if the configured scope is supported by the server
-            if serverSupportedScopes.contains(configuredScope) {
-                logger.debug("Using configured scope", metadata: ["scope": .string(configuredScope)])
-                return configuredScope
+            let requestedScopes = configuredScope
+                .split(separator: Self.scopeDelimiter)
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            
+            if requestedScopes.isEmpty {
+                // Config was only whitespace/delimiter
+            } else if requestedScopes.count == 1 {
+                // Single scope: exact match as before
+                let single = requestedScopes[0]
+                if serverSupportedScopes.contains(single) {
+                    logger.debug("Using configured scope", metadata: ["scope": .string(single)])
+                    return single
+                }
+                logger.warning("Configured scope '\(single)' not supported by server. Supported scopes: \(serverSupportedScopes)")
             } else {
-                logger.warning("Configured scope '\(configuredScope)' not supported by server. Supported scopes: \(serverSupportedScopes)")
+                // Multi-scope: filter to server-supported, then join
+                let supportedSet = Set(serverSupportedScopes)
+                let validScopes = requestedScopes.filter { supportedSet.contains($0) }
+                let dropped = requestedScopes.filter { !supportedSet.contains($0) }
+                if !dropped.isEmpty {
+                    logger.warning(
+                        "Dropping unsupported scopes from config",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("dropped", .string(dropped.joined(separator: ", "))),
+                            ("supported", .string("\(serverSupportedScopes)"))
+                        )
+                    )
+                }
+                if !validScopes.isEmpty {
+                    let combined = validScopes.joined(separator: " ")
+                    logger.debug("Using configured multi-scope", metadata: ["scope": .string(combined)])
+                    return combined
+                }
+                logger.warning("None of the configured scopes are supported. Requested: \(requestedScopes). Supported: \(serverSupportedScopes)")
             }
         }
         
