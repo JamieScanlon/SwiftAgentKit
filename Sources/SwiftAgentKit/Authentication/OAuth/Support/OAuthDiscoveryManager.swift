@@ -103,7 +103,7 @@ public actor OAuthDiscoveryManager {
 
     /// Discover authorization server metadata when a resource_metadata URL is already known.
     /// This skips the unauthenticated probe (GET on the MCP URL), which is important for
-    /// servers that only support POST on their MCP endpoint (e.g. Todoist-style servers).
+    /// servers that only support POST on their MCP endpoint.
     /// - Parameter resourceMetadataURL: URL of the protected resource metadata document
     /// - Returns: Complete OAuth server metadata for authentication
     /// - Throws: OAuthDiscoveryError if discovery fails

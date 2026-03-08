@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Minimal HTTP server that mimics Todoist MCP: returns 401 with
+Minimal HTTP server that returns 401 with
 WWW-Authenticate: Bearer resource_metadata=".../.well-known/oauth-protected-resource/mcp"
 so we can observe the client's OAuth discovery flow and logs.
 """
@@ -51,7 +51,7 @@ class TodoistStyleHandler(BaseHTTPRequestHandler):
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
     server = HTTPServer(("127.0.0.1", port), TodoistStyleHandler)
-    print(f"Todoist-style MCP OAuth test server on http://127.0.0.1:{port}", file=sys.stderr, flush=True)
+    print(f"MCP OAuth test server on http://127.0.0.1:{port}", file=sys.stderr, flush=True)
     print(f"POST /mcp -> 401 WWW-Authenticate resource_metadata={resource_metadata(port)}", file=sys.stderr, flush=True)
     try:
         server.serve_forever()

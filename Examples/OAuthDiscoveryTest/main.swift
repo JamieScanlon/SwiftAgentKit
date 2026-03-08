@@ -1,6 +1,6 @@
 /**
  OAuthDiscoveryTest: Connects to a local test server that returns 401 with
- WWW-Authenticate resource_metadata (Todoist-style) using the same code path
+ WWW-Authenticate resource_metadata using the same code path
  as production: MCPManager.initialize(configFileURL:) → createClients →
  connectToRemoteServer(serverURL:authProvider:).
  Run with verbose logging to see exactly what happens.
@@ -24,7 +24,7 @@ struct OAuthDiscoveryTest {
             metadata: SwiftAgentKitLogging.metadata(("test", .string("OAuthDiscovery")))
         )
         let logger = SwiftAgentKitLogging.logger(for: .mcp("OAuthDiscoveryTest"))
-        logger.info("=== OAuth Discovery test (Todoist-style 401) ===")
+        logger.info("=== OAuth Discovery test (401) ===")
 
         let configPath: String
         if CommandLine.arguments.count > 1 {

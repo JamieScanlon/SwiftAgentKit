@@ -16,7 +16,7 @@ import EasyJSON
 /// Creates a MCPClient for every available server
 /// Dispatches tool calls to clients
 ///
-/// For remote servers that require OAuth (e.g. Todoist, Zapier), pass an ``MCPOAuthHandler``
+/// For remote servers that require OAuth, pass an ``MCPOAuthHandler``
 /// so the manager can complete the manual OAuth flow (callback server, token exchange, storage)
 /// instead of only logging and failing. Without a handler, ``OAuthManualFlowRequired`` is
 /// surfaced and the server is added to the failed list.
@@ -164,7 +164,7 @@ public actor MCPManager {
         
         // Create clients for remote servers (HTTP/HTTPS).
         // Use the provided oauthHandler, or create a default so remote servers requiring
-        // manual OAuth (e.g. Todoist, Zapier) can complete the flow.
+        // manual OAuth can complete the flow.
         let effectiveOAuthHandler: MCPOAuthHandler?
         if !config.remoteServers.isEmpty {
             effectiveOAuthHandler = oauthHandler ?? MCPOAuthHandler()

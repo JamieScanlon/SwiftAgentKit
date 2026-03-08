@@ -3,7 +3,7 @@ import SwiftAgentKit
 
 /// Example demonstrating dynamic client registration with OAuth Discovery
 /// This shows how SwiftAgentKit now automatically performs dynamic client registration
-/// when the authorization server supports it (like Zapier)
+/// when the authorization server supports it
 struct DynamicClientRegistrationExample {
     static func main() async {
         print("🔐 Dynamic Client Registration Example")

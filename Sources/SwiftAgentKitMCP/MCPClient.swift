@@ -336,7 +336,7 @@ public actor MCPClient {
         
         let clientID = config.clientID ?? self.clientID
         // When config already has a client ID (top-level or in authConfig), skip DCR so we don't attempt
-        // registration against servers that don't support it (e.g. Todoist).
+        // registration against servers that don't support it.
         let hasExplicitClientId: Bool
         if config.clientID != nil {
             hasExplicitClientId = true
