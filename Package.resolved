@@ -1,5 +1,5 @@
 {
-  "originHash" : "293a15c93bd183706869cf67b6f13b010587c558d635366278b99d33d603ddc8",
+  "originHash" : "f18e6794ff7de218b19acdbe59f87dd3666edd4bcc75c590d374553f80fb2cc0",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -33,8 +33,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/JamieScanlon/EasyJSON.git",
       "state" : {
-        "revision" : "a80f44ad204b3b7e9fc1996529440119c17c25f4",
-        "version" : "1.0.1"
+        "revision" : "e9b54bd14bbf03a8200ec694eba59df14d865a26",
+        "version" : "1.0.2"
       }
     },
     {
