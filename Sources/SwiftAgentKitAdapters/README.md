@@ -36,6 +36,7 @@ Sources/SwiftAgentKitAdapters/
 ### ToolProviders
 - **A2AToolProvider**: Wraps A2A clients to provide them as tools
 - **MCPToolProvider**: Wraps MCP clients to provide them as tools
+- **LocalFunctionToolProvider**: Registers app-defined local functions with EasyJSON arguments
 
 ### ToolAware
 - **ToolAwareAdapter**: Enhanced adapter that can use tools while keeping the base adapter unchanged
@@ -63,11 +64,26 @@ let baseAdapter = OpenAIAdapter(apiKey: "your-api-key")
 // Create tool providers
 let a2aProvider = A2AToolProvider(clients: [a2aClient])
 let mcpProvider = MCPToolProvider(clients: [mcpClient])
+let localProvider = LocalFunctionToolProvider(
+    config: LocalFunctionToolsConfig(functions: [
+        LocalFunctionDefinition(
+            name: "get_weather",
+            description: "Get weather for a city",
+            parameters: [.init(name: "city", description: "City name", type: "string", required: true)]
+        )
+    ])
+) { _, arguments, toolCallId in
+    guard case .object(let args) = arguments,
+          case .string(let city) = args["city"] else {
+        return ToolResult(success: false, content: "", toolCallId: toolCallId, error: "city is required")
+    }
+    return ToolResult(success: true, content: "Weather for \(city): mild", toolCallId: toolCallId)
+}
 
 // Build tool-aware adapter
 let toolAwareAdapter = AdapterBuilder()
     .withLLM(baseAdapter)
-    .withToolProviders([a2aProvider, mcpProvider])
+    .withToolProviders([a2aProvider, mcpProvider, localProvider])
     .build()
 ```
 
@@ -112,6 +128,10 @@ To add a new tool provider:
 1. Create a new file in the `ToolProviders/` directory
 2. Implement the `ToolProvider` protocol
 3. Add the provider to the `AdapterBuilder` if needed
+
+## Collision Policy
+
+When multiple providers expose the same tool name, local function tools are preferred and a warning is logged to help diagnose conflicts.
 
 ## Testing
 
