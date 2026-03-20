@@ -274,6 +274,40 @@ struct MockFunctionToolProvider: ToolProvider {
             #expect(val == 0.5)
         }
     }
+
+    @Test("Orchestrator publishes LLM runtime states during conversation update")
+    func testOrchestratorPublishesRuntimeStates() async throws {
+        let baseLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let trackedLLM = StatefulLLM(baseLLM: baseLLM)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: trackedLLM,
+            config: OrchestratorConfig(streamingEnabled: false)
+        )
+
+        let stateCollectionTask = Task<[LLMRuntimeState], Never> {
+            var observed: [LLMRuntimeState] = []
+            let stream = await orchestrator.llmStateUpdates
+            var iterator = stream.makeAsyncIterator()
+            while let state = await iterator.next() {
+                observed.append(state)
+                // Ignore initial ready, stop at terminal ready.
+                if observed.count > 1 && state == .idle(.ready) {
+                    break
+                }
+            }
+            return observed
+        }
+
+        let messages = [Message(id: UUID(), role: .user, content: "Hello there")]
+        try await orchestrator.updateConversation(messages)
+
+        let states = await stateCollectionTask.value
+        #expect(states.first == .idle(.ready))
+        #expect(states.contains(.generating(.reasoning)))
+        #expect(states.contains(.generating(.responding)))
+        #expect(states.contains(.idle(.completed)))
+        #expect(states.last == .idle(.ready))
+    }
     
     @Test("updateConversation passes maxTokens, temperature, topP, and additionalParameters to LLM")
     func testUpdateConversationPassesLLMRequestParams() async throws {

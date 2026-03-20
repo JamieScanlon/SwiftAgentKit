@@ -312,6 +312,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             // Check if this is an image generation request
             // extractImageGenerationConfig already verifies LLM capability and client acceptance
             if let imageGenConfig = extractImageGenerationConfig(from: params) {
+                transitionLLMState(to: .generating(.responding))
                 // Generate images
                 let imageResponse = try await llm.generateImage(imageGenConfig)
                 
@@ -342,6 +343,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                         timestamp: ISO8601DateFormatter().string(from: .init())
                     )
                 )
+                transitionLLMState(to: .idle(.completed))
+                transitionLLMState(to: .idle(.ready))
                 
                 return
             }
@@ -363,7 +366,9 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
             
             // Call the LLM
+            transitionLLMState(to: .generating(.reasoning))
             let response = try await llm.send(messages, config: llmConfig)
+            transitionLLMState(to: .generating(.responding))
             
             // Create response Artifact
             let responseArtifact = Artifact(
@@ -385,8 +390,12 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
+            transitionLLMState(to: .idle(.completed))
+            transitionLLMState(to: .idle(.ready))
             
         } catch {
+            transitionLLMState(to: .failed(error.localizedDescription))
+            transitionLLMState(to: .idle(.ready))
             logger.error(
                 "LLM call failed",
                 metadata: SwiftAgentKitLogging.metadata(
@@ -446,6 +455,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             // Check if this is an image generation request
             // extractImageGenerationConfig already verifies LLM capability and client acceptance
             if let imageGenConfig = extractImageGenerationConfig(from: params) {
+                transitionLLMState(to: .generating(.responding))
                 // Generate images (typically synchronous, but we'll emit events as they're ready)
                 let imageResponse = try await llm.generateImage(imageGenConfig)
                 
@@ -516,6 +526,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 )
                 
                 eventSink(completedResponse)
+                transitionLLMState(to: .idle(.completed))
+                transitionLLMState(to: .idle(.ready))
                 
                 return
             }
@@ -537,6 +549,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
             
             // Stream from the LLM
+            transitionLLMState(to: .generating(.reasoning))
             let stream = llm.stream(messages, config: llmConfig)
             var fullContent = ""
             var partialArtifacts: [Artifact] = []
@@ -544,6 +557,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             for try await result in stream {
                 switch result {
                 case .stream(let response):
+                    transitionLLMState(to: .generating(.responding))
                     fullContent += response.content
                     
                     // Create artifact update event for streaming
@@ -578,6 +592,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     eventSink(streamingEvent)
                     
                 case .complete(let response):
+                    transitionLLMState(to: .idle(.completed))
 
                     // the response.content sould contain the full response
                     fullContent = response.content
@@ -639,8 +654,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
             
             eventSink(completedResponse)
+            transitionLLMState(to: .idle(.ready))
             
         } catch {
+            transitionLLMState(to: .failed(error.localizedDescription))
+            transitionLLMState(to: .idle(.ready))
             logger.error(
                 "LLM streaming failed",
                 metadata: SwiftAgentKitLogging.metadata(
@@ -697,6 +715,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             // Check if this is an image generation request
             // Image generation bypasses tool handling (direct operation)
             if let imageGenConfig = extractImageGenerationConfig(from: params) {
+                transitionLLMState(to: .generating(.responding))
                 // Generate images
                 let imageResponse = try await llm.generateImage(imageGenConfig)
                 
@@ -727,6 +746,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                         timestamp: ISO8601DateFormatter().string(from: .init())
                     )
                 )
+                transitionLLMState(to: .idle(.completed))
+                transitionLLMState(to: .idle(.ready))
                 
                 return
             }
@@ -773,7 +794,9 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 )
                 
                 // Call the LLM
+                transitionLLMState(to: .generating(.reasoning))
                 let response = try await llm.send(messages, config: llmConfig)
+                transitionLLMState(to: .generating(.responding))
                 
                 // Look at the text response for any tool calls not parsed automatically
                 var llmResponse = LLMResponse.llmResponse(from: response.content, availableTools: availableToolCalls)
@@ -793,6 +816,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 // If no tool calls, we have the final answer
                 if llmResponse.toolCalls.isEmpty {
                     finalResponse = llmResponse.content
+                    transitionLLMState(to: .idle(.completed))
                     logger.info(
                         "Final response received without tool calls",
                         metadata: SwiftAgentKitLogging.metadata(
@@ -815,6 +839,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     )
                 )
                 var toolResults: [String] = []
+                transitionLLMState(to: .idle(.waitingForToolResult))
                 
                 for toolCall in llmResponse.toolCalls {
                     for provider in toolProviders {
@@ -827,7 +852,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                             if let metadataDict = result.metadata.literalValue as? [String: Any],
                                let fileResources = metadataDict["fileResources"] as? [[String: Any]] {
                                 for (index, fileResource) in fileResources.enumerated() {
-                                    if let uri = fileResource["uri"] as? String,
+                                    if fileResource["uri"] as? String != nil,
                                        let mimeType = fileResource["mimeType"] as? String,
                                        let base64Data = fileResource["data"] as? String,
                                        let fileData = Data(base64Encoded: base64Data) {
@@ -931,8 +956,12 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     timestamp: ISO8601DateFormatter().string(from: .init())
                 )
             )
+            transitionLLMState(to: .idle(.completed))
+            transitionLLMState(to: .idle(.ready))
             
         } catch {
+            transitionLLMState(to: .failed(error.localizedDescription))
+            transitionLLMState(to: .idle(.ready))
             logger.error(
                 "LLM call with tools failed",
                 metadata: SwiftAgentKitLogging.metadata(
@@ -1000,6 +1029,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             // Check if this is an image generation request
             // Image generation bypasses tool handling (direct operation)
             if let imageGenConfig = extractImageGenerationConfig(from: params) {
+                transitionLLMState(to: .generating(.responding))
                 // Generate images
                 let imageResponse = try await llm.generateImage(imageGenConfig)
                 
@@ -1069,6 +1099,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     result: completedEvent
                 )
                 eventSink(completedResponse)
+                transitionLLMState(to: .idle(.completed))
+                transitionLLMState(to: .idle(.ready))
                 
                 return
             }
@@ -1107,6 +1139,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 )
                 
                 // Stream from the LLM
+                transitionLLMState(to: .generating(.reasoning))
                 let stream = llm.stream(messages, config: llmConfig)
                 var fullContent = ""
                 var streamedToolCalls: [ToolCall] = []
@@ -1114,6 +1147,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 for try await result in stream {
                     switch result {
                     case .stream(let response):
+                        transitionLLMState(to: .generating(.responding))
                         fullContent += response.content
                         
                         // Stream partial content to client
@@ -1169,6 +1203,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 // If no tool calls, we have the final answer
                 if llmResponse.toolCalls.isEmpty {
                     finalResponse = llmResponse.content
+                    transitionLLMState(to: .idle(.completed))
                     logger.info(
                         "Final streaming response received without tool calls",
                         metadata: SwiftAgentKitLogging.metadata(
@@ -1192,6 +1227,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 )
                 
                 // Stream tool execution status
+                transitionLLMState(to: .idle(.waitingForToolResult))
                 let toolStatusArtifact = Artifact(
                     artifactId: UUID().uuidString,
                     parts: [.text(text: "\n\n[Executing \(llmResponse.toolCalls.count) tool(s)...]\n\n")],
@@ -1227,7 +1263,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                             if let metadataDict = result.metadata.literalValue as? [String: Any],
                                let fileResources = metadataDict["fileResources"] as? [[String: Any]] {
                                 for (index, fileResource) in fileResources.enumerated() {
-                                    if let uri = fileResource["uri"] as? String,
+                                    if fileResource["uri"] as? String != nil,
                                        let mimeType = fileResource["mimeType"] as? String,
                                        let base64Data = fileResource["data"] as? String,
                                        let fileData = Data(base64Encoded: base64Data) {
@@ -1386,8 +1422,12 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
             
             eventSink(completedResponse)
+            transitionLLMState(to: .idle(.completed))
+            transitionLLMState(to: .idle(.ready))
             
         } catch {
+            transitionLLMState(to: .failed(error.localizedDescription))
+            transitionLLMState(to: .idle(.ready))
             logger.error(
                 "LLM streaming with tools failed",
                 metadata: SwiftAgentKitLogging.metadata(
@@ -1480,6 +1520,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         ))
         
         return messages
+    }
+
+    private func transitionLLMState(to state: LLMRuntimeState) {
+        guard let controllable = llm as? any LLMRuntimeStateControllable else {
+            return
+        }
+        controllable.transition(to: state)
     }
     
     private func convertA2ARoleToMessageRole(_ a2aRole: String) -> MessageRole {

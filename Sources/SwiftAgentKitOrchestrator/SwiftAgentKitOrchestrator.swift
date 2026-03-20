@@ -95,6 +95,16 @@ public actor SwiftAgentKitOrchestrator {
             return currentPartialContentStream ?? createPartialContentStream()
         }
     }
+
+    /// Current runtime state from the underlying LLM.
+    public var llmCurrentState: LLMRuntimeState {
+        llm.currentState
+    }
+
+    /// Runtime state updates from the underlying LLM.
+    public var llmStateUpdates: AsyncStream<LLMRuntimeState> {
+        llm.stateUpdates
+    }
     
     /// - Parameters:
     ///   - llm: The LLM protocol implementation.
@@ -197,122 +207,140 @@ public actor SwiftAgentKitOrchestrator {
             availableTools: availableTools,
             additionalParameters: config.additionalParameters
         )
-                
-        if config.streamingEnabled {
-            // Handle streaming response
-            let stream = llm.stream(messages, config: requestConfig)
-            
-            for try await result in stream {
-                switch result {
-                case .stream(let response):
-                    logger.debug(
-                        "Received streaming chunk",
-                        metadata: metadataForStreamingContent(response.content)
-                    )
-                    // Publish the streaming chunk to partial content stream
-                    publishPartialContent(response.content)
-                    
-                case .complete(let response):
-                    logger.info(
-                        "Received complete streaming response",
-                        metadata: SwiftAgentKitLogging.metadata(
-                            ("contentLength", .stringConvertible(response.content.count)),
-                            ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
-                        )
-                    )
 
-                    // Ensure all tool calls have IDs (some models don't provide them)
-                    let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
-                    
-                    // Convert LLMResponse to Message for conversation history
-                    let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
-                    updatedMessages.append(responseMessage)
-                    // Publish the message
-                    publishMessage(responseMessage)
-                    
-                    if response.hasToolCalls {
-                        
-                        // Execute tool calls
+        do {
+            transitionLLMState(to: .generating(.reasoning))
+            if config.streamingEnabled {
+                // Handle streaming response
+                let stream = llm.stream(messages, config: requestConfig)
+
+                for try await result in stream {
+                    switch result {
+                    case .stream(let response):
+                        transitionLLMState(to: .generating(.responding))
+                        logger.debug(
+                            "Received streaming chunk",
+                            metadata: metadataForStreamingContent(response.content)
+                        )
+                        // Publish the streaming chunk to partial content stream
+                        publishPartialContent(response.content)
+
+                    case .complete(let response):
                         logger.info(
-                            "Response contains tool calls",
+                            "Received complete streaming response",
                             metadata: SwiftAgentKitLogging.metadata(
-                                ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
+                                ("contentLength", .stringConvertible(response.content.count)),
+                                ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
                             )
                         )
-                        let toolResponses = await executeToolCalls(toolCallsWithIds)
-                        
-                        guard !toolResponses.isEmpty else { continue }
-                        
-                        // Create tool response messages with proper toolCallId mapping
-                        // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
-                        logger.info(
-                            "Sending tool responses back to LLM",
-                            metadata: SwiftAgentKitLogging.metadata(
-                                ("responseCount", .stringConvertible(toolResponses.count))
+
+                        // Ensure all tool calls have IDs (some models don't provide them)
+                        let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
+
+                        // Convert LLMResponse to Message for conversation history
+                        let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
+                        updatedMessages.append(responseMessage)
+                        // Publish the message
+                        publishMessage(responseMessage)
+
+                        if response.hasToolCalls {
+                            transitionLLMState(to: .idle(.waitingForToolResult))
+                            // Execute tool calls
+                            logger.info(
+                                "Response contains tool calls",
+                                metadata: SwiftAgentKitLogging.metadata(
+                                    ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
+                                )
                             )
-                        )
-                        let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
-                        updatedMessages.append(contentsOf: toolResponseMessages)
-                        toolResponseMessages.forEach { publishMessage($0) }
-                        
-                        // Recurse here with the updated message history
-                        try await updateConversation(updatedMessages, availableTools: availableTools)
+                            let toolResponses = await executeToolCalls(toolCallsWithIds)
+
+                            guard !toolResponses.isEmpty else { continue }
+
+                            // Create tool response messages with proper toolCallId mapping
+                            // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
+                            logger.info(
+                                "Sending tool responses back to LLM",
+                                metadata: SwiftAgentKitLogging.metadata(
+                                    ("responseCount", .stringConvertible(toolResponses.count))
+                                )
+                            )
+                            let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
+                            updatedMessages.append(contentsOf: toolResponseMessages)
+                            toolResponseMessages.forEach { publishMessage($0) }
+
+                            // Recurse here with the updated message history
+                            try await updateConversation(updatedMessages, availableTools: availableTools)
+                        } else {
+                            transitionLLMState(to: .idle(.completed))
+                            transitionLLMState(to: .idle(.ready))
+                        }
+
+                        // Finish and nil out the partial content stream continuation since streaming is complete
+                        partialContentStreamContinuation?.finish()
+                        partialContentStreamContinuation = nil
+                        currentPartialContentStream = nil
                     }
-                    
-                    // Finish and nil out the partial content stream continuation since streaming is complete
-                    partialContentStreamContinuation?.finish()
-                    partialContentStreamContinuation = nil
-                    currentPartialContentStream = nil
+                }
+            } else {
+                // Handle synchronous response
+                let response = try await llm.send(messages, config: requestConfig)
+                transitionLLMState(to: .generating(.responding))
+
+                logger.info(
+                    "Received complete response",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("contentLength", .stringConvertible(response.content.count)),
+                        ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
+                    )
+                )
+                // Ensure all tool calls have IDs (some models don't provide them)
+                let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
+
+                // Convert LLMResponse to Message for conversation history
+                let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
+                updatedMessages.append(responseMessage)
+                // Publish the final conversation history
+                publishMessage(responseMessage)
+
+                if response.hasToolCalls {
+                    transitionLLMState(to: .idle(.waitingForToolResult))
+                    // Execute tool calls
+                    logger.info(
+                        "Response contains tool calls",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
+                        )
+                    )
+                    let toolResponses = await executeToolCalls(toolCallsWithIds)
+
+                    guard !toolResponses.isEmpty else {
+                        transitionLLMState(to: .idle(.ready))
+                        return
+                    }
+
+                    // Create tool response messages with proper toolCallId mapping
+                    // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
+                    logger.info(
+                        "Sending tool responses back to LLM",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("responseCount", .stringConvertible(toolResponses.count))
+                        )
+                    )
+                    let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
+                    updatedMessages.append(contentsOf: toolResponseMessages)
+                    toolResponseMessages.forEach { publishMessage($0) }
+
+                    // Recurse here with the updated message history
+                    try await updateConversation(updatedMessages, availableTools: availableTools)
+                } else {
+                    transitionLLMState(to: .idle(.completed))
+                    transitionLLMState(to: .idle(.ready))
                 }
             }
-        } else {
-            // Handle synchronous response
-            let response = try await llm.send(messages, config: requestConfig)
-            
-            logger.info(
-                "Received complete response",
-                metadata: SwiftAgentKitLogging.metadata(
-                    ("contentLength", .stringConvertible(response.content.count)),
-                    ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
-                )
-            )
-            // Ensure all tool calls have IDs (some models don't provide them)
-            let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
-            
-            // Convert LLMResponse to Message for conversation history
-            let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
-            updatedMessages.append(responseMessage)
-            // Publish the final conversation history
-            publishMessage(responseMessage)
-            
-            if response.hasToolCalls {
-                
-                // Execute tool calls
-                logger.info(
-                    "Response contains tool calls",
-                    metadata: SwiftAgentKitLogging.metadata(
-                        ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
-                    )
-                )
-                let toolResponses = await executeToolCalls(toolCallsWithIds)
-                
-                guard !toolResponses.isEmpty else { return }
-                
-                // Create tool response messages with proper toolCallId mapping
-                // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
-                logger.info(
-                    "Sending tool responses back to LLM",
-                    metadata: SwiftAgentKitLogging.metadata(
-                        ("responseCount", .stringConvertible(toolResponses.count))
-                    )
-                )
-                let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
-                updatedMessages.append(contentsOf: toolResponseMessages)
-                toolResponseMessages.forEach { publishMessage($0) }
-                
-                // Recurse here with the updated message history
-                try await updateConversation(updatedMessages, availableTools: availableTools)
-            }
+        } catch {
+            transitionLLMState(to: .failed(error.localizedDescription))
+            transitionLLMState(to: .idle(.ready))
+            throw error
         }
     }
     
@@ -356,6 +384,13 @@ public actor SwiftAgentKitOrchestrator {
             metadata: metadataForStreamingContent(content)
         )
         partialContentStreamContinuation?.yield(content)
+    }
+
+    private func transitionLLMState(to state: LLMRuntimeState) {
+        guard let controllable = llm as? any LLMRuntimeStateControllable else {
+            return
+        }
+        controllable.transition(to: state)
     }
     
     /// Create a message stream if one does not exist

@@ -30,9 +30,40 @@ The `LLMProtocolAdapter` allows you to:
 - **A2A Compatibility**: Full integration with the A2A protocol
 - **Conversation History**: Maintains context across multiple messages
 - **Streaming Support**: Real-time streaming responses
+- **Runtime State Visibility**: Observe reasoning/generating/tool-wait/completion transitions
 - **Image Generation**: Automatic detection and support for image generation requests
 - **Configurable**: Customizable parameters and system prompts
 - **Error Handling**: Graceful error handling and recovery
+
+### Runtime State Tracking
+
+`LLMProtocol` now exposes:
+
+- `currentState: LLMRuntimeState`
+- `stateUpdates: AsyncStream<LLMRuntimeState>`
+
+If your model implementation does not override these properties, defaults are still provided (`.idle(.ready)` and a single-value stream), so existing conformers remain source-compatible.
+
+For end-to-end runtime state transitions without modifying your existing LLM, wrap it with `StatefulLLM`:
+
+```swift
+import SwiftAgentKit
+import SwiftAgentKitAdapters
+
+let rawLLM = MyCustomLLM(model: "my-model")
+let trackedLLM = StatefulLLM(baseLLM: rawLLM)
+
+let adapter = LLMProtocolAdapter(
+    llm: trackedLLM,
+    model: "my-model"
+)
+
+Task {
+    for await state in trackedLLM.stateUpdates {
+        print("LLM state:", state)
+    }
+}
+```
 
 ## Basic Usage
 

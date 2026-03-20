@@ -74,6 +74,19 @@ public struct ImageGenerationRequestConfig: Sendable {
 
 /// A common protocol for interacting with LLMs
 public protocol LLMProtocol: Sendable {
+    /// The current runtime state for this LLM.
+    ///
+    /// Implementers can expose detailed execution phases (reasoning, generating,
+    /// waiting for tool results, completed, failed). The default implementation
+    /// returns `.idle(.ready)`.
+    var currentState: LLMRuntimeState { get }
+
+    /// A stream of runtime state transitions for this LLM.
+    ///
+    /// The default implementation yields `currentState` once and then finishes.
+    /// Implementers that support live updates should override and continuously
+    /// emit transitions as request processing progresses.
+    var stateUpdates: AsyncStream<LLMRuntimeState> { get }
 
     /// Returns the model name for this LLM instance
     func getModelName() -> String
@@ -124,6 +137,16 @@ public struct ImageGenerationResponse: Sendable {
 
 /// Default implementations for the LLMProtocol
 public extension LLMProtocol {
+    var currentState: LLMRuntimeState {
+        .idle(.ready)
+    }
+
+    var stateUpdates: AsyncStream<LLMRuntimeState> {
+        AsyncStream { continuation in
+            continuation.yield(currentState)
+            continuation.finish()
+        }
+    }
     
     /// Send a message to the LLM and get a response
     /// - Parameters:

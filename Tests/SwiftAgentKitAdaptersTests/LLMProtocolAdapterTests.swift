@@ -1578,6 +1578,70 @@ struct TestLLM: LLMProtocol {
             #expect(lastChunkIndices[0] == lastIdx)
         }
     }
+
+    @Test("LLMProtocolAdapter publishes detailed LLM runtime states in tool loop")
+    func testAdapterPublishesDetailedRuntimeStates() async throws {
+        let testLLM = StatefulLLM(
+            baseLLM: TestLLMWithToolCalls(
+                model: "test-model",
+                toolCalls: [ToolCall(name: "text_tool", arguments: .object([:]), id: UUID().uuidString)]
+            )
+        )
+        let adapter = LLMProtocolAdapter(llm: testLLM, model: "test-model")
+        let toolProvider = FileResourceToolProvider(fileResources: [], textContent: "Tool executed successfully")
+
+        let store = TaskStore()
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Execute tool")],
+            messageId: UUID().uuidString
+        )
+        let params = MessageSendParams(message: message)
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
+
+        let stateCollectionTask = Task<[LLMRuntimeState], Never> {
+            var observed: [LLMRuntimeState] = []
+            var iterator = testLLM.stateUpdates.makeAsyncIterator()
+            while let state = await iterator.next() {
+                observed.append(state)
+                // Ignore the initial ready state and stop at terminal ready.
+                if observed.count > 1 && state == .idle(.ready) {
+                    break
+                }
+            }
+            return observed
+        }
+
+        try await adapter.handleTaskSendWithTools(
+            params,
+            taskId: task.id,
+            contextId: task.contextId,
+            toolProviders: [toolProvider],
+            store: store
+        )
+
+        let states = await stateCollectionTask.value
+        let reasoningIndex = states.firstIndex(of: .generating(.reasoning))
+        let waitingIndex = states.firstIndex(of: .idle(.waitingForToolResult))
+        let completedIndex = states.firstIndex(of: .idle(.completed))
+        let readyIndex = states.lastIndex(of: .idle(.ready))
+
+        #expect(reasoningIndex != nil)
+        #expect(waitingIndex != nil)
+        #expect(completedIndex != nil)
+        #expect(readyIndex != nil)
+
+        if let reasoningIndex, let waitingIndex, let completedIndex, let readyIndex {
+            #expect(reasoningIndex < waitingIndex)
+            #expect(waitingIndex < completedIndex)
+            #expect(completedIndex < readyIndex)
+        }
+    }
 }
 
 // MARK: - Test Helper: LLM with Tool Calls
