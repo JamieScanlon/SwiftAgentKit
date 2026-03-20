@@ -1,5 +1,6 @@
 import Foundation
 import EasyJSON
+import Logging
 
 /// Result of a tool execution
 public struct ToolResult: Sendable {
@@ -85,21 +86,54 @@ public struct ToolDefinition: Sendable, Codable {
 /// Simple tool manager that coordinates multiple providers
 public struct ToolManager: Sendable {
     public let providers: [ToolProvider]
+    private let logger: Logger
     
-    public init(providers: [ToolProvider] = []) {
+    public init(providers: [ToolProvider] = [], logger: Logger? = nil) {
         self.providers = providers
+        self.logger = logger ?? SwiftAgentKitLogging.logger(
+            for: .core("ToolManager"),
+            metadata: SwiftAgentKitLogging.metadata(
+                ("providerCount", .stringConvertible(providers.count))
+            )
+        )
+    }
+    
+    public init(providers: [ToolProvider]) {
+        self.init(providers: providers, logger: nil)
     }
     
     public func allToolsAsync() async -> [ToolDefinition] {
-        var allTools: [ToolDefinition] = []
+        var chosenToolsByName: [String: ToolDefinition] = [:]
+        var chosenProviderByToolName: [String: String] = [:]
+        var chosenIsLocalByToolName: [String: Bool] = [:]
         for provider in providers {
-            allTools.append(contentsOf: await provider.availableTools())
+            let providerTools = await provider.availableTools()
+            let providerIsLocal = provider is LocalFunctionToolProvider
+            for tool in providerTools {
+                if chosenToolsByName[tool.name] != nil {
+                    let existingIsLocal = chosenIsLocalByToolName[tool.name] ?? false
+                    let incomingIsLocal = providerIsLocal
+                    if incomingIsLocal && !existingIsLocal {
+                        logCollision(toolName: tool.name, winnerProvider: provider.name, overshadowedProvider: chosenProviderByToolName[tool.name] ?? "unknown")
+                        chosenToolsByName[tool.name] = tool
+                        chosenProviderByToolName[tool.name] = provider.name
+                        chosenIsLocalByToolName[tool.name] = true
+                    } else {
+                        logCollision(toolName: tool.name, winnerProvider: chosenProviderByToolName[tool.name] ?? "unknown", overshadowedProvider: provider.name)
+                    }
+                } else {
+                    chosenToolsByName[tool.name] = tool
+                    chosenProviderByToolName[tool.name] = provider.name
+                    chosenIsLocalByToolName[tool.name] = providerIsLocal
+                }
+            }
         }
-        return allTools
+        return Array(chosenToolsByName.values)
     }
     
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
-        for provider in providers {
+        let providersByPriority = await prioritizedProviders(for: toolCall.name)
+        for provider in providersByPriority {
             do {
                 let result = try await provider.executeTool(toolCall)
                 if result.success {
@@ -120,7 +154,53 @@ public struct ToolManager: Sendable {
     }
     
     public func addProvider(_ provider: ToolProvider) -> ToolManager {
-        ToolManager(providers: providers + [provider])
+        ToolManager(providers: providers + [provider], logger: logger)
+    }
+    
+    private func prioritizedProviders(for toolName: String) async -> [ToolProvider] {
+        var localProviders: [ToolProvider] = []
+        var nonLocalProviders: [ToolProvider] = []
+        var matchingProviderNames: [String] = []
+        
+        for provider in providers {
+            let available = await provider.availableTools()
+            guard available.contains(where: { $0.name == toolName }) else {
+                nonLocalProviders.append(provider)
+                continue
+            }
+            matchingProviderNames.append(provider.name)
+            if provider is LocalFunctionToolProvider {
+                localProviders.append(provider)
+            } else {
+                nonLocalProviders.append(provider)
+            }
+        }
+        
+        if !localProviders.isEmpty && matchingProviderNames.count > 1 {
+            let localProviderNames = Set(localProviders.map(\.name))
+            let overshadowed = matchingProviderNames.filter { !localProviderNames.contains($0) }
+            logger.warning(
+                "Tool name collision detected; preferring local function provider",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("toolName", .string(toolName)),
+                    ("winnerProvider", .string(localProviders.first?.name ?? "local_function")),
+                    ("overshadowedProviders", .array(overshadowed.map { .string($0) }))
+                )
+            )
+        }
+        
+        return localProviders + nonLocalProviders
+    }
+    
+    private func logCollision(toolName: String, winnerProvider: String, overshadowedProvider: String) {
+        logger.warning(
+            "Duplicate tool name detected; retaining preferred provider",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("toolName", .string(toolName)),
+                ("winnerProvider", .string(winnerProvider)),
+                ("overshadowedProvider", .string(overshadowedProvider))
+            )
+        )
     }
 } 
 

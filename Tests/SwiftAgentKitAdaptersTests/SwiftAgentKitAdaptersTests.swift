@@ -524,6 +524,32 @@ import MCP
         #expect(tools.first?.name == "test_tool")
     }
     
+    @Test("AdapterBuilder should register local function tools")
+    func testAdapterBuilderWithLocalFunctionTools() async throws {
+        let adapter = AdapterBuilder()
+            .withLLM(OpenAIAdapter(apiKey: "test-key"))
+            .withLocalFunctionTools(
+                config: LocalFunctionToolsConfig(functions: [
+                    LocalFunctionDefinition(
+                        name: "local_weather",
+                        description: "Returns weather details",
+                        parameters: [
+                            .init(name: "city", description: "City name", type: "string", required: true)
+                        ]
+                    )
+                ])
+            ) { _, arguments, toolCallId in
+                if case .object(let dict) = arguments,
+                   case .string(let city) = dict["city"] {
+                    return ToolResult(success: true, content: "Weather for \(city)", toolCallId: toolCallId)
+                }
+                return ToolResult(success: false, content: "", toolCallId: toolCallId, error: "city is required")
+            }
+            .build()
+        
+        #expect(adapter.cardCapabilities.streaming == true)
+    }
+    
     // MARK: - ToolProxyAdapter Tests
     
     @Test("ToolProxyAdapter should delegate capabilities to base adapter")

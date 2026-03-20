@@ -60,6 +60,23 @@ public struct AdapterBuilder {
         return builder
     }
     
+    /// Add local function tools as a provider.
+    public func withLocalFunctionTools(
+        name: String = "Local Functions",
+        config: LocalFunctionToolsConfig,
+        executor: @escaping LocalFunctionExecutor
+    ) -> AdapterBuilder {
+        var builder = self
+        builder.providers.append(
+            LocalFunctionToolProvider(
+                name: name,
+                config: config,
+                executor: executor
+            )
+        )
+        return builder
+    }
+    
     /// Build the final adapter
     public func build() -> AgentAdapter {
         guard let baseAdapter = baseAdapter else {
@@ -134,5 +151,10 @@ extension AdapterBuilder {
     /// Convenience method to add a single tool provider
     public func withToolProvider(_ provider: ToolProvider) -> AdapterBuilder {
         withToolProviders([provider])
+    }
+    
+    /// Convenience method to add a local function provider.
+    public func withLocalFunctionProvider(_ provider: LocalFunctionToolProvider) -> AdapterBuilder {
+        withToolProvider(provider)
     }
 } 

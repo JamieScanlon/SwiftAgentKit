@@ -70,6 +70,9 @@ let package = Package(
         .executable(
             name: "OAuthDiscoveryTest",
             targets: ["OAuthDiscoveryTest"]),
+        .executable(
+            name: "RawFunctionToolsExample",
+            targets: ["RawFunctionToolsExample"]),
 
     ],
     dependencies: [
@@ -277,6 +280,14 @@ let package = Package(
                 .product(name: "EasyJSON", package: "EasyJSON"),
             ],
             path: "Examples/OAuthDiscoveryTest"),
+        .executableTarget(
+            name: "RawFunctionToolsExample",
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "EasyJSON", package: "EasyJSON"),
+            ],
+            path: "Examples/RawFunctionToolsExample"),
 
         
         // Test targets

@@ -401,7 +401,13 @@ public actor SwiftAgentKitOrchestrator {
     
     /// Converts a ToolResult from ToolManager/ToolProvider into an LLMResponse for the conversation
     private func llmResponseFromToolResult(_ result: ToolResult, toolCallId: String?) -> LLMResponse {
-        let content = result.success ? result.content : (result.error ?? "Tool execution failed")
+        let content: String = {
+            if result.success {
+                return result.content
+            }
+            let baseError = result.error ?? "Tool execution failed"
+            return "\(baseError) Please try another tool or approach."
+        }()
         let metadata: LLMMetadata? = {
             guard case .object(let dict) = result.metadata, !dict.isEmpty else { return nil }
             return LLMMetadata(modelMetadata: result.metadata)

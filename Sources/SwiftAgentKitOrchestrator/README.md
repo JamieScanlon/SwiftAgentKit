@@ -4,6 +4,7 @@ SwiftAgentKitOrchestrator provides building blocks for creating LLM orchestrator
 
 - Use tools through MCP (Model Context Protocol)
 - Communicate with other agents through A2A (Agent-to-Agent)
+- Execute local function tools via `ToolManager`
 
 ## Dependencies
 
@@ -118,6 +119,10 @@ When `streamingEnabled` is `true`, the orchestrator:
 - Automatically finishes and cleans up the partial content stream when streaming completes
 - Publishes the final complete message to the `messageStream`
 - Handles tool calls and recursive conversation updates seamlessly
+
+### Tool Errors and Replanning
+
+When a tool execution fails, the orchestrator sends the failure back as a tool message with the original `toolCallId`. This allows the LLM to recognize the failure and select a different strategy or tool in a follow-up step.
 
 ### Stream Management
 

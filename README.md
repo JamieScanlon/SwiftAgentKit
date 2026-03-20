@@ -7,6 +7,7 @@ A Swift framework for building AI agents with support for Model Context Protocol
 SwiftAgentKit provides a modular foundation for building AI agents that can:
 - Connect to MCP-compliant model servers and tools
 - Communicate with other A2A-compliant agents
+- Register local function tools with EasyJSON arguments
 - Make HTTP requests and handle streaming responses
 - Execute shell commands and manage subprocesses
 - Use structured logging for debugging and monitoring
@@ -77,6 +78,32 @@ let adapter = AdapterBuilder()
 print("SwiftAgentKit initialized")
 ```
 
+### Local Function Tools (EasyJSON)
+
+```swift
+import SwiftAgentKit
+
+let localConfig = LocalFunctionToolsConfig(functions: [
+    LocalFunctionDefinition(
+        name: "get_weather",
+        description: "Get weather by city",
+        parameters: [
+            .init(name: "city", description: "City name", type: "string", required: true)
+        ]
+    )
+])
+
+let provider = LocalFunctionToolProvider(config: localConfig) { toolName, arguments, toolCallId in
+    guard case .object(let args) = arguments,
+          case .string(let city) = args["city"] else {
+        return ToolResult(success: false, content: "", toolCallId: toolCallId, error: "Missing city argument")
+    }
+    return ToolResult(success: true, content: "Weather in \(city): sunny", toolCallId: toolCallId)
+}
+
+let toolManager = ToolManager(providers: [provider])
+```
+
 ## Examples
 
 Run the examples to see SwiftAgentKit in action:
@@ -99,6 +126,9 @@ swift run ToolAwareExample
 
 # LLM orchestrator example
 swift run OrchestratorExample
+
+# Raw function tools example
+swift run RawFunctionToolsExample
 ```
 
 ## Documentation
