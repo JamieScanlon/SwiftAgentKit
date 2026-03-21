@@ -1,8 +1,11 @@
 # Agentic Loop Pattern in LLMProtocolAdapter
 
+> **State & observation**  
+> This page describes **control flow** (iterate until no tool calls, `maxAgenticIterations`). For **`StatefulLLM`**, **`QueuedLLM`**, and the three state models (**`LLMRuntimeState`**, **`LLMRequestState`**, **`AgenticLoopState`**) — including **`LLMProtocolAdapter.agenticLoopUpdates`** — see [**LLM state and observation**](LLMStateAndObservation.md).
+
 ## Overview
 
-The `LLMProtocolAdapter` now implements an **agentic loop pattern** that allows the LLM to use tools and synthesize their results into a final answer. This pattern is essential for creating agents that can reason about tool outputs and provide coherent responses based on the tool execution results.
+The `LLMProtocolAdapter` implements an **agentic loop pattern** that allows the LLM to use tools and synthesize their results into a final answer. This pattern is essential for creating agents that can reason about tool outputs and provide coherent responses based on the tool execution results.
 
 ## Problem Statement
 
@@ -194,4 +197,9 @@ The LLM might be unnecessarily calling tools. Consider:
 - Improving your system prompt to encourage efficiency
 - Ensuring tools have clear, descriptive descriptions
 - Reducing the number of available tools
+
+## Related documentation
+
+- [**LLM state and observation**](LLMStateAndObservation.md) — `StatefulLLM`, `QueuedLLM`, `LLMRuntimeState`, `LLMRequestState`, `AgenticLoopState`, `agenticLoopUpdates`
+- [LLMProtocolAdapter](LLMProtocolAdapter.md) — adapter API and FIFO / queue discussion
 

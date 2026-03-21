@@ -2,6 +2,8 @@
 
 Swift source files for the **LLM surface area** of SwiftAgentKit: protocol, per-call and agentic state, queueing, and streaming results.
 
+**User-facing documentation:** [`docs/LLMStateAndObservation.md`](../../../docs/LLMStateAndObservation.md) (StatefulLLM, QueuedLLM, observation APIs).
+
 | File | Role |
 |------|------|
 | `LLMProtocol.swift` | `LLMProtocol`, `LLMRequestConfig`, defaults |

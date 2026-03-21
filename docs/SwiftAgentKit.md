@@ -33,6 +33,8 @@ The SwiftAgentKit module provides core networking capabilities and utilities tha
 
 LLM-focused types live under **`Sources/SwiftAgentKit/LLM/`** (e.g. `LLMProtocol`, `LLMResponse`, `StatefulLLM` / `QueuedLLM`, `AgenticLoopState`). Shared conversation types such as **`Message`** and **`ToolCall`** remain at the module root. See [`LLM/README.md`](../Sources/SwiftAgentKit/LLM/README.md) for a file index.
 
+**Public guide (wrappers + all state types + observation):** [**LLM state and observation**](LLMStateAndObservation.md).
+
 ## Example: Basic REST API Usage
 
 ```swift

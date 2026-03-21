@@ -2,6 +2,9 @@
 
 `SwiftAgentKitOrchestrator` is an **`actor`** that wires an `LLMProtocol` implementation to optional **MCP** tools, **A2A** agents, and local **function** tools via `ToolManager`. It runs a recursive **agentic** loop: LLM response → tool execution → follow-up LLM calls until a final assistant message without pending tool calls.
 
+> **See also**  
+> [**LLM state and observation**](LLMStateAndObservation.md) — `StatefulLLM`, `QueuedLLM`, `LLMRuntimeState`, `LLMRequestState`, `AgenticLoopState`.
+
 > ℹ️ **Logging**  
 > Use [`SwiftAgentKitLogging`](SwiftAgentKit.md) (same as other modules). The orchestrator receives a scoped logger from `SwiftAgentKitLogging.logger(for: .orchestrator, …)` if you pass `logger: nil`.
 
@@ -152,7 +155,8 @@ Failures are turned into tool-role messages so the model can recover.
 
 ## Related documentation
 
-- [SwiftAgentKit](SwiftAgentKit.md) — core types and `LLMProtocol`  
-- [LLMProtocolAdapter](LLMProtocolAdapter.md) — A2A adapter; same three-layer state model and FIFO discussion  
+- [LLM state and observation](LLMStateAndObservation.md) — canonical guide to wrappers and state streams
+- [SwiftAgentKit](SwiftAgentKit.md) — core types and `LLMProtocol`
+- [LLMProtocolAdapter](LLMProtocolAdapter.md) — A2A adapter; same three-layer state model and FIFO discussion
 - [MCP](MCP.md), [A2A](A2A.md) — transport details  
 - Example: `Examples/OrchestratorExample/`  
