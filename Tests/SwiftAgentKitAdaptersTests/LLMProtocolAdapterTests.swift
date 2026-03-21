@@ -1695,7 +1695,10 @@ struct TestLLM: LLMProtocol {
                 await agenticStateCollector.append(state)
             }
         }
+        defer { collectTask.cancel() }
 
+        // Let the collector task begin `for await` so it subscribes before the adapter publishes.
+        await Task.yield()
         try await adapter.handleTaskSendWithTools(
             params,
             taskId: task.id,
@@ -1703,7 +1706,7 @@ struct TestLLM: LLMProtocol {
             toolProviders: [toolProvider],
             store: store
         )
-        collectTask.cancel()
+        try? await Task.sleep(nanoseconds: 50_000_000)
 
         let agenticStates = await agenticStateCollector.snapshot()
         #expect(agenticStates.contains(.started))

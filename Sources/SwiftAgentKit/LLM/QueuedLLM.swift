@@ -37,6 +37,16 @@ public struct QueuedLLM: LLMProtocol {
         requestStateHub.makeStream()
     }
 
+    /// Latest published per-request state for the given id (this wrapper’s hub).
+    public func currentRequestState(for id: LLMRequestID) -> LLMRequestState? {
+        requestStateHub.currentState(for: id)
+    }
+
+    /// Snapshot of latest per-request states on this wrapper’s hub.
+    public var currentRequestStates: [LLMRequestID: LLMRequestState] {
+        requestStateHub.currentStates
+    }
+
     // MARK: - LLMProtocol delegation
 
     public var currentState: LLMRuntimeState {

@@ -136,6 +136,16 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
         requestStateHub.makeStream()
     }
 
+    /// Latest published per-request state for the given id (from this wrapper’s hub, or ``LLMRequestStateHub/current`` when set).
+    public func currentRequestState(for id: LLMRequestID) -> LLMRequestState? {
+        effectiveRequestHub().currentState(for: id)
+    }
+
+    /// Snapshot of latest per-request states (same hub as ``currentRequestState(for:)``).
+    public var currentRequestStates: [LLMRequestID: LLMRequestState] {
+        effectiveRequestHub().currentStates
+    }
+
     public func transition(to state: LLMRuntimeState) {
         runtimeStateStore.transition(to: state)
     }

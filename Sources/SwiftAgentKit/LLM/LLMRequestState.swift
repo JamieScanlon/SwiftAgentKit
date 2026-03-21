@@ -43,15 +43,32 @@ public enum LLMRequestState: Sendable, Equatable, Codable {
 public final class LLMRequestStateHub: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<(LLMRequestID, LLMRequestState)>.Continuation] = [:]
+    private var lastStates: [LLMRequestID: LLMRequestState] = [:]
 
     public init() {}
 
     /// When set (e.g. by `QueuedLLM`), `StatefulLLM` publishes into this hub instead of its own.
     @TaskLocal public static var current: LLMRequestStateHub?
 
+    /// Latest published state for the given request id, if any.
+    public func currentState(for id: LLMRequestID) -> LLMRequestState? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastStates[id]
+    }
+
+    /// Snapshot of the latest published state per request id.
+    public var currentStates: [LLMRequestID: LLMRequestState] {
+        lock.lock()
+        let snapshot = lastStates
+        lock.unlock()
+        return snapshot
+    }
+
     public func publish(_ id: LLMRequestID, _ state: LLMRequestState) {
         let activeContinuations: [AsyncStream<(LLMRequestID, LLMRequestState)>.Continuation]
         lock.lock()
+        lastStates[id] = state
         activeContinuations = Array(continuations.values)
         lock.unlock()
 

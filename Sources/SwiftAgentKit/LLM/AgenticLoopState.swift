@@ -32,12 +32,29 @@ public enum AgenticLoopState: Sendable, Equatable, Codable {
 public final class AgenticLoopStateHub: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<(AgenticLoopID, AgenticLoopState)>.Continuation] = [:]
+    private var lastStates: [AgenticLoopID: AgenticLoopState] = [:]
 
     public init() {}
+
+    /// Latest published state for the given agentic loop id, if any.
+    public func currentState(for id: AgenticLoopID) -> AgenticLoopState? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastStates[id]
+    }
+
+    /// Snapshot of the latest published state per agentic loop id.
+    public var currentStates: [AgenticLoopID: AgenticLoopState] {
+        lock.lock()
+        let snapshot = lastStates
+        lock.unlock()
+        return snapshot
+    }
 
     public func publish(_ id: AgenticLoopID, _ state: AgenticLoopState) {
         let activeContinuations: [AsyncStream<(AgenticLoopID, AgenticLoopState)>.Continuation]
         lock.lock()
+        lastStates[id] = state
         activeContinuations = Array(continuations.values)
         lock.unlock()
 

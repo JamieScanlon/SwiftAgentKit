@@ -112,6 +112,16 @@ public actor SwiftAgentKitOrchestrator {
     public var agenticLoopUpdates: AsyncStream<(AgenticLoopID, AgenticLoopState)> {
         agenticLoopStateHub.makeStream()
     }
+
+    /// Latest published agentic loop state for the given id, if any.
+    public func currentAgenticLoopState(for id: AgenticLoopID) -> AgenticLoopState? {
+        agenticLoopStateHub.currentState(for: id)
+    }
+
+    /// Snapshot of latest agentic loop state per id.
+    public var currentAgenticLoopStates: [AgenticLoopID: AgenticLoopState] {
+        agenticLoopStateHub.currentStates
+    }
     
     /// - Parameters:
     ///   - llm: The LLM protocol implementation.

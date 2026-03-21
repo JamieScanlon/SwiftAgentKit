@@ -294,6 +294,16 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     public var agenticLoopUpdates: AsyncStream<(AgenticLoopID, AgenticLoopState)> {
         agenticLoopStateHub.makeStream()
     }
+
+    /// Latest published agentic loop state for the given id, if any.
+    public func currentAgenticLoopState(for id: AgenticLoopID) -> AgenticLoopState? {
+        agenticLoopStateHub.currentState(for: id)
+    }
+
+    /// Snapshot of latest agentic loop state per id.
+    public var currentAgenticLoopStates: [AgenticLoopID: AgenticLoopState] {
+        agenticLoopStateHub.currentStates
+    }
     
     public func responseType(for params: MessageSendParams) -> AdapterResponseType {
         return .task  // LLMProtocolAdapter always uses task tracking
