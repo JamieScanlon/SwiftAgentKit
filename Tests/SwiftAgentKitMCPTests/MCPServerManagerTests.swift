@@ -8,6 +8,7 @@
 import Testing
 import Foundation
 import EasyJSON
+import SwiftAgentKit
 import SwiftAgentKitMCP
 
 @Suite struct MCPServerManagerTests {
@@ -30,13 +31,14 @@ import SwiftAgentKitMCP
             environment: .object([:])
         )
         
-        let (inPipe, outPipe) = try await manager.bootServer(
+        let (inPipe, outPipe, process) = try await manager.bootServer(
             bootCall: bootCall,
             globalEnvironment: .object([:])
         )
         
         #expect(inPipe != nil)
         #expect(outPipe != nil)
+        Shell.terminateProcess(process)
     }
     
     @Test("MCPServerManager merges environment variables correctly")
@@ -60,13 +62,14 @@ import SwiftAgentKitMCP
             environment: serverEnv
         )
         
-        let (inPipe, outPipe) = try await manager.bootServer(
+        let (inPipe, outPipe, process) = try await manager.bootServer(
             bootCall: bootCall,
             globalEnvironment: globalEnv
         )
         
         #expect(inPipe != nil)
         #expect(outPipe != nil)
+        Shell.terminateProcess(process)
     }
     
     @Test("MCPServerManager throws error for non-existent server")
@@ -111,6 +114,9 @@ import SwiftAgentKitMCP
         #expect(serverPipes.count == 2)
         #expect(serverPipes["server1"] != nil)
         #expect(serverPipes["server2"] != nil)
+        for (_, boot) in serverPipes {
+            Shell.terminateProcess(boot.process)
+        }
     }
     
     @Test("MCPServerManager handles JSON environment conversion correctly")
@@ -132,13 +138,14 @@ import SwiftAgentKitMCP
             environment: complexEnv
         )
         
-        let (inPipe, outPipe) = try await manager.bootServer(
+        let (inPipe, outPipe, process) = try await manager.bootServer(
             bootCall: bootCall,
             globalEnvironment: .object([:])
         )
         
         #expect(inPipe != nil)
         #expect(outPipe != nil)
+        Shell.terminateProcess(process)
     }
 }
 
@@ -157,5 +164,19 @@ import SwiftAgentKitMCP
         let manager = MCPManager()
         
         #expect(manager != nil)
+    }
+
+    @Test("MCPManager shutdown is safe when idle")
+    func testMCPManagerShutdownIdle() async {
+        let manager = MCPManager()
+        await manager.shutdown()
+    }
+
+    @Test("Shell.terminateProcess stops a long-running subprocess")
+    func testTerminateProcessStopsSleep() async throws {
+        let launched = Shell.launchSubprocess(command: "sleep", arguments: ["60"], environment: [:], useShell: false)
+        #expect(launched.process.isRunning)
+        Shell.terminateProcess(launched.process)
+        #expect(!launched.process.isRunning)
     }
 } 

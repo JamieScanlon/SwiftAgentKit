@@ -7,6 +7,15 @@ import SwiftAgentKitA2A
 import Logging
 import EasyJSON
 
+/// Collects ``AgenticLoopState`` from an async stream without non-Sendable shared mutable state in `Task` closures.
+fileprivate actor AgenticLoopStateCollector {
+    private var states: [AgenticLoopState] = []
+    func append(_ state: AgenticLoopState) {
+        states.append(state)
+    }
+    func snapshot() -> [AgenticLoopState] { states }
+}
+
 /// Subscribes to `stream` (iterator created before `body`), runs `body`, then drains until a terminal `.idle(.ready)`.
 fileprivate func collectLLMRuntimeStatesAfter(
     stream: AsyncStream<LLMRuntimeState>,
@@ -1245,10 +1254,10 @@ struct MockFunctionToolProvider: ToolProvider {
         _ = Task { for await _ in messageStream {} }
 
         let agenticStream = await orchestrator.agenticLoopUpdates
-        var agenticStates: [AgenticLoopState] = []
+        let agenticStateCollector = AgenticLoopStateCollector()
         let collectTask = Task {
             for await (_, state) in agenticStream {
-                agenticStates.append(state)
+                await agenticStateCollector.append(state)
             }
         }
 
@@ -1259,6 +1268,7 @@ struct MockFunctionToolProvider: ToolProvider {
         try? await Task.sleep(nanoseconds: 50_000_000)
         collectTask.cancel()
 
+        let agenticStates = await agenticStateCollector.snapshot()
         #expect(agenticStates.contains(.started))
         #expect(agenticStates.contains(.llmCall(iteration: 1)))
         #expect(agenticStates.contains(.waitingForToolExecution))

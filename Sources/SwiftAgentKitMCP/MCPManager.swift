@@ -66,6 +66,9 @@ public actor MCPManager {
     }
     public var toolCallsJson: [[String: Any]] = []
     public private(set) var clients: [MCPClient] = []
+
+    /// Subprocess handles for locally booted stdio MCP servers (used by ``shutdown()``).
+    private var localServerProcesses: [String: Process] = [:]
     
     /// Initialize the MCPManager with a config file URL
     public func initialize(configFileURL: URL) async throws {
@@ -79,10 +82,27 @@ public actor MCPManager {
         }
     }
     
-    /// Initialize the A2AManager with an arrat of `MCPClient` objects
+    /// Initialize the MCPManager with an array of `MCPClient` objects (no local subprocess handles; ``shutdown()`` will not terminate external processes).
     public func initialize(clients: [MCPClient]) async throws {
         self.clients = clients
+        localServerProcesses = [:]
         await buildToolsJson()
+        state = .initialized
+    }
+
+    /// Disconnects MCP clients and terminates locally spawned MCP server subprocesses. Call this from app shutdown (e.g. `NSApplication.willTerminate`); it does not run when the process is killed with `SIGKILL`.
+    public func shutdown() async {
+        let processes = localServerProcesses
+        localServerProcesses.removeAll()
+        for client in clients {
+            await client.shutdown()
+        }
+        clients.removeAll()
+        for (_, process) in processes {
+            Shell.terminateProcess(process)
+        }
+        toolCallsJson = []
+        state = .notReady
     }
     
     public func toolCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
@@ -142,14 +162,17 @@ public actor MCPManager {
                     try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
                     try await client.getTools()
                     clients.append(client)
+                    localServerProcesses[serverName] = pipes.process
                     logger.info(
                         "Successfully connected to local MCP server",
                         metadata: SwiftAgentKitLogging.metadata(("server", .string(serverName)))
                     )
                 } catch let mcpError as MCPClient.MCPClientError {
+                    Shell.terminateProcess(pipes.process)
                     logMCPClientError(mcpError, serverName: serverName)
                     failedServers.append(serverName)
                 } catch {
+                    Shell.terminateProcess(pipes.process)
                     logger.error(
                         "Failed to connect to local MCP server",
                         metadata: SwiftAgentKitLogging.metadata(

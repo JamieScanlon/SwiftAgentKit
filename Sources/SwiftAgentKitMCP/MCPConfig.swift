@@ -16,12 +16,38 @@ public struct MCPConfig: Codable, Sendable {
         public let command: String
         public let arguments: [String]
         public let environment: JSON
-        
-        public init(name: String, command: String, arguments: [String], environment: JSON) {
+        /// When `true`, runs `command` through a shell (legacy; shell syntax in arguments is supported).
+        /// When `false` (default), launches via `/usr/bin/env` on Apple/Linux so the subprocess can be terminated reliably.
+        public let useShell: Bool
+
+        public init(name: String, command: String, arguments: [String], environment: JSON, useShell: Bool = false) {
             self.name = name
             self.command = command
             self.arguments = arguments
             self.environment = environment
+            self.useShell = useShell
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case name, command, arguments, environment, useShell
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            command = try c.decode(String.self, forKey: .command)
+            arguments = try c.decode([String].self, forKey: .arguments)
+            environment = try c.decode(JSON.self, forKey: .environment)
+            useShell = try c.decodeIfPresent(Bool.self, forKey: .useShell) ?? false
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(name, forKey: .name)
+            try c.encode(command, forKey: .command)
+            try c.encode(arguments, forKey: .arguments)
+            try c.encode(environment, forKey: .environment)
+            try c.encode(useShell, forKey: .useShell)
         }
     }
     
@@ -207,7 +233,8 @@ public struct MCPConfigHelper {
                 let arguments = mcpServerConfig["args"] as? [String] ?? []
                 let environment = mcpServerConfig["env"] as? [String: Any] ?? [:]
                 let envJson = (try? JSON(environment)) ?? .object([:])
-                serverBootCalls.append(MCPConfig.ServerBootCall(name: name, command: command, arguments: arguments, environment: envJson))
+                let useShell = mcpServerConfig["useShell"] as? Bool ?? false
+                serverBootCalls.append(MCPConfig.ServerBootCall(name: name, command: command, arguments: arguments, environment: envJson, useShell: useShell))
             }
             mcpConfig.serverBootCalls = serverBootCalls
         }

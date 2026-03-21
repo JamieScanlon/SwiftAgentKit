@@ -657,6 +657,12 @@ public actor SwiftAgentKitOrchestrator {
         }
         return aggregatedResponses
     }
+
+    /// Shuts down MCP local subprocesses and A2A boot processes. Call from normal app termination; it does not run when the process receives `SIGKILL`.
+    public func shutdown() async {
+        await mcpManager?.shutdown()
+        await a2aManager?.shutdown()
+    }
 }
 
 // MARK: - Logging helpers

@@ -22,13 +22,13 @@ public actor MCPServerManager {
         )
     }
     
-    /// Boots up an MCP server and returns the communication pipes
+    /// Boots up an MCP server and returns the communication pipes and subprocess handle.
     /// - Parameters:
     ///   - bootCall: Configuration for the server to boot
     ///   - globalEnvironment: Global environment variables to merge with server-specific ones
-    /// - Returns: Tuple of (inputPipe, outputPipe) for communicating with the server
+    /// - Returns: Tuple of (inputPipe, outputPipe, process) for communicating with the server and terminating it on shutdown.
     /// - Throws: Errors if server startup fails
-    public func bootServer(bootCall: MCPConfig.ServerBootCall, globalEnvironment: JSON = .object([:])) async throws -> (inPipe: Pipe, outPipe: Pipe) {
+    public func bootServer(bootCall: MCPConfig.ServerBootCall, globalEnvironment: JSON = .object([:])) async throws -> (inPipe: Pipe, outPipe: Pipe, process: Process) {
         
         logger.info(
             "Booting MCP server",
@@ -62,22 +62,27 @@ public actor MCPServerManager {
             )
         )
         
-        // Start the server process
-        let (inPipe, outPipe) = Shell.shell(bootCall.command, arguments: bootCall.arguments, environment: environment)
+        // Start the server process (retain `process` for shutdown; see ``MCPManager/shutdown()``).
+        let launched = Shell.launchSubprocess(
+            command: bootCall.command,
+            arguments: bootCall.arguments,
+            environment: environment,
+            useShell: bootCall.useShell
+        )
         
         logger.info(
             "MCP server started successfully",
             metadata: SwiftAgentKitLogging.metadata(("server", .string(bootCall.name)))
         )
         
-        return (inPipe: inPipe, outPipe: outPipe)
+        return (inPipe: launched.inPipe, outPipe: launched.outPipe, process: launched.process)
     }
     
     /// Boots up multiple MCP servers from a configuration
     /// - Parameter config: MCP configuration containing server definitions
-    /// - Returns: Dictionary mapping server names to their communication pipes
+    /// - Returns: Dictionary mapping server names to their communication pipes and subprocess handles
     /// - Throws: Errors if any server startup fails
-    public func bootServers(config: MCPConfig) async throws -> [String: (inPipe: Pipe, outPipe: Pipe)] {
+    public func bootServers(config: MCPConfig) async throws -> [String: (inPipe: Pipe, outPipe: Pipe, process: Process)] {
         
         logger.info(
             "Booting MCP servers",
@@ -86,11 +91,11 @@ public actor MCPServerManager {
             )
         )
         
-        var serverPipes: [String: (inPipe: Pipe, outPipe: Pipe)] = [:]
+        var serverPipes: [String: (inPipe: Pipe, outPipe: Pipe, process: Process)] = [:]
         
         for bootCall in config.serverBootCalls {
-            let pipes = try await bootServer(bootCall: bootCall, globalEnvironment: config.globalEnvironment)
-            serverPipes[bootCall.name] = pipes
+            let boot = try await bootServer(bootCall: bootCall, globalEnvironment: config.globalEnvironment)
+            serverPipes[bootCall.name] = boot
         }
         
         logger.info(
@@ -107,9 +112,9 @@ public actor MCPServerManager {
     /// - Parameters:
     ///   - serverName: Name of the server to boot
     ///   - config: MCP configuration containing server definitions
-    /// - Returns: Communication pipes for the specified server
+    /// - Returns: Communication pipes and subprocess handle for the specified server
     /// - Throws: Errors if server not found or startup fails
-    public func bootServer(named serverName: String, config: MCPConfig) async throws -> (inPipe: Pipe, outPipe: Pipe) {
+    public func bootServer(named serverName: String, config: MCPConfig) async throws -> (inPipe: Pipe, outPipe: Pipe, process: Process) {
         
         guard let bootCall = config.serverBootCalls.first(where: { $0.name == serverName }) else {
             logger.error(

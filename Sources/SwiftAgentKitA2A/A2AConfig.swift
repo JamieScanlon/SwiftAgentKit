@@ -18,10 +18,33 @@ public struct A2AConfig: Sendable {
     }
     
     public struct ServerBootCall: Decodable, Sendable {
-        let name: String
-        let command: String
-        let arguments: [String]
-        let environment: JSON
+        public let name: String
+        public let command: String
+        public let arguments: [String]
+        public let environment: JSON
+        /// When `true`, runs through a shell (`cmd /c` on Windows, `zsh -c` on macOS). Default is direct `/usr/bin/env`-style launch on Unix.
+        public let useShell: Bool
+
+        public init(name: String, command: String, arguments: [String], environment: JSON, useShell: Bool = false) {
+            self.name = name
+            self.command = command
+            self.arguments = arguments
+            self.environment = environment
+            self.useShell = useShell
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case name, command, arguments, environment, useShell
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            command = try c.decode(String.self, forKey: .command)
+            arguments = try c.decode([String].self, forKey: .arguments)
+            environment = try c.decode(JSON.self, forKey: .environment)
+            useShell = try c.decodeIfPresent(Bool.self, forKey: .useShell) ?? false
+        }
     }
     
     public var servers: [A2AConfigServer] = []
@@ -56,7 +79,8 @@ public struct A2AConfigHelper {
                     let arguments = bootConfig["args"] as? [String] ?? []
                     let environment = bootConfig["env"] as? [String: Any] ?? [:]
                     let envJson = (try? JSON(environment)) ?? .object([:])
-                    serverBootCalls.append(A2AConfig.ServerBootCall(name: name, command: command, arguments: arguments, environment: envJson))
+                    let useShell = bootConfig["useShell"] as? Bool ?? false
+                    serverBootCalls.append(A2AConfig.ServerBootCall(name: name, command: command, arguments: arguments, environment: envJson, useShell: useShell))
                 }
                 if let runConfig = a2aServerConfig["run"] as? [String: Any], let urlString = runConfig["url"] as? String, let url = URL(string: urlString)  {
                     let token = runConfig["token"] as? String

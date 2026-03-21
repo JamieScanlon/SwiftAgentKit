@@ -582,12 +582,21 @@ public actor MCPClient {
         let (_, messages) = try await client.getPrompt(name: name, arguments: arguments)
         return messages
     }
+
+    /// Releases the MCP session and clears cached tools. Local stdio servers are torn down by ``MCPManager/shutdown()`` via subprocess termination.
+    public func shutdown() async {
+        client = nil
+        capabilities = nil
+        tools = []
+        resources = []
+        prompts = []
+        state = .notConnected
+    }
     
     // MARK: - Private
     
     private var client: Client?
     private var capabilities: Client.Capabilities?
-    private var process: Process?
 }
 
 

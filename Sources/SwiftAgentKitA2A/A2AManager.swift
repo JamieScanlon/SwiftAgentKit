@@ -14,6 +14,11 @@ import EasyJSON
 public protocol A2AAgentStreamClient: Sendable {
     var agentCard: AgentCard? { get async }
     func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>>
+    func shutdown() async
+}
+
+public extension A2AAgentStreamClient {
+    func shutdown() async {}
 }
 
 public actor A2AManager {
@@ -284,6 +289,17 @@ public actor A2AManager {
         return nil
     }
     
+    /// Disconnects A2A clients and terminates any subprocess started for `boot` configuration.
+    public func shutdown() async {
+        for client in clients {
+            await client.shutdown()
+        }
+        clients.removeAll()
+        toolCallsJson = []
+        toolCallsJsonString = nil
+        state = .notReady
+    }
+
     /// Get all available tools from A2A clients
     public func availableTools() async -> [ToolDefinition] {
         var allTools: [ToolDefinition] = []
