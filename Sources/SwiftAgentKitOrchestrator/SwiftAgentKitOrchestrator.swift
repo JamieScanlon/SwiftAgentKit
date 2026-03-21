@@ -50,6 +50,8 @@ public struct OrchestratorConfig: Sendable {
 /// that can use tools through MCP, communicate with other agents through A2A,
 /// and execute generic function tools via a configurable ToolManager.
 public actor SwiftAgentKitOrchestrator {
+    /// Published as ``AgenticLoopState/failed(_:)`` when the model requested tools but no tool responses were aggregated (e.g. nothing handled the calls).
+    public static let noToolResponsesAgenticFailureMessage = "No tool responses were produced for the model's tool calls."
     public let logger: Logger
     public let llm: LLMProtocol
     public let config: OrchestratorConfig
@@ -288,7 +290,19 @@ public actor SwiftAgentKitOrchestrator {
                             )
                             let toolResponses = await executeToolCalls(toolCallsWithIds)
 
-                            guard !toolResponses.isEmpty else { continue }
+                            guard !toolResponses.isEmpty else {
+                                logger.warning(
+                                    "No tool responses after model requested tool calls; ending agentic loop",
+                                    metadata: SwiftAgentKitLogging.metadata(
+                                        ("iteration", .stringConvertible(iteration)),
+                                        ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
+                                    )
+                                )
+                                transitionLLMState(to: .idle(.ready))
+                                agenticLoopStateHub.publish(loopId, .failed(Self.noToolResponsesAgenticFailureMessage))
+                                finishPartialContentStreamForStreamingTurn()
+                                return
+                            }
 
                             // Create tool response messages with proper toolCallId mapping
                             // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
@@ -314,10 +328,7 @@ public actor SwiftAgentKitOrchestrator {
                             transitionLLMState(to: .idle(.ready))
                         }
 
-                        // Finish and nil out the partial content stream continuation since streaming is complete
-                        partialContentStreamContinuation?.finish()
-                        partialContentStreamContinuation = nil
-                        currentPartialContentStream = nil
+                        finishPartialContentStreamForStreamingTurn()
                     }
                 }
             } else {
@@ -355,7 +366,15 @@ public actor SwiftAgentKitOrchestrator {
                     let toolResponses = await executeToolCalls(toolCallsWithIds)
 
                     guard !toolResponses.isEmpty else {
+                        logger.warning(
+                            "No tool responses after model requested tool calls; ending agentic loop",
+                            metadata: SwiftAgentKitLogging.metadata(
+                                ("iteration", .stringConvertible(iteration)),
+                                ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
+                            )
+                        )
                         transitionLLMState(to: .idle(.ready))
+                        agenticLoopStateHub.publish(loopId, .failed(Self.noToolResponsesAgenticFailureMessage))
                         return
                     }
 
@@ -438,6 +457,12 @@ public actor SwiftAgentKitOrchestrator {
             return
         }
         controllable.transition(to: state)
+    }
+
+    private func finishPartialContentStreamForStreamingTurn() {
+        partialContentStreamContinuation?.finish()
+        partialContentStreamContinuation = nil
+        currentPartialContentStream = nil
     }
     
     /// Create a message stream if one does not exist
