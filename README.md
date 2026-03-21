@@ -25,7 +25,7 @@ The framework is designed with a simple, direct API - no unnecessary abstraction
 | **SwiftAgentKitMCP** | Model Context Protocol support | [MCP.md](docs/MCP.md) |
 | **SwiftAgentKitA2A** | Agent-to-Agent communication | [A2A.md](docs/A2A.md) |
 | **SwiftAgentKitAdapters** | AI provider adapters and tool-aware architecture | [SwiftAgentKitAdapters.md](docs/SwiftAgentKitAdapters.md) |
-| **SwiftAgentKitOrchestrator** | LLM orchestrator with MCP and A2A support | [README](Sources/SwiftAgentKitOrchestrator/README.md) |
+| **SwiftAgentKitOrchestrator** | LLM orchestrator with MCP and A2A support | [SwiftAgentKitOrchestrator.md](docs/SwiftAgentKitOrchestrator.md) · [README](Sources/SwiftAgentKitOrchestrator/README.md) |
 | **SwiftAgentKitSkills** | Agent Skills specification support | [SwiftAgentKitSkills.md](docs/SwiftAgentKitSkills.md) |
 
 ## Quick Start

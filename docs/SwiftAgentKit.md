@@ -29,6 +29,10 @@ The SwiftAgentKit module provides core networking capabilities and utilities tha
 ### Utilities
 - **Shell**: Executes shell commands and manages subprocesses
 
+### LLM (source layout)
+
+LLM-focused types live under **`Sources/SwiftAgentKit/LLM/`** (e.g. `LLMProtocol`, `LLMResponse`, `StatefulLLM` / `QueuedLLM`, `AgenticLoopState`). Shared conversation types such as **`Message`** and **`ToolCall`** remain at the module root. See [`LLM/README.md`](../Sources/SwiftAgentKit/LLM/README.md) for a file index.
+
 ## Example: Basic REST API Usage
 
 ```swift

@@ -110,6 +110,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     private let llm: LLMProtocol
     private let config: Configuration
     private let logger: Logger
+    private let agenticLoopStateHub: AgenticLoopStateHub
     
     // Custom URLSession for image downloads with optimized settings
     private static let imageDownloadSession: URLSession = {
@@ -130,6 +131,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     ) {
         self.llm = llm
         self.config = configuration
+        self.agenticLoopStateHub = AgenticLoopStateHub()
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .adapters("LLMProtocolAdapter"),
             metadata: SwiftAgentKitLogging.metadata(
@@ -286,6 +288,11 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     
     public var defaultOutputModes: [String] {
         config.defaultOutputModes
+    }
+
+    /// Agentic tool-loop state (multi-call session) for this adapter instance.
+    public var agenticLoopUpdates: AsyncStream<(AgenticLoopID, AgenticLoopState)> {
+        agenticLoopStateHub.makeStream()
     }
     
     public func responseType(for params: MessageSendParams) -> AdapterResponseType {
@@ -711,6 +718,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
         )
         
+        let agenticId = AgenticLoopID.a2a(taskId: taskId, contextId: contextId)
         do {
             // Check if this is an image generation request
             // Image generation bypasses tool handling (direct operation)
@@ -777,12 +785,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
             
             // Agentic loop: continue calling LLM until we get a response without tool calls
+            publishAgenticLoopState(agenticId, .started)
             var iteration = 0
             var finalResponse: String = ""
             var toolFileArtifacts: [Artifact] = []
             
             while iteration < config.maxAgenticIterations {
                 iteration += 1
+                publishAgenticLoopState(agenticId, .llmCall(iteration: iteration))
                 logger.debug(
                     "Agentic iteration started",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -793,9 +803,16 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     )
                 )
                 
-                // Call the LLM
+                // Call the LLM (continuation calls after tool execution get queue priority)
                 transitionLLMState(to: .generating(.reasoning))
-                let response = try await llm.send(messages, config: llmConfig)
+                let response: LLMResponse
+                if iteration > 1 {
+                    response = try await LLMQueuePriority.$current.withValue(.continuation) {
+                        try await llm.send(messages, config: llmConfig)
+                    }
+                } else {
+                    response = try await llm.send(messages, config: llmConfig)
+                }
                 transitionLLMState(to: .generating(.responding))
                 
                 // Look at the text response for any tool calls not parsed automatically
@@ -816,6 +833,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 // If no tool calls, we have the final answer
                 if llmResponse.toolCalls.isEmpty {
                     finalResponse = llmResponse.content
+                    publishAgenticLoopState(agenticId, .completed)
                     transitionLLMState(to: .idle(.completed))
                     logger.info(
                         "Final response received without tool calls",
@@ -829,6 +847,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 }
                 
                 // Execute tool calls and add results to conversation
+                publishAgenticLoopState(agenticId, .waitingForToolExecution)
+                publishAgenticLoopState(agenticId, .executingTools)
                 logger.info(
                     "Executing tool calls",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -839,7 +859,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     )
                 )
                 var toolResults: [String] = []
-                transitionLLMState(to: .idle(.waitingForToolResult))
+                transitionLLMState(to: .idle(.ready))
                 
                 for toolCall in llmResponse.toolCalls {
                     for provider in toolProviders {
@@ -912,10 +932,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                         }
                     }
                 }
+                if iteration < config.maxAgenticIterations {
+                    publishAgenticLoopState(agenticId, .betweenIterations)
+                }
             }
             
             // Check if we hit max iterations
             if iteration >= config.maxAgenticIterations && finalResponse.isEmpty {
+                publishAgenticLoopState(agenticId, .maxIterationsReached)
                 logger.warning(
                     "Max agentic iterations reached without final response",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -960,6 +984,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             transitionLLMState(to: .idle(.ready))
             
         } catch {
+            publishAgenticLoopState(agenticId, .failed(error.localizedDescription))
             transitionLLMState(to: .failed(error.localizedDescription))
             transitionLLMState(to: .idle(.ready))
             logger.error(
@@ -1025,6 +1050,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         )
         eventSink(workingResponse)
         
+        let agenticId = AgenticLoopID.a2a(taskId: taskId, contextId: contextId)
         do {
             // Check if this is an image generation request
             // Image generation bypasses tool handling (direct operation)
@@ -1122,12 +1148,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             )
             
             // Agentic loop: continue calling LLM until we get a response without tool calls
+            publishAgenticLoopState(agenticId, .started)
             var iteration = 0
             var finalResponse: String = ""
             var toolFileArtifacts: [Artifact] = []
             
             while iteration < config.maxAgenticIterations {
                 iteration += 1
+                publishAgenticLoopState(agenticId, .llmCall(iteration: iteration))
                 logger.debug(
                     "Agentic iteration (streaming) started",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -1138,9 +1166,16 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                     )
                 )
                 
-                // Stream from the LLM
+                // Stream from the LLM (continuation calls after tool execution get queue priority)
                 transitionLLMState(to: .generating(.reasoning))
-                let stream = llm.stream(messages, config: llmConfig)
+                let stream: AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error>
+                if iteration > 1 {
+                    stream = LLMQueuePriority.$current.withValue(.continuation) {
+                        llm.stream(messages, config: llmConfig)
+                    }
+                } else {
+                    stream = llm.stream(messages, config: llmConfig)
+                }
                 var fullContent = ""
                 var streamedToolCalls: [ToolCall] = []
                 
@@ -1203,6 +1238,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 // If no tool calls, we have the final answer
                 if llmResponse.toolCalls.isEmpty {
                     finalResponse = llmResponse.content
+                    publishAgenticLoopState(agenticId, .completed)
                     transitionLLMState(to: .idle(.completed))
                     logger.info(
                         "Final streaming response received without tool calls",
@@ -1216,6 +1252,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 }
                 
                 // Execute tool calls and add results to conversation
+                publishAgenticLoopState(agenticId, .waitingForToolExecution)
+                publishAgenticLoopState(agenticId, .executingTools)
                 logger.info(
                     "Executing tool calls during streaming",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -1227,7 +1265,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 )
                 
                 // Stream tool execution status
-                transitionLLMState(to: .idle(.waitingForToolResult))
+                transitionLLMState(to: .idle(.ready))
                 let toolStatusArtifact = Artifact(
                     artifactId: UUID().uuidString,
                     parts: [.text(text: "\n\n[Executing \(llmResponse.toolCalls.count) tool(s)...]\n\n")],
@@ -1333,10 +1371,14 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                         }
                     }
                 }
+                if iteration < config.maxAgenticIterations {
+                    publishAgenticLoopState(agenticId, .betweenIterations)
+                }
             }
             
             // Check if we hit max iterations
             if iteration >= config.maxAgenticIterations && finalResponse.isEmpty {
+                publishAgenticLoopState(agenticId, .maxIterationsReached)
                 logger.warning(
                     "Max agentic iterations reached without final streaming response",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -1426,6 +1468,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             transitionLLMState(to: .idle(.ready))
             
         } catch {
+            publishAgenticLoopState(agenticId, .failed(error.localizedDescription))
             transitionLLMState(to: .failed(error.localizedDescription))
             transitionLLMState(to: .idle(.ready))
             logger.error(
@@ -1527,6 +1570,10 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             return
         }
         controllable.transition(to: state)
+    }
+
+    private func publishAgenticLoopState(_ id: AgenticLoopID, _ state: AgenticLoopState) {
+        agenticLoopStateHub.publish(id, state)
     }
     
     private func convertA2ARoleToMessageRole(_ a2aRole: String) -> MessageRole {

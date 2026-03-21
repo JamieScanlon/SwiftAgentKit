@@ -221,7 +221,7 @@ import EasyJSON
         #expect(observed[2] == .idle(.completed))
     }
 
-    @Test("StatefulLLM exposes detailed transitions for tool response")
+    @Test("StatefulLLM transitions to completed for tool-call response (LLM is done generating)")
     func testStatefulLLMTransitionsForToolCallResponse() async throws {
         struct ToolCallLLM: LLMProtocol {
             func getModelName() -> String { "tool-call-llm" }
@@ -259,8 +259,48 @@ import EasyJSON
 
         #expect(observed[0] == .idle(.ready))
         #expect(observed[1] == .generating(.reasoning))
-        #expect(observed[2] == .idle(.waitingForToolResult))
-        #expect(llm.currentState == .idle(.waitingForToolResult))
+        #expect(observed[2] == .idle(.completed))
+        #expect(llm.currentState == .idle(.completed))
+    }
+
+    @Test("StatefulLLM send publishes per-call request phases without queued")
+    func testStatefulLLMRequestStatesSendExcludesQueued() async throws {
+        struct SimpleLLM: LLMProtocol {
+            func getModelName() -> String { "simple" }
+            func getCapabilities() -> [LLMCapability] { [.completion] }
+            func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+                .complete(content: "ok")
+            }
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+                AsyncThrowingStream { continuation in
+                    continuation.finish()
+                }
+            }
+        }
+
+        let llm = StatefulLLM(baseLLM: SimpleLLM())
+        let stream = llm.requestStateUpdates
+        var iterator = stream.makeAsyncIterator()
+
+        let sendTask = Task {
+            try await llm.send([Message(id: UUID(), role: .user, content: "hi")], config: LLMRequestConfig())
+        }
+
+        var phases: [LLMRequestState] = []
+        while let (_, phase) = await iterator.next() {
+            phases.append(phase)
+            if case .completed = phase { break }
+        }
+        _ = try await sendTask.value
+
+        #expect(phases.contains(.active))
+        #expect(phases.contains(.generating(.reasoning)))
+        #expect(phases.contains(.completed))
+        let hasQueued = phases.contains { phase in
+            if case .queued = phase { return true }
+            return false
+        }
+        #expect(!hasQueued)
     }
     
     @Test("ImageGenerationRequestConfig can be initialized")
@@ -417,6 +457,47 @@ import EasyJSON
         #expect(downloadFailed.errorDescription?.contains("example.com") == true)
     }
     
+    @Test("LLMError.queueFull provides proper description")
+    func testQueueFullErrorDescription() throws {
+        let error = LLMError.queueFull
+        #expect(error.localizedDescription.contains("queue"))
+        #expect(error.localizedDescription.contains("capacity"))
+    }
+
+    @Test("LLMError.queueTimeout provides proper description")
+    func testQueueTimeoutErrorDescription() throws {
+        let error = LLMError.queueTimeout
+        #expect(error.localizedDescription.contains("timed out"))
+        #expect(error.localizedDescription.contains("queue"))
+    }
+
+    @Test("QueuedLLM transparently wraps an LLMProtocol implementation")
+    func testQueuedLLMSmokeTest() async throws {
+        struct SimpleLLM: LLMProtocol {
+            func getModelName() -> String { "simple" }
+            func getCapabilities() -> [LLMCapability] { [.completion] }
+            func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+                .complete(content: "queued-ok")
+            }
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+                AsyncThrowingStream { continuation in
+                    continuation.yield(.complete(.complete(content: "stream-ok")))
+                    continuation.finish()
+                }
+            }
+        }
+
+        let queued = QueuedLLM(baseLLM: SimpleLLM())
+        #expect(queued.getModelName() == "simple")
+        #expect(queued.getCapabilities() == [.completion])
+
+        let response = try await queued.send(
+            [Message(id: UUID(), role: .user, content: "test")],
+            config: LLMRequestConfig()
+        )
+        #expect(response.content == "queued-ok")
+    }
+
     @Test("LLMError.imageGenerationError wraps ImageGenerationError")
     func testLLMErrorImageGenerationError() throws {
         let imageError = ImageGenerationError.noImagesGenerated

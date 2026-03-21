@@ -30,7 +30,7 @@ The `LLMProtocolAdapter` allows you to:
 - **A2A Compatibility**: Full integration with the A2A protocol
 - **Conversation History**: Maintains context across multiple messages
 - **Streaming Support**: Real-time streaming responses
-- **Runtime State Visibility**: Observe reasoning/generating/tool-wait/completion transitions
+- **Runtime State Visibility**: Observe reasoning/generating/completion transitions on the shared LLM instance
 - **Image Generation**: Automatic detection and support for image generation requests
 - **Configurable**: Customizable parameters and system prompts
 - **Error Handling**: Graceful error handling and recovery
@@ -64,6 +64,45 @@ Task {
     }
 }
 ```
+
+### Three layers of state
+
+| Layer | Type | Where to observe |
+|-------|------|-------------------|
+| **Instance** (shared LLM) | `LLMRuntimeState` | `llm.stateUpdates` / `StatefulLLM` |
+| **Per-call** (one `send` / `stream` / `generateImage`) | `LLMRequestState` | `StatefulLLM.requestStateUpdates`, `QueuedLLM.requestStateUpdates` |
+| **Agentic** (full tool loop until final answer) | `AgenticLoopState` | `LLMProtocolAdapter.agenticLoopUpdates`, [`SwiftAgentKitOrchestrator.agenticLoopUpdates`](SwiftAgentKitOrchestrator.md#agentic-loop-state-agenticloopstate) |
+
+### Per-call request state (`LLMRequestState`)
+
+`LLMRuntimeState` describes the **shared LLM instance** (idle vs generating). For **each** `send` / `stream` / `generateImage` invocation, observe **`LLMRequestState`**:
+
+| API | What you get |
+|-----|----------------|
+| `StatefulLLM.requestStateUpdates` | `active`, generation sub-phases (`generating`, `streaming` when applicable), `completed` / `failed` — **no** `queued` |
+| `QueuedLLM.requestStateUpdates` | Same timeline **plus** `queued` while waiting for a queue slot (compose `QueuedLLM(base: StatefulLLM(base: provider))` for both) |
+
+### Agentic loop state (`AgenticLoopState`)
+
+For **`LLMProtocolAdapter`**, each agentic run is keyed by **`AgenticLoopID.a2a(taskId:contextId:)`**. Subscribe to **`adapter.agenticLoopUpdates`** (`AsyncStream<(AgenticLoopID, AgenticLoopState)>`) for coarse progress: `started`, `llmCall(iteration:)`, `waitingForToolExecution`, `executingTools`, `betweenIterations`, `completed`, `failed`, `maxIterationsReached`.
+
+For **`SwiftAgentKitOrchestrator`**, the id is **`AgenticLoopID.orchestratorSession(UUID)`** for one top-level **`updateConversation`** (including recursive tool continuations). Use **`await orchestrator.agenticLoopUpdates`**. See [SwiftAgentKitOrchestrator](SwiftAgentKitOrchestrator.md).
+
+**Agentic** “waiting for tool result” happens **between** LLM calls in the adapter/orchestrator loop; it is **not** a single `LLMRequestState` value. **`queued`** remains per-call only (see below).
+
+### Observing when the agentic loop is waiting on the FIFO queue
+
+`LLMProtocolAdapter` and `SwiftAgentKitOrchestrator` take `any LLMProtocol`; they do **not** surface per-request phases on the protocol itself. If you wrap the base LLM with **`QueuedLLM`**, FIFO wait appears only on **`QueuedLLM.requestStateUpdates`**, not on the shared **`stateUpdates`** stream.
+
+**`queued` is not an agentic-loop enum case.** Queue contention is **per** `send` / `stream` / `generateImage`. **`agenticLoopUpdates`** (adapter / orchestrator) answers “where are we in the tool loop?”; **`requestStateUpdates`** from the **`QueuedLLM`** you injected answers “is *this* call blocked before it reaches the inner LLM?”
+
+**How to tell the agentic turn is stalled because the request is still queued:**
+
+1. **Subscribe to both** **`agenticLoopUpdates`** (from `LLMProtocolAdapter` or `SwiftAgentKitOrchestrator`) **and** **`requestStateUpdates`** on the **same** **`QueuedLLM`** instance you pass into the adapter or orchestrator (e.g. `QueuedLLM(baseLLM: StatefulLLM(baseLLM: provider))`). You must **keep a reference** to that wrapper; the adapter does not forward per-request phases.
+2. **Correlate by timeline:** Instrumentation publishes an agentic LLM-bound state (e.g. **`llmCall(iteration:)`**) **immediately before** the `await llm.send` / `stream` that goes through `QueuedLLM`. While that call is blocked on the FIFO, **`QueuedLLM`** emits **`(LLMRequestID, .queued)`** for that invocation, then **`active`** (and later phases) after a slot is acquired. So: agentic state shows an in-flight LLM iteration **and** the latest per-request state for the current underlying call is **`.queued`** ⇒ the loop is waiting **because** the request is still in the FIFO queue (not yet executing on the base LLM).
+3. **Optional later:** Stronger correlation (e.g. pairing **agentic** and **request** IDs in TaskLocals or docs) if you need to disambiguate overlapping sessions; not required for a single in-flight turn.
+
+For **`SwiftAgentKitOrchestrator`**, the same applies: observe **`agenticLoopUpdates`** on the orchestrator **and** **`QueuedLLM.requestStateUpdates`** on the wrapper you supply as the LLM.
 
 ## Basic Usage
 

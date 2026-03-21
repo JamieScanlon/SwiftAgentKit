@@ -76,9 +76,9 @@ public struct ImageGenerationRequestConfig: Sendable {
 public protocol LLMProtocol: Sendable {
     /// The current runtime state for this LLM.
     ///
-    /// Implementers can expose detailed execution phases (reasoning, generating,
-    /// waiting for tool results, completed, failed). The default implementation
-    /// returns `.idle(.ready)`.
+    /// Implementers can expose detailed execution phases (e.g. reasoning, responding).
+    /// Tool-waiting and queue position are **per-request** concerns; see `LLMRequestState`
+    /// and `StatefulLLM` / `QueuedLLM`. The default implementation returns `.idle(.ready)`.
     var currentState: LLMRuntimeState { get }
 
     /// A stream of runtime state transitions for this LLM.
@@ -223,6 +223,10 @@ public enum LLMError: Error, LocalizedError, Sendable {
     // Image generation specific errors
     case imageGenerationError(ImageGenerationError)
     
+    // Queue specific errors
+    case queueFull
+    case queueTimeout
+    
     public var errorDescription: String? {
         switch self {
         case .invalidRequest(let message):
@@ -247,6 +251,10 @@ public enum LLMError: Error, LocalizedError, Sendable {
             return "Unknown error: \(error.localizedDescription)"
         case .imageGenerationError(let error):
             return error.errorDescription
+        case .queueFull:
+            return "Request rejected: LLM queue is at capacity"
+        case .queueTimeout:
+            return "Request timed out waiting in the LLM queue"
         }
     }
 }

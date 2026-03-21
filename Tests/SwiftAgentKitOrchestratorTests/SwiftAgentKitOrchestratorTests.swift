@@ -7,6 +7,23 @@ import SwiftAgentKitA2A
 import Logging
 import EasyJSON
 
+/// Subscribes to `stream` (iterator created before `body`), runs `body`, then drains until a terminal `.idle(.ready)`.
+fileprivate func collectLLMRuntimeStatesAfter(
+    stream: AsyncStream<LLMRuntimeState>,
+    body: () async throws -> Void
+) async rethrows -> [LLMRuntimeState] {
+    var iterator = stream.makeAsyncIterator()
+    try await body()
+    var observed: [LLMRuntimeState] = []
+    while let state = await iterator.next() {
+        observed.append(state)
+        if observed.count > 1 && state == .idle(.ready) {
+            break
+        }
+    }
+    return observed
+}
+
 // Mock LLM for testing
 struct MockLLM: LLMProtocol {
     let model: String
@@ -229,6 +246,19 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(mockLLM.getModelName() == "test-model")
     }
     
+    @Test("Orchestrator works with QueuedLLM wrapper")
+    func testOrchestratorWithQueuedLLM() async throws {
+        let mockLLM = MockLLM(model: "queued-test", logger: Logger(label: "MockLLM"))
+        let queuedLLM = QueuedLLM(baseLLM: mockLLM)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: queuedLLM,
+            config: OrchestratorConfig(streamingEnabled: false)
+        )
+
+        let messages = [Message(id: UUID(), role: .user, content: "Hello")]
+        try await orchestrator.updateConversation(messages)
+    }
+
     @Test("OrchestratorConfig can be initialized with default values")
     func testOrchestratorConfigDefaultInit() throws {
         let config = OrchestratorConfig()
@@ -284,29 +314,16 @@ struct MockFunctionToolProvider: ToolProvider {
             config: OrchestratorConfig(streamingEnabled: false)
         )
 
-        let stateCollectionTask = Task<[LLMRuntimeState], Never> {
-            var observed: [LLMRuntimeState] = []
-            let stream = await orchestrator.llmStateUpdates
-            var iterator = stream.makeAsyncIterator()
-            while let state = await iterator.next() {
-                observed.append(state)
-                // Ignore initial ready, stop at terminal ready.
-                if observed.count > 1 && state == .idle(.ready) {
-                    break
-                }
-            }
-            return observed
+        let messages = [Message(id: UUID(), role: .user, content: "Hello there")]
+        let observed = try await collectLLMRuntimeStatesAfter(stream: orchestrator.llmStateUpdates) {
+            try await orchestrator.updateConversation(messages)
         }
 
-        let messages = [Message(id: UUID(), role: .user, content: "Hello there")]
-        try await orchestrator.updateConversation(messages)
-
-        let states = await stateCollectionTask.value
-        #expect(states.first == .idle(.ready))
-        #expect(states.contains(.generating(.reasoning)))
-        #expect(states.contains(.generating(.responding)))
-        #expect(states.contains(.idle(.completed)))
-        #expect(states.last == .idle(.ready))
+        #expect(observed.first == .idle(.ready))
+        #expect(observed.contains(.generating(.reasoning)))
+        #expect(observed.contains(.generating(.responding)))
+        #expect(observed.contains(.idle(.completed)))
+        #expect(observed.last == .idle(.ready))
     }
     
     @Test("updateConversation passes maxTokens, temperature, topP, and additionalParameters to LLM")
@@ -1201,6 +1218,54 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(toolMessage != nil)
         #expect(toolMessage!.content == expectedContent)
         #expect(toolMessage!.toolCallId == toolCallId)
+    }
+
+    @Test("updateConversation publishes agentic loop states through ToolManager tool iteration")
+    func testAgenticLoopUpdatesThroughToolManager() async throws {
+        let toolCallId = "call-agentic-1"
+        let toolCall = ToolCall(
+            name: "get_current_time",
+            arguments: .object([:]),
+            id: toolCallId
+        )
+
+        let capture = SendCapture()
+        let mockLLM = CapturingMockLLM(
+            logger: Logger(label: "Capture"),
+            toolCallsToReturn: [toolCall],
+            capture: capture
+        )
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time", resultContent: "2025-02-14T15:30:00Z", resultSuccess: true)
+        ])
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+
+        let messageStream = await orchestrator.messageStream
+        _ = Task { for await _ in messageStream {} }
+
+        let agenticStream = await orchestrator.agenticLoopUpdates
+        var agenticStates: [AgenticLoopState] = []
+        let collectTask = Task {
+            for await (_, state) in agenticStream {
+                agenticStates.append(state)
+            }
+        }
+
+        try await orchestrator.updateConversation(
+            [Message(id: UUID(), role: .user, content: "What time is it?")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        collectTask.cancel()
+
+        #expect(agenticStates.contains(.started))
+        #expect(agenticStates.contains(.llmCall(iteration: 1)))
+        #expect(agenticStates.contains(.waitingForToolExecution))
+        #expect(agenticStates.contains(.executingTools))
+        #expect(agenticStates.contains(.betweenIterations))
+        #expect(agenticStates.contains(.llmCall(iteration: 2)))
+        #expect(agenticStates.contains(.completed))
     }
     
     @Test("ToolManager passes error to LLM when tool is not found in any provider")

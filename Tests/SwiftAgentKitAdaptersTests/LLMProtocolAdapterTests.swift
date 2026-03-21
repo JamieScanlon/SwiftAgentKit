@@ -14,6 +14,23 @@ import Logging
 import EasyJSON
 import SwiftAgentKitMCP
 
+/// Subscribes to `stream` (iterator created before `body`), runs `body`, then drains until a terminal `.idle(.ready)`.
+fileprivate func collectLLMRuntimeStatesAfter(
+    stream: AsyncStream<LLMRuntimeState>,
+    body: () async throws -> Void
+) async rethrows -> [LLMRuntimeState] {
+    var iterator = stream.makeAsyncIterator()
+    try await body()
+    var observed: [LLMRuntimeState] = []
+    while let state = await iterator.next() {
+        observed.append(state)
+        if observed.count > 1 && state == .idle(.ready) {
+            break
+        }
+    }
+    return observed
+}
+
 // MARK: - Streaming Event Helpers
 
 /// Parses streamed events (passed as Encodable) by encoding to JSON and inspecting result.kind.
@@ -200,6 +217,19 @@ struct TestLLM: LLMProtocol {
 
 @Suite struct LLMProtocolAdapterTests {
     
+    @Test("LLMProtocolAdapter works with QueuedLLM wrapper")
+    func testAdapterWithQueuedLLM() throws {
+        let testLLM = TestLLM(model: "test-model")
+        let queuedLLM = QueuedLLM(baseLLM: testLLM)
+        let adapter = LLMProtocolAdapter(
+            llm: queuedLLM,
+            model: "test-model"
+        )
+
+        #expect(adapter.cardCapabilities.streaming == true)
+        #expect(queuedLLM.getModelName() == "test-model")
+    }
+
     @Test("LLMProtocolAdapter should be created with basic configuration")
     func testBasicConfiguration() throws {
         let testLLM = TestLLM(model: "test-model")
@@ -1604,17 +1634,60 @@ struct TestLLM: LLMProtocol {
         )
         await store.addTask(task: task)
 
-        let stateCollectionTask = Task<[LLMRuntimeState], Never> {
-            var observed: [LLMRuntimeState] = []
-            var iterator = testLLM.stateUpdates.makeAsyncIterator()
-            while let state = await iterator.next() {
-                observed.append(state)
-                // Ignore the initial ready state and stop at terminal ready.
-                if observed.count > 1 && state == .idle(.ready) {
-                    break
-                }
+        let states = try await collectLLMRuntimeStatesAfter(stream: testLLM.stateUpdates) {
+            try await adapter.handleTaskSendWithTools(
+                params,
+                taskId: task.id,
+                contextId: task.contextId,
+                toolProviders: [toolProvider],
+                store: store
+            )
+        }
+        let reasoningIndex = states.firstIndex(of: .generating(.reasoning))
+        let completedIndex = states.firstIndex(of: .idle(.completed))
+        let readyIndex = states.lastIndex(of: .idle(.ready))
+
+        #expect(reasoningIndex != nil)
+        #expect(completedIndex != nil)
+        #expect(readyIndex != nil)
+
+        if let reasoningIndex, let completedIndex, let readyIndex {
+            #expect(reasoningIndex < completedIndex)
+            #expect(completedIndex < readyIndex)
+        }
+
+        #expect(!states.contains(.idle(.ready)) || states.contains(.generating(.reasoning)))
+    }
+
+    @Test("LLMProtocolAdapter publishes agentic loop states across tool iterations")
+    func testAdapterPublishesAgenticLoopStates() async throws {
+        let testLLM = TestLLMWithToolCalls(
+            model: "test-model",
+            toolCalls: [ToolCall(name: "text_tool", arguments: .object([:]), id: UUID().uuidString)]
+        )
+        let adapter = LLMProtocolAdapter(llm: testLLM, model: "test-model")
+        let toolProvider = FileResourceToolProvider(fileResources: [], textContent: "Tool executed successfully")
+
+        let store = TaskStore()
+        let message = A2AMessage(
+            role: "user",
+            parts: [.text(text: "Execute tool")],
+            messageId: UUID().uuidString
+        )
+        let params = MessageSendParams(message: message)
+        let task = A2ATask(
+            id: UUID().uuidString,
+            contextId: UUID().uuidString,
+            status: TaskStatus(state: .submitted)
+        )
+        await store.addTask(task: task)
+
+        let agenticStream = adapter.agenticLoopUpdates
+        var agenticStates: [AgenticLoopState] = []
+        let collectTask = Task {
+            for await (_, state) in agenticStream {
+                agenticStates.append(state)
             }
-            return observed
         }
 
         try await adapter.handleTaskSendWithTools(
@@ -1624,23 +1697,15 @@ struct TestLLM: LLMProtocol {
             toolProviders: [toolProvider],
             store: store
         )
+        collectTask.cancel()
 
-        let states = await stateCollectionTask.value
-        let reasoningIndex = states.firstIndex(of: .generating(.reasoning))
-        let waitingIndex = states.firstIndex(of: .idle(.waitingForToolResult))
-        let completedIndex = states.firstIndex(of: .idle(.completed))
-        let readyIndex = states.lastIndex(of: .idle(.ready))
-
-        #expect(reasoningIndex != nil)
-        #expect(waitingIndex != nil)
-        #expect(completedIndex != nil)
-        #expect(readyIndex != nil)
-
-        if let reasoningIndex, let waitingIndex, let completedIndex, let readyIndex {
-            #expect(reasoningIndex < waitingIndex)
-            #expect(waitingIndex < completedIndex)
-            #expect(completedIndex < readyIndex)
-        }
+        #expect(agenticStates.contains(.started))
+        #expect(agenticStates.contains(.llmCall(iteration: 1)))
+        #expect(agenticStates.contains(.waitingForToolExecution))
+        #expect(agenticStates.contains(.executingTools))
+        #expect(agenticStates.contains(.betweenIterations))
+        #expect(agenticStates.contains(.llmCall(iteration: 2)))
+        #expect(agenticStates.contains(.completed))
     }
 }
 

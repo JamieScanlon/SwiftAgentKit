@@ -57,6 +57,8 @@ public actor SwiftAgentKitOrchestrator {
     public let a2aManager: A2AManager?
     /// Optional ToolManager for executing generic function tools (non-MCP, non-A2A)
     public let toolManager: ToolManager?
+
+    private let agenticLoopStateHub: AgenticLoopStateHub
     
     /// All available tools from MCP and A2A managers
     public var allAvailableTools: [ToolDefinition] {
@@ -104,6 +106,11 @@ public actor SwiftAgentKitOrchestrator {
     /// Runtime state updates from the underlying LLM.
     public var llmStateUpdates: AsyncStream<LLMRuntimeState> {
         llm.stateUpdates
+    }
+
+    /// Agentic tool-loop state for this orchestrator (multi-call session per top-level `updateConversation`).
+    public var agenticLoopUpdates: AsyncStream<(AgenticLoopID, AgenticLoopState)> {
+        agenticLoopStateHub.makeStream()
     }
     
     /// - Parameters:
@@ -170,13 +177,13 @@ public actor SwiftAgentKitOrchestrator {
         }
         
         self.toolManager = toolManager
+        self.agenticLoopStateHub = AgenticLoopStateHub()
     }
     
     /// Process a conversation thread and publish message updates to the message stream
     /// - Parameter messages: Array of messages representing the conversation thread
     /// - Parameter availableTools: Array of available tools that can be used during conversation processing
     public func updateConversation(_ messages: [Message], availableTools: [ToolDefinition] = []) async throws {
-        
         logger.info(
             "Processing conversation",
             metadata: SwiftAgentKitLogging.metadata(
@@ -194,7 +201,22 @@ public actor SwiftAgentKitOrchestrator {
                 )
             )
         }
-        
+        try await updateConversationWithAgenticLoop(messages, availableTools: availableTools, iteration: 1, agenticLoopId: nil)
+    }
+
+    private func updateConversationWithAgenticLoop(
+        _ messages: [Message],
+        availableTools: [ToolDefinition],
+        iteration: Int,
+        agenticLoopId: AgenticLoopID?
+    ) async throws {
+        let loopId = agenticLoopId ?? AgenticLoopID.orchestratorSession(UUID())
+        let isRootEntry = agenticLoopId == nil
+        if isRootEntry {
+            agenticLoopStateHub.publish(loopId, .started)
+        }
+        agenticLoopStateHub.publish(loopId, .llmCall(iteration: iteration))
+
         // Create a copy of the conversation history
         var updatedMessages = messages
         
@@ -244,7 +266,9 @@ public actor SwiftAgentKitOrchestrator {
                         publishMessage(responseMessage)
 
                         if response.hasToolCalls {
-                            transitionLLMState(to: .idle(.waitingForToolResult))
+                            transitionLLMState(to: .idle(.ready))
+                            agenticLoopStateHub.publish(loopId, .waitingForToolExecution)
+                            agenticLoopStateHub.publish(loopId, .executingTools)
                             // Execute tool calls
                             logger.info(
                                 "Response contains tool calls",
@@ -268,9 +292,14 @@ public actor SwiftAgentKitOrchestrator {
                             updatedMessages.append(contentsOf: toolResponseMessages)
                             toolResponseMessages.forEach { publishMessage($0) }
 
-                            // Recurse here with the updated message history
-                            try await updateConversation(updatedMessages, availableTools: availableTools)
+                            // Recurse with continuation priority so this in-flight
+                            // request jumps ahead of new requests in the queue.
+                            agenticLoopStateHub.publish(loopId, .betweenIterations)
+                            try await LLMQueuePriority.$current.withValue(.continuation) {
+                                try await updateConversationWithAgenticLoop(updatedMessages, availableTools: availableTools, iteration: iteration + 1, agenticLoopId: loopId)
+                            }
                         } else {
+                            agenticLoopStateHub.publish(loopId, .completed)
                             transitionLLMState(to: .idle(.completed))
                             transitionLLMState(to: .idle(.ready))
                         }
@@ -303,7 +332,9 @@ public actor SwiftAgentKitOrchestrator {
                 publishMessage(responseMessage)
 
                 if response.hasToolCalls {
-                    transitionLLMState(to: .idle(.waitingForToolResult))
+                    transitionLLMState(to: .idle(.ready))
+                    agenticLoopStateHub.publish(loopId, .waitingForToolExecution)
+                    agenticLoopStateHub.publish(loopId, .executingTools)
                     // Execute tool calls
                     logger.info(
                         "Response contains tool calls",
@@ -330,14 +361,20 @@ public actor SwiftAgentKitOrchestrator {
                     updatedMessages.append(contentsOf: toolResponseMessages)
                     toolResponseMessages.forEach { publishMessage($0) }
 
-                    // Recurse here with the updated message history
-                    try await updateConversation(updatedMessages, availableTools: availableTools)
+                    // Recurse with continuation priority so this in-flight
+                    // request jumps ahead of new requests in the queue.
+                    agenticLoopStateHub.publish(loopId, .betweenIterations)
+                    try await LLMQueuePriority.$current.withValue(.continuation) {
+                        try await updateConversationWithAgenticLoop(updatedMessages, availableTools: availableTools, iteration: iteration + 1, agenticLoopId: loopId)
+                    }
                 } else {
+                    agenticLoopStateHub.publish(loopId, .completed)
                     transitionLLMState(to: .idle(.completed))
                     transitionLLMState(to: .idle(.ready))
                 }
             }
         } catch {
+            agenticLoopStateHub.publish(loopId, .failed(error.localizedDescription))
             transitionLLMState(to: .failed(error.localizedDescription))
             transitionLLMState(to: .idle(.ready))
             throw error

@@ -1,16 +1,22 @@
 import Foundation
 
 /// Fine-grained idle phases for an LLM.
+///
+/// These describe what the LLM itself is doing when it is not actively
+/// generating tokens. They are not request-level states — concepts like
+/// "queued", "pending", or "waiting for tool results" belong to the
+/// request or the infrastructure around the LLM, not the model itself.
 public enum LLMIdleState: String, Codable, Sendable {
-    /// No request is actively being processed.
+    /// The model is available and not processing any request.
     case ready
-    /// The model is paused while external tool calls execute.
-    case waitingForToolResult
-    /// A final response was produced for the latest request.
+    /// The model produced a final response for the most recent request.
     case completed
 }
 
 /// Fine-grained generation phases for an LLM.
+///
+/// These describe what the model is doing while it is actively working
+/// on a request.
 public enum LLMGenerationState: String, Codable, Sendable {
     /// The model is reasoning/thinking before emitting user-facing output.
     case reasoning
@@ -18,13 +24,18 @@ public enum LLMGenerationState: String, Codable, Sendable {
     case responding
 }
 
-/// Observable runtime state for an LLM.
+/// The observable runtime state of an LLM instance.
+///
+/// This represents what the model itself is doing right now — idle,
+/// actively generating, or in a failure state. It intentionally does not
+/// include request-lifecycle concerns (queued, retrying, etc.) because
+/// those belong to the infrastructure around the LLM, not the LLM itself.
 public enum LLMRuntimeState: Sendable, Codable, Equatable {
-    /// Idle states, including ready, waiting for tools, and completed.
+    /// The model is not actively generating tokens.
     case idle(LLMIdleState)
-    /// Active generation states.
+    /// The model is actively generating tokens.
     case generating(LLMGenerationState)
-    /// Terminal failure for the current request.
+    /// The most recent request ended in failure.
     case failed(String?)
 }
 
@@ -96,13 +107,20 @@ public final class LLMRuntimeStateStore: @unchecked Sendable {
 public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
     private let baseLLM: any LLMProtocol
     private let runtimeStateStore: LLMRuntimeStateStore
+    private let requestStateHub: LLMRequestStateHub
 
-    public init(
-        baseLLM: any LLMProtocol,
-        runtimeStateStore: LLMRuntimeStateStore = LLMRuntimeStateStore()
-    ) {
+    public init(baseLLM: any LLMProtocol) {
+        self.init(baseLLM: baseLLM, runtimeStateStore: LLMRuntimeStateStore(), requestStateHub: LLMRequestStateHub())
+    }
+
+    public init(baseLLM: any LLMProtocol, runtimeStateStore: LLMRuntimeStateStore) {
+        self.init(baseLLM: baseLLM, runtimeStateStore: runtimeStateStore, requestStateHub: LLMRequestStateHub())
+    }
+
+    public init(baseLLM: any LLMProtocol, runtimeStateStore: LLMRuntimeStateStore, requestStateHub: LLMRequestStateHub) {
         self.baseLLM = baseLLM
         self.runtimeStateStore = runtimeStateStore
+        self.requestStateHub = requestStateHub
     }
 
     public var currentState: LLMRuntimeState {
@@ -113,8 +131,27 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
         runtimeStateStore.makeStream()
     }
 
+    /// Per-call request lifecycle for this wrapper (no `queued` state; use [`QueuedLLM`](QueuedLLM) for that).
+    public var requestStateUpdates: AsyncStream<(LLMRequestID, LLMRequestState)> {
+        requestStateHub.makeStream()
+    }
+
     public func transition(to state: LLMRuntimeState) {
         runtimeStateStore.transition(to: state)
+    }
+
+    private func effectiveRequestHub() -> LLMRequestStateHub {
+        LLMRequestStateHub.current ?? requestStateHub
+    }
+
+    private func effectiveRequestID() -> LLMRequestID {
+        LLMRequestID.current ?? LLMRequestID()
+    }
+
+    private func publishRequestStart(hub: LLMRequestStateHub, rid: LLMRequestID) {
+        if LLMRequestStateHub.current == nil {
+            hub.publish(rid, .active)
+        }
     }
 
     public func getModelName() -> String {
@@ -126,20 +163,30 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
     }
 
     public func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        let hub = effectiveRequestHub()
+        let rid = effectiveRequestID()
+        publishRequestStart(hub: hub, rid: rid)
+        hub.publish(rid, .generating(.reasoning))
         transition(to: .generating(.reasoning))
 
         do {
             let response = try await baseLLM.send(messages, config: config)
-            transition(to: response.hasToolCalls ? .idle(.waitingForToolResult) : .idle(.completed))
+            transition(to: .idle(.completed))
+            hub.publish(rid, .completed)
             return response
         } catch {
             transition(to: .failed(error.localizedDescription))
+            hub.publish(rid, .failed(error.localizedDescription))
             transition(to: .idle(.ready))
             throw error
         }
     }
 
     public func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        let hub = effectiveRequestHub()
+        let rid = effectiveRequestID()
+        publishRequestStart(hub: hub, rid: rid)
+        hub.publish(rid, .generating(.reasoning))
         transition(to: .generating(.reasoning))
 
         let upstream = baseLLM.stream(messages, config: config)
@@ -150,14 +197,18 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
                         switch result {
                         case .stream:
                             transition(to: .generating(.responding))
-                        case .complete(let response):
-                            transition(to: response.hasToolCalls ? .idle(.waitingForToolResult) : .idle(.completed))
+                            hub.publish(rid, .generating(.responding))
+                            hub.publish(rid, .streaming)
+                        case .complete:
+                            transition(to: .idle(.completed))
+                            hub.publish(rid, .completed)
                         }
                         continuation.yield(result)
                     }
                     continuation.finish()
                 } catch {
                     transition(to: .failed(error.localizedDescription))
+                    hub.publish(rid, .failed(error.localizedDescription))
                     transition(to: .idle(.ready))
                     continuation.finish(throwing: error)
                 }
@@ -166,14 +217,20 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
     }
 
     public func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        let hub = effectiveRequestHub()
+        let rid = effectiveRequestID()
+        publishRequestStart(hub: hub, rid: rid)
+        hub.publish(rid, .generating(.responding))
         transition(to: .generating(.responding))
 
         do {
             let response = try await baseLLM.generateImage(config)
             transition(to: .idle(.completed))
+            hub.publish(rid, .completed)
             return response
         } catch {
             transition(to: .failed(error.localizedDescription))
+            hub.publish(rid, .failed(error.localizedDescription))
             transition(to: .idle(.ready))
             throw error
         }
