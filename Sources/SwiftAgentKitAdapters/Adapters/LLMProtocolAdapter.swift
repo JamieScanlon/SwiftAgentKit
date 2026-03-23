@@ -829,6 +829,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 var llmResponse = LLMResponse.llmResponse(from: response.content, availableTools: availableToolCalls)
                 // Add the Tool calls the LLM identified automatically
                 llmResponse = llmResponse.appending(toolCalls: response.toolCalls)
+                llmResponse = llmResponse.updatingMetadata(with: response.metadata)
                 
                 // Add assistant's response to conversation
                 messages.append(Message(
@@ -1188,6 +1189,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 }
                 var fullContent = ""
                 var streamedToolCalls: [ToolCall] = []
+                var completeMetadata: LLMMetadata?
                 
                 for try await result in stream {
                     switch result {
@@ -1227,6 +1229,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                         // The response.content should contain the full response
                         fullContent = response.content
                         streamedToolCalls = response.toolCalls
+                        completeMetadata = response.metadata
                     }
                 }
                 
@@ -1234,6 +1237,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 var llmResponse = LLMResponse.llmResponse(from: fullContent, availableTools: availableToolCalls)
                 // Add the Tool calls the LLM identified automatically
                 llmResponse = llmResponse.appending(toolCalls: streamedToolCalls)
+                llmResponse = llmResponse.updatingMetadata(with: completeMetadata)
                 
                 // Add assistant's response to conversation
                 messages.append(Message(

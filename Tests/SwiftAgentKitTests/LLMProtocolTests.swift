@@ -85,7 +85,20 @@ import EasyJSON
         #expect(completeResponse.content == "Done")
         #expect(completeResponse.isComplete == true)
         #expect(completeResponse.totalTokens == 15)
+        #expect(completeResponse.inputTokens == 10)
+        #expect(completeResponse.outputTokens == 5)
         #expect(completeResponse.finishReason == "stop")
+        
+        let ctxMeta = LLMMetadata(
+            promptTokens: 100,
+            completionTokens: 20,
+            totalTokens: 120,
+            contextWindowTokens: 8192,
+            finishReason: "stop"
+        )
+        #expect(ctxMeta.remainingContextTokens == 8092)
+        let ctxResponse = LLMResponse.complete(content: "x", metadata: ctxMeta)
+        #expect(ctxResponse.remainingContextTokens == 8092)
     }
     
     @Test("LLMError provides proper error descriptions")

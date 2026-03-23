@@ -70,14 +70,20 @@ public struct LLMResponse: Sendable {
 
 /// Metadata about an LLM response
 public struct LLMMetadata: Sendable {
-    /// Number of tokens used in the prompt
+    /// Number of tokens used in the prompt (input tokens), e.g. OpenAI `prompt_tokens` or Ollama `prompt_eval_count`.
     public let promptTokens: Int?
     
-    /// Number of tokens generated in the response
+    /// Number of tokens generated in the response (output tokens), e.g. OpenAI `completion_tokens` or Ollama `eval_count`.
     public let completionTokens: Int?
     
     /// Total number of tokens used
     public let totalTokens: Int?
+    
+    /// Context window size for this request, when the provider reports it (e.g. Ollama `num_ctx`).
+    ///
+    /// When set together with ``promptTokens``, ``remainingContextTokens`` yields
+    /// `contextWindowTokens - promptTokens` (same idea as Ollama’s `num_ctx - prompt_eval_count`).
+    public let contextWindowTokens: Int?
     
     /// Model-specific metadata
     public let modelMetadata: JSON?
@@ -85,16 +91,26 @@ public struct LLMMetadata: Sendable {
     /// Finish reason (stop, length, tool_calls, etc.)
     public let finishReason: String?
     
+    /// Remaining capacity in the context window after the prompt, when both ``contextWindowTokens`` and ``promptTokens`` are known.
+    ///
+    /// Some APIs expose this directly; otherwise it is derived as `max(0, contextWindowTokens - promptTokens)`.
+    public var remainingContextTokens: Int? {
+        guard let ctx = contextWindowTokens, let prompt = promptTokens else { return nil }
+        return max(0, ctx - prompt)
+    }
+    
     public init(
         promptTokens: Int? = nil,
         completionTokens: Int? = nil,
         totalTokens: Int? = nil,
+        contextWindowTokens: Int? = nil,
         modelMetadata: JSON? = nil,
         finishReason: String? = nil
     ) {
         self.promptTokens = promptTokens
         self.completionTokens = completionTokens
         self.totalTokens = totalTokens
+        self.contextWindowTokens = contextWindowTokens
         self.modelMetadata = modelMetadata
         self.finishReason = finishReason
     }
@@ -223,6 +239,21 @@ public extension LLMResponse {
     /// The total number of tokens used (if available)
     var totalTokens: Int? {
         return metadata?.totalTokens
+    }
+    
+    /// Input (prompt) token count when the provider reported usage.
+    var inputTokens: Int? {
+        return metadata?.promptTokens
+    }
+    
+    /// Output (completion) token count when the provider reported usage.
+    var outputTokens: Int? {
+        return metadata?.completionTokens
+    }
+    
+    /// Remaining tokens in the context window after the prompt, when computable; see ``LLMMetadata/remainingContextTokens``.
+    var remainingContextTokens: Int? {
+        return metadata?.remainingContextTokens
     }
     
     /// The finish reason for the response
