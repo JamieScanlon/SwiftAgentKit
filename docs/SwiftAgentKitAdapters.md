@@ -80,6 +80,10 @@ let adapterWithTokens = OpenAIAdapter(
 - `presencePenalty`: Reduces repetition of any token (-2.0 to 2.0)
 - `stopSequences`: Array of strings that stop generation when encountered
 - `user`: User identifier for tracking and moderation
+- `timeoutInterval`: HTTP request timeout for the OpenAI **client** (seconds; default 300)
+- `toolCallExecutionTimeout`: Maximum wall-clock time per **`ToolProvider.executeTool`** call (seconds; default **300**). Separate from `timeoutInterval`. On expiry, tool errors are appended for the model instead of hanging the task.
+
+`LLMProtocolAdapter.Configuration` exposes the same idea as **`toolCallTimeout`** (default 300 seconds) for each `executeTool` invocation.
 
 ### Advanced Configuration
 

@@ -32,7 +32,10 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         
         // Additional OpenAI configuration options
         public let organizationIdentifier: String?
+        /// Request timeout for the OpenAI HTTP client (seconds).
         public let timeoutInterval: TimeInterval
+        /// Maximum wall-clock time for each `ToolProvider.executeTool` call (seconds). Distinct from ``timeoutInterval``.
+        public let toolCallExecutionTimeout: TimeInterval
         public let customHeaders: [String: String]
         public let parsingOptions: ParsingOptions
         
@@ -50,6 +53,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             user: String? = nil,
             organizationIdentifier: String? = nil,
             timeoutInterval: TimeInterval = 300.0,
+            toolCallExecutionTimeout: TimeInterval = 300.0,
             customHeaders: [String: String] = [:],
             parsingOptions: ParsingOptions = []
         ) {
@@ -66,6 +70,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             self.user = user
             self.organizationIdentifier = organizationIdentifier
             self.timeoutInterval = timeoutInterval
+            self.toolCallExecutionTimeout = toolCallExecutionTimeout
             self.customHeaders = customHeaders
             self.parsingOptions = parsingOptions
         }
@@ -201,6 +206,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         baseURL: URL = URL(string: "https://api.openai.com/v1")!,
         organizationIdentifier: String? = nil,
         timeoutInterval: TimeInterval = 300.0,
+        toolCallExecutionTimeout: TimeInterval = 300.0,
         customHeaders: [String: String] = [:],
         parsingOptions: ParsingOptions = [],
         logger: Logger? = nil
@@ -212,6 +218,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             systemPrompt: systemPrompt,
             organizationIdentifier: organizationIdentifier,
             timeoutInterval: timeoutInterval,
+            toolCallExecutionTimeout: toolCallExecutionTimeout,
             customHeaders: customHeaders,
             parsingOptions: parsingOptions
         ), logger: logger)
@@ -248,6 +255,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         baseURL: URL = URL(string: "https://api.openai.com/v1")!,
         organizationIdentifier: String? = nil,
         timeoutInterval: TimeInterval = 300.0,
+        toolCallExecutionTimeout: TimeInterval = 300.0,
         customHeaders: [String: String] = [:],
         parsingOptions: ParsingOptions = [],
         logger: Logger? = nil
@@ -260,6 +268,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             systemPrompt: systemPromptDynamic,
             organizationIdentifier: organizationIdentifier,
             timeoutInterval: timeoutInterval,
+            toolCallExecutionTimeout: toolCallExecutionTimeout,
             customHeaders: customHeaders,
             parsingOptions: parsingOptions
         ), logger: logger)
@@ -800,7 +809,16 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             var toolFileArtifacts: [Artifact] = []
             for toolCall in llmResponse.toolCalls {
                 for provider in toolProviders {
-                    let result = try await provider.executeTool(toolCall)
+                    let result: ToolResult
+                    do {
+                        result = try await withToolCallTimeout(config.toolCallExecutionTimeout, toolName: toolCall.name) {
+                            try await provider.executeTool(toolCall)
+                        }
+                    } catch {
+                        let errorText = (error as? ToolCallTimeoutError)?.message ?? "Tool execution failed: \(error)"
+                        responseParts.append(.text(text: "Error Executing Tool: \(toolCall.name)\nError: \(errorText)"))
+                        continue
+                    }
                     if result.success {
                         responseParts.append(.text(text: result.content))
                         
@@ -1079,7 +1097,16 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             var toolFileArtifacts: [Artifact] = []
             for toolCall in llmResponse.toolCalls {
                 for provider in toolProviders {
-                    let result = try await provider.executeTool(toolCall)
+                    let result: ToolResult
+                    do {
+                        result = try await withToolCallTimeout(config.toolCallExecutionTimeout, toolName: toolCall.name) {
+                            try await provider.executeTool(toolCall)
+                        }
+                    } catch {
+                        let errorText = (error as? ToolCallTimeoutError)?.message ?? "Tool execution failed: \(error)"
+                        responseParts.append(.text(text: "Error Executing Tool: \(toolCall.name)\nError: \(errorText)"))
+                        continue
+                    }
                     if result.success {
                         responseParts.append(.text(text: result.content))
                         

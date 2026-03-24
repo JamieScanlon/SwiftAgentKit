@@ -7,6 +7,8 @@
 
 The `LLMProtocolAdapter` implements an **agentic loop pattern** that allows the LLM to use tools and synthesize their results into a final answer. This pattern is essential for creating agents that can reason about tool outputs and provide coherent responses based on the tool execution results.
 
+**Tool execution timeouts:** each `executeTool` call is bounded by **`Configuration.toolCallTimeout`** (default 5 minutes). `SwiftAgentKitOrchestrator` uses **`OrchestratorConfig.toolCallTimeout`** for MCP, A2A, and `ToolManager` dispatch. See [SwiftAgentKitOrchestrator — Tool dispatch order](SwiftAgentKitOrchestrator.md#tool-dispatch-order) and [`withToolCallTimeout`](SwiftAgentKit.md#utilities) in the core module.
+
 ## Problem Statement
 
 Previously, when the adapter received a message through `handleTaskSendWithTools`, the flow was:

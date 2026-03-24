@@ -28,6 +28,7 @@ The SwiftAgentKit module provides core networking capabilities and utilities tha
 
 ### Utilities
 - **Shell**: Executes shell commands and manages subprocesses
+- **Tool call timeout**: **`withToolCallTimeout(_:toolName:operation:)`** and **`ToolCallTimeoutError`** bound each tool invocation (used by `SwiftAgentKitOrchestrator` and A2A adapters). See [`SwiftAgentKitOrchestrator`](SwiftAgentKitOrchestrator.md#tool-dispatch-order).
 
 ### LLM (source layout)
 

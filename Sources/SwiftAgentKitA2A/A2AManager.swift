@@ -15,10 +15,15 @@ public protocol A2AAgentStreamClient: Sendable {
     var agentCard: AgentCard? { get async }
     func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>>
     func shutdown() async
+    /// Per-server tool-call limit from A2A config (seconds). Default implementation returns `nil`.
+    var toolCallTimeout: TimeInterval? { get async }
 }
 
 public extension A2AAgentStreamClient {
     func shutdown() async {}
+    var toolCallTimeout: TimeInterval? {
+        get async { nil }
+    }
 }
 
 public actor A2AManager {
@@ -38,6 +43,8 @@ public actor A2AManager {
     public var state: State = .notReady
     public var toolCallsJsonString: String?
     public var toolCallsJson: [[String: Any]] = []
+    /// When the manager was initialized from a config file that set ``A2AConfig/toolCallTimeout``, that value is stored here. Otherwise `nil` (call sites fall back to the orchestrator’s default tool-call timeout).
+    public private(set) var toolCallTimeout: TimeInterval? = nil
     
     /// Initialize the A2AManager with a config file URL
     public func initialize(configFileURL: URL) async throws {
@@ -57,12 +64,13 @@ public actor A2AManager {
     
     /// Initialize the A2AManager with an array of stream-capable A2A clients (e.g. `A2AClient` or test doubles).
     public func initialize(clients: [any A2AAgentStreamClient]) async throws {
+        toolCallTimeout = nil
         self.clients = clients
         await buildToolsJson()
     }
     
-    public func agentCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
-        // Find the client whose agent card name matches the tool call name
+    /// - Parameter orchestratorDefaultTimeout: Used when neither per-server nor root A2A config sets a tool-call timeout.
+    public func agentCall(_ toolCall: ToolCall, orchestratorDefaultTimeout: TimeInterval = 300) async throws -> [LLMResponse]? {
         var matchingClient: (any A2AAgentStreamClient)?
         for client in clients {
             guard let agentCard = await client.agentCard else { continue }
@@ -76,11 +84,23 @@ public actor A2AManager {
             return nil
         }
         
-        // Extract instructions from JSON arguments
+        guard case .object(let argsDict) = toolCall.arguments,
+              case .string = argsDict["instructions"] else { return nil }
+        
+        let seconds = Self.resolvedToolCallTimeout(
+            client: await client.toolCallTimeout,
+            configDefault: toolCallTimeout,
+            orchestrator: orchestratorDefaultTimeout
+        )
+        return try await withToolCallTimeout(seconds, toolName: toolCall.name) {
+            try await self.executeAgentCall(client: client, toolCall: toolCall)
+        }
+    }
+    
+    private func executeAgentCall(client: any A2AAgentStreamClient, toolCall: ToolCall) async throws -> [LLMResponse]? {
         guard case .object(let argsDict) = toolCall.arguments,
               case .string(let instructions) = argsDict["instructions"] else { return nil }
         
-        // A2A messages take the role of 'user' for the purpose of communicating with other agents.
         let a2aMessage = A2AMessage(role: "user", parts: [.text(text: instructions)], messageId: UUID().uuidString)
         let params: MessageSendParams = .init(message: a2aMessage, metadata: try? .init(["toolCallId": toolCall.id]))
         let contents = try await client.streamMessage(params: params)
@@ -141,6 +161,16 @@ public actor A2AManager {
             }
         }
         return returnResponses
+    }
+    
+    private nonisolated static func resolvedToolCallTimeout(
+        client: TimeInterval?,
+        configDefault: TimeInterval?,
+        orchestrator: TimeInterval
+    ) -> TimeInterval {
+        if let v = client, v > 0 { return v }
+        if let v = configDefault, v > 0 { return v }
+        return orchestrator
     }
     
     // MARK: - Helper Methods for Content Extraction
@@ -297,6 +327,7 @@ public actor A2AManager {
         clients.removeAll()
         toolCallsJson = []
         toolCallsJsonString = nil
+        toolCallTimeout = nil
         state = .notReady
     }
 
@@ -341,6 +372,7 @@ public actor A2AManager {
     }
     
     private func createClients(_ config: A2AConfig) async throws {
+        toolCallTimeout = config.toolCallTimeout
         logger.info(
             "Creating A2A clients",
             metadata: SwiftAgentKitLogging.metadata(

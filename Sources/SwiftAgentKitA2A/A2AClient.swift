@@ -625,7 +625,11 @@ public enum MessageResult: Encodable, Sendable {
     case taskArtifactUpdate(TaskArtifactUpdateEvent)
 }
 
-extension A2AClient: A2AAgentStreamClient {}
+extension A2AClient: A2AAgentStreamClient {
+    public var toolCallTimeout: TimeInterval? {
+        get async { server.toolCallTimeout }
+    }
+}
 
 // MARK: - Custom Errors
 

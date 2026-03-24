@@ -136,16 +136,20 @@ try await server.start()
 
 ### Configuration Options
 
-The `LLMProtocolAdapter.Configuration` struct supports the following parameters:
+The `LLMProtocolAdapter.Configuration` struct includes model parameters, agent card fields, **`maxAgenticIterations`**, and **`toolCallTimeout`** (seconds, default **300**). The latter bounds each **`ToolProvider.executeTool`** call via `withToolCallTimeout` so a hung tool does not stall the agentic loop; timeouts surface as tool-role errors for the model. For the full member list, see the struct in source.
 
 ```swift
+// Not exhaustive — see Sources/SwiftAgentKitAdapters/Adapters/LLMProtocolAdapter.swift
 public struct Configuration: Sendable {
-    public let model: String                    // Model identifier
-    public let maxTokens: Int?                  // Maximum tokens to generate
-    public let temperature: Double?             // Response randomness (0.0-2.0)
-    public let topP: Double?                    // Top-p sampling parameter
-    public let systemPrompt: DynamicPrompt?     // System prompt for the LLM (supports token replacement)
-    public let additionalParameters: JSON?      // Model-specific parameters
+    public let model: String
+    public let maxTokens: Int?
+    public let temperature: Double?
+    public let topP: Double?
+    public let systemPrompt: DynamicPrompt?
+    public let additionalParameters: JSON?
+    public let maxAgenticIterations: Int
+    public let toolCallTimeout: TimeInterval  // default 300
+    // … agentName, agentDescription, cardCapabilities, skills, input/output modes, etc.
 }
 ```
 

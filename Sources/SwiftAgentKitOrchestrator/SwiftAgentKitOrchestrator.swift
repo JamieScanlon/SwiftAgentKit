@@ -16,6 +16,8 @@ public struct OrchestratorConfig: Sendable {
     public let a2aEnabled: Bool
     /// Connection timeout for MCP servers in seconds
     public let mcpConnectionTimeout: TimeInterval
+    /// Maximum wall-clock time for a single tool call (MCP, A2A, or ToolManager dispatch) in seconds
+    public let toolCallTimeout: TimeInterval
     /// Maximum number of tokens to generate (passed to LLM requests)
     public let maxTokens: Int?
     /// Temperature for response randomness, 0.0 to 2.0 (passed to LLM requests)
@@ -30,6 +32,7 @@ public struct OrchestratorConfig: Sendable {
         mcpEnabled: Bool = false,
         a2aEnabled: Bool = false,
         mcpConnectionTimeout: TimeInterval = 30.0,
+        toolCallTimeout: TimeInterval = 300.0,
         maxTokens: Int? = nil,
         temperature: Double? = nil,
         topP: Double? = nil,
@@ -39,6 +42,7 @@ public struct OrchestratorConfig: Sendable {
         self.mcpEnabled = mcpEnabled
         self.a2aEnabled = a2aEnabled
         self.mcpConnectionTimeout = mcpConnectionTimeout
+        self.toolCallTimeout = toolCallTimeout
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.topP = topP
@@ -522,6 +526,13 @@ public actor SwiftAgentKitOrchestrator {
         return LLMResponse.complete(content: content, metadata: metadata, toolCallId: toolCallId)
     }
     
+    private func llmResponseFromToolExecutionError(_ error: Error, toolCallId: String?) -> LLMResponse {
+        if let timeout = error as? ToolCallTimeoutError {
+            return LLMResponse.complete(content: timeout.message, toolCallId: toolCallId)
+        }
+        return LLMResponse.complete(content: "Tool execution failed: \(error)", toolCallId: toolCallId)
+    }
+    
     /// Builds a conversation Message from a tool call LLMResponse, including images and file references.
     /// When the response contains files (URLs or data), appends a text summary so the next LLM turn sees them.
     private func messageFromToolResponse(_ response: LLMResponse) -> Message {
@@ -560,15 +571,18 @@ public actor SwiftAgentKitOrchestrator {
                 "Executing tool call",
                 metadata: metadataForToolCall(toolCall, provider: "orchestrator")
             )
-            do {
-                var callResponses: [LLMResponse] = []
-                // Try MCP manager first
-                if let mcpManager = mcpManager, config.mcpEnabled {
-                    logger.debug(
-                        "Dispatching MCP tool call",
-                        metadata: metadataForToolCall(toolCall, provider: "mcp")
-                    )
-                    if let mcpResponses = try await mcpManager.toolCall(toolCall) {
+            var callResponses: [LLMResponse] = []
+            var abortedWithError: LLMResponse?
+            
+            // Try MCP manager first
+            if let mcpManager = mcpManager, config.mcpEnabled {
+                logger.debug(
+                    "Dispatching MCP tool call",
+                    metadata: metadataForToolCall(toolCall, provider: "mcp")
+                )
+                do {
+                    let mcpResponses = try await mcpManager.toolCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
+                    if let mcpResponses = mcpResponses {
                         if mcpResponses.isEmpty {
                             logger.debug(
                                 "MCP tool call returned no responses",
@@ -579,7 +593,6 @@ public actor SwiftAgentKitOrchestrator {
                                 "MCP tool call responses received",
                                 metadata: metadataForResponses(mcpResponses, provider: "mcp")
                             )
-                            // Set toolCallId on each response
                             let responsesWithId = mcpResponses.map { response in
                                 LLMResponse(
                                     content: response.content,
@@ -597,14 +610,31 @@ public actor SwiftAgentKitOrchestrator {
                             metadata: metadataForToolCall(toolCall, provider: "mcp")
                         )
                     }
-                }
-                // Try A2A manager
-                if let a2aManager = a2aManager, config.a2aEnabled {
-                    logger.debug(
-                        "Dispatching A2A agent call",
-                        metadata: metadataForToolCall(toolCall, provider: "a2a")
+                } catch {
+                    logger.error(
+                        "MCP tool call failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("toolName", .string(toolCall.name)),
+                            ("error", .string(String(describing: error)))
+                        )
                     )
-                    if let a2aResponses = try await a2aManager.agentCall(toolCall) {
+                    abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
+                }
+            }
+            if let err = abortedWithError {
+                aggregatedResponses.append(err)
+                continue
+            }
+            
+            // Try A2A manager
+            if let a2aManager = a2aManager, config.a2aEnabled {
+                logger.debug(
+                    "Dispatching A2A agent call",
+                    metadata: metadataForToolCall(toolCall, provider: "a2a")
+                )
+                do {
+                    let a2aResponses = try await a2aManager.agentCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
+                    if let a2aResponses = a2aResponses {
                         if a2aResponses.isEmpty {
                             logger.debug(
                                 "A2A agent call returned no responses",
@@ -615,7 +645,6 @@ public actor SwiftAgentKitOrchestrator {
                                 "A2A agent call responses received",
                                 metadata: metadataForResponses(a2aResponses, provider: "a2a")
                             )
-                            // Set toolCallId on each response
                             let responsesWithId = a2aResponses.map { response in
                                 LLMResponse(
                                     content: response.content,
@@ -633,62 +662,67 @@ public actor SwiftAgentKitOrchestrator {
                             metadata: metadataForToolCall(toolCall, provider: "a2a")
                         )
                     }
-                }
-                // Try generic ToolManager if MCP and A2A didn't handle the tool
-                if callResponses.isEmpty, let toolManager = toolManager {
-                    logger.debug(
-                        "Dispatching to ToolManager",
-                        metadata: metadataForToolCall(toolCall, provider: "toolManager")
+                } catch {
+                    logger.error(
+                        "A2A agent call failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("toolName", .string(toolCall.name)),
+                            ("error", .string(String(describing: error)))
+                        )
                     )
-                    do {
-                        let result = try await toolManager.executeTool(toolCall)
-                        let response = llmResponseFromToolResult(result, toolCallId: toolCall.id)
-                        if result.success {
-                            logger.debug(
-                                "ToolManager executed tool successfully",
-                                metadata: metadataForToolCall(toolCall, provider: "toolManager")
-                            )
-                        } else {
-                            logger.warning(
-                                "ToolManager reported tool execution failure",
-                                metadata: SwiftAgentKitLogging.metadata(
-                                    ("toolName", .string(toolCall.name)),
-                                    ("error", .string(result.error ?? "unknown"))
-                                )
-                            )
-                        }
-                        callResponses.append(response)
-                    } catch {
-                        logger.error(
-                            "ToolManager tool execution failed",
+                    abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
+                }
+            }
+            if let err = abortedWithError {
+                aggregatedResponses.append(err)
+                continue
+            }
+            
+            // Try generic ToolManager if MCP and A2A didn't handle the tool
+            if callResponses.isEmpty, let toolManager = toolManager {
+                logger.debug(
+                    "Dispatching to ToolManager",
+                    metadata: metadataForToolCall(toolCall, provider: "toolManager")
+                )
+                do {
+                    let result = try await withToolCallTimeout(config.toolCallTimeout, toolName: toolCall.name) {
+                        try await toolManager.executeTool(toolCall)
+                    }
+                    let response = llmResponseFromToolResult(result, toolCallId: toolCall.id)
+                    if result.success {
+                        logger.debug(
+                            "ToolManager executed tool successfully",
+                            metadata: metadataForToolCall(toolCall, provider: "toolManager")
+                        )
+                    } else {
+                        logger.warning(
+                            "ToolManager reported tool execution failure",
                             metadata: SwiftAgentKitLogging.metadata(
                                 ("toolName", .string(toolCall.name)),
-                                ("error", .string(String(describing: error)))
+                                ("error", .string(result.error ?? "unknown"))
                             )
                         )
-                        callResponses.append(LLMResponse.complete(
-                            content: "Tool execution failed: \(error)",
-                            toolCallId: toolCall.id
-                        ))
                     }
-                }
-                
-                var successMetadata = metadataForToolCall(toolCall, provider: "orchestrator")
-                successMetadata["responseCount"] = .stringConvertible(callResponses.count)
-                logger.info(
-                    "Tool call executed successfully",
-                    metadata: successMetadata
-                )
-                aggregatedResponses.append(contentsOf: callResponses)
-            } catch {
-                logger.error(
-                    "Tool call failed",
-                    metadata: SwiftAgentKitLogging.metadata(
-                        ("toolName", .string(toolCall.name)),
-                        ("error", .string(String(describing: error)))
+                    callResponses.append(response)
+                } catch {
+                    logger.error(
+                        "ToolManager tool execution failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("toolName", .string(toolCall.name)),
+                            ("error", .string(String(describing: error)))
+                        )
                     )
-                )
+                    callResponses.append(llmResponseFromToolExecutionError(error, toolCallId: toolCall.id))
+                }
             }
+            
+            var successMetadata = metadataForToolCall(toolCall, provider: "orchestrator")
+            successMetadata["responseCount"] = .stringConvertible(callResponses.count)
+            logger.info(
+                "Tool call finished",
+                metadata: successMetadata
+            )
+            aggregatedResponses.append(contentsOf: callResponses)
         }
         return aggregatedResponses
     }

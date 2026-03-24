@@ -253,7 +253,9 @@ public final class MCPOAuthHandler: @unchecked Sendable {
             authConfig: authConfig,
             connectionTimeout: config.connectionTimeout,
             requestTimeout: config.requestTimeout,
-            maxRetries: config.maxRetries
+            maxRetries: config.maxRetries,
+            clientID: config.clientID,
+            toolCallTimeout: config.toolCallTimeout
         )
     }
 
@@ -302,7 +304,9 @@ public final class MCPOAuthHandler: @unchecked Sendable {
             authConfig: authConfig,
             connectionTimeout: config.connectionTimeout,
             requestTimeout: config.requestTimeout,
-            maxRetries: config.maxRetries
+            maxRetries: config.maxRetries,
+            clientID: config.clientID,
+            toolCallTimeout: config.toolCallTimeout
         )
     }
 

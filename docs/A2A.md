@@ -20,6 +20,10 @@ The A2A module provides support for the [Agent-to-Agent (A2A) protocol](https://
 - **A2AConfig**: Configuration for A2A servers and boot calls
 - **AgentAdapter**: Protocol for implementing custom agent behavior. Handlers now receive an existing `A2ATask` and write updates (status and `artifacts`) to the shared `TaskStore` instead of returning a response directly.
 
+### Tool-call timeout in JSON
+
+At the **root**, **`toolCallTimeout`** / **`timeout`** set the default for servers that omit their own. On each **`a2aServers`** entry (alongside **`boot`** / **`run`**), **`toolCallTimeout`** or **`timeout`** sets a **per-server** limit (seconds). Precedence is: per-server → root A2A JSON → `OrchestratorConfig.toolCallTimeout`. **`toolCallTimeout`** wins over **`timeout`** on the same object. Zero or negative values are ignored for that level.
+
 ## Example: Loading A2A Config and Using A2AManager
 
 ```swift

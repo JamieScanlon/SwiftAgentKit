@@ -233,6 +233,7 @@ The MCP module uses a JSON configuration file to define MCP servers and environm
   - **arguments**: Array of command-line arguments for the server
   - **environment**: Environment variables specific to this server
 - **globalEnvironment**: Environment variables shared across all servers
+- **toolCallTimeout** / **timeout** (optional): At the **root**, sets the default MCP tool-call limit (seconds) for servers that do not specify their own. On each **`mcpServers`** and **`remoteServers`** entry, you can set **`toolCallTimeout`** or **`timeout`** for a **per-server** override (seconds). Precedence for each MCP client is: per-server value → root MCP JSON → `OrchestratorConfig.toolCallTimeout`. **`toolCallTimeout`** wins over **`timeout`** when both appear on the same object.
 
 ## Architecture Benefits
 

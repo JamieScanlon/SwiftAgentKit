@@ -48,6 +48,8 @@ public actor MCPClient {
     public let version: String
     public let isStrict: Bool
     public let connectionTimeout: TimeInterval
+    /// Per-server tool-call limit from MCP config (seconds); `nil` means use manager/orchestrator defaults.
+    public let toolCallTimeout: TimeInterval?
     public let clientID: String
     public var state: State = .notConnected
     
@@ -62,6 +64,7 @@ public actor MCPClient {
         version: String = "1.0", 
         isStrict: Bool = false,
         connectionTimeout: TimeInterval = 30.0,
+        toolCallTimeout: TimeInterval? = nil,
         clientID: String = "swiftagentkit-mcp-client",
         messageFilterConfig: MessageFilter.Configuration = .default,
         logger: Logger? = nil
@@ -70,6 +73,7 @@ public actor MCPClient {
         self.version = version
         self.isStrict = isStrict
         self.connectionTimeout = connectionTimeout
+        self.toolCallTimeout = toolCallTimeout
         self.clientID = clientID
         self.messageFilterConfig = messageFilterConfig
         self.logger = logger ?? SwiftAgentKitLogging.logger(

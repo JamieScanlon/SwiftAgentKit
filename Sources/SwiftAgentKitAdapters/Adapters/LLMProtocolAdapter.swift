@@ -40,6 +40,8 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         
         // MARK: - Agentic Loop Configuration
         public let maxAgenticIterations: Int
+        /// Maximum wall-clock time for each `ToolProvider.executeTool` call (seconds).
+        public let toolCallTimeout: TimeInterval
         
         // MARK: - Agent Configuration
         public let agentName: String
@@ -57,6 +59,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             systemPrompt: DynamicPrompt? = nil,
             additionalParameters: JSON? = nil,
             maxAgenticIterations: Int = 10,
+            toolCallTimeout: TimeInterval = 300.0,
             systemPromptUpdateCallback: SystemPromptUpdateCallback? = nil,
             agentName: String? = nil,
             agentDescription: String? = nil,
@@ -72,6 +75,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             self.systemPrompt = systemPrompt
             self.additionalParameters = additionalParameters
             self.maxAgenticIterations = maxAgenticIterations
+            self.toolCallTimeout = toolCallTimeout
             self.systemPromptUpdateCallback = systemPromptUpdateCallback
             
             // Set agent properties with defaults if not provided
@@ -174,6 +178,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         systemPrompt: DynamicPrompt? = nil,
         additionalParameters: JSON? = nil,
         maxAgenticIterations: Int = 10,
+        toolCallTimeout: TimeInterval = 300.0,
         systemPromptUpdateCallback: SystemPromptUpdateCallback? = nil,
         agentName: String? = nil,
         agentDescription: String? = nil,
@@ -191,6 +196,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             systemPrompt: systemPrompt,
             additionalParameters: additionalParameters,
             maxAgenticIterations: maxAgenticIterations,
+            toolCallTimeout: toolCallTimeout,
             systemPromptUpdateCallback: systemPromptUpdateCallback,
             agentName: agentName,
             agentDescription: agentDescription,
@@ -235,6 +241,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         systemPrompt: String,  // Non-optional to avoid ambiguity when omitted
         additionalParameters: JSON? = nil,
         maxAgenticIterations: Int = 10,
+        toolCallTimeout: TimeInterval = 300.0,
         systemPromptUpdateCallback: SystemPromptUpdateCallback? = nil,
         agentName: String? = nil,
         agentDescription: String? = nil,
@@ -253,6 +260,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             systemPrompt: systemPromptDynamic,
             additionalParameters: additionalParameters,
             maxAgenticIterations: maxAgenticIterations,
+            toolCallTimeout: toolCallTimeout,
             systemPromptUpdateCallback: systemPromptUpdateCallback,
             agentName: agentName,
             agentDescription: agentDescription,
@@ -874,7 +882,25 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 
                 for toolCall in llmResponse.toolCalls {
                     for provider in toolProviders {
-                        let result = try await provider.executeTool(toolCall)
+                        let result: ToolResult
+                        do {
+                            result = try await withToolCallTimeout(config.toolCallTimeout, toolName: toolCall.name) {
+                                try await provider.executeTool(toolCall)
+                            }
+                        } catch {
+                            let errorText = (error as? ToolCallTimeoutError)?.message ?? "Tool execution failed: \(error)"
+                            let errorMessage = "Error Executing Tool: \(toolCall.name)\nError: \(errorText)"
+                            toolResults.append(errorMessage)
+                            messages.append(Message(
+                                id: UUID(),
+                                role: .tool,
+                                content: errorMessage,
+                                timestamp: Date(),
+                                toolCalls: [],
+                                toolCallId: toolCall.id
+                            ))
+                            continue
+                        }
                         if result.success {
                             let toolResultText = "Successfully Executed Tool: \(toolCall.name)\n-- Start Tool Result ---\n\(result.content)\n-- End Tool Result ---\n\nYou can now continue with the next step in the conversation."
                             toolResults.append(toolResultText)
@@ -1309,7 +1335,24 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 
                 for toolCall in llmResponse.toolCalls {
                     for provider in toolProviders {
-                        let result = try await provider.executeTool(toolCall)
+                        let result: ToolResult
+                        do {
+                            result = try await withToolCallTimeout(config.toolCallTimeout, toolName: toolCall.name) {
+                                try await provider.executeTool(toolCall)
+                            }
+                        } catch {
+                            let errorText = (error as? ToolCallTimeoutError)?.message ?? "Tool execution failed: \(error)"
+                            let errorMessage = "Error Executing Tool: \(toolCall.name)\nError: \(errorText)"
+                            messages.append(Message(
+                                id: UUID(),
+                                role: .tool,
+                                content: errorMessage,
+                                timestamp: Date(),
+                                toolCalls: [],
+                                toolCallId: toolCall.id
+                            ))
+                            continue
+                        }
                         if result.success {
                             // Check for file resources in metadata
                             if let metadataDict = result.metadata.literalValue as? [String: Any],

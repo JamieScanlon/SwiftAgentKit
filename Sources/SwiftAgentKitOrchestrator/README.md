@@ -69,6 +69,7 @@ try await orchestrator.updateConversation(messages, availableTools: [])
 | `streamingEnabled` | `stream` vs `send` for LLM calls |
 | `mcpEnabled` / `a2aEnabled` | Enable those subsystems |
 | `mcpConnectionTimeout` | When the orchestrator creates `MCPManager` |
+| `toolCallTimeout` | Per-tool-call wall-clock limit (seconds); default **300**. See [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md#tool-dispatch-order). |
 | `maxTokens`, `temperature`, `topP`, `additionalParameters` | Passed to each `LLMRequestConfig` |
 
 ## Features

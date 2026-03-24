@@ -23,6 +23,7 @@
 | `mcpEnabled` | Use `mcpManager` for tool dispatch when configured |
 | `a2aEnabled` | Use `a2aManager` for agent-style tool calls |
 | `mcpConnectionTimeout` | Seconds for MCP connections when the orchestrator creates its own `MCPManager` |
+| `toolCallTimeout` | Maximum wall-clock time (**seconds**) for a single tool dispatch (MCP, A2A, or `ToolManager`). Default **300** (5 minutes). On expiry, the model receives a tool-role error via `ToolCallTimeoutError` (see **Tool dispatch** below). |
 | `maxTokens`, `temperature`, `topP`, `additionalParameters` | Passed through to `LLMRequestConfig` for every LLM call |
 
 All feature flags default to `false` unless you opt in.
@@ -151,7 +152,15 @@ For each `ToolCall`, the orchestrator aggregates responses from (in order):
 2. **A2A** — if `a2aManager != nil` and `a2aEnabled`  
 3. **`ToolManager`** — if still unresolved and `toolManager` is set  
 
-Failures are turned into tool-role messages so the model can recover.
+Each step is wrapped with **`withToolCallTimeout`** (`SwiftAgentKit`) inside **`MCPManager.toolCall`** and **`A2AManager.agentCall`** (orchestrator passes **`OrchestratorConfig.toolCallTimeout`** as the fallback). The effective limit is:
+
+- **MCP** — per-server `toolCallTimeout` / `timeout` on each **`mcpServers`** or **`remoteServers`** entry, else root MCP JSON, else **`config.toolCallTimeout`**.
+- **A2A** — per-server `toolCallTimeout` / `timeout` on each **`a2aServers`** entry, else root A2A JSON, else **`config.toolCallTimeout`**.
+- **`ToolManager`** — always **`config.toolCallTimeout`**.
+
+Values from JSON must be **positive** (seconds); zero or negative values are ignored and the next fallback is used. If the step **throws** (including timeout), the orchestrator appends a **tool-role** `LLMResponse` with an error string (timeouts use `ToolCallTimeoutError.message`) and does not try later backends for that failed step’s error path—so the agentic loop can continue. Other failures from MCP/A2A are surfaced the same way (not only logged).
+
+Timeouts are **cooperative**: the timed-out `Task` is cancelled, but blocking work that ignores cancellation may still not finish until the process ends.
 
 ## Related documentation
 
