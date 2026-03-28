@@ -38,6 +38,8 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         public let toolCallExecutionTimeout: TimeInterval
         public let customHeaders: [String: String]
         public let parsingOptions: ParsingOptions
+        /// Maps to OpenAI Chat Completions `tool_choice` when tools are non-empty (see ``ToolInvocationPolicy``).
+        public let toolInvocationPolicy: ToolInvocationPolicy
         
         public init(
             apiKey: String,
@@ -55,7 +57,8 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             timeoutInterval: TimeInterval = 300.0,
             toolCallExecutionTimeout: TimeInterval = 300.0,
             customHeaders: [String: String] = [:],
-            parsingOptions: ParsingOptions = []
+            parsingOptions: ParsingOptions = [],
+            toolInvocationPolicy: ToolInvocationPolicy = .automatic
         ) {
             self.apiKey = apiKey
             self.model = model
@@ -73,6 +76,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             self.toolCallExecutionTimeout = toolCallExecutionTimeout
             self.customHeaders = customHeaders
             self.parsingOptions = parsingOptions
+            self.toolInvocationPolicy = toolInvocationPolicy
         }
     }
     
@@ -1249,6 +1253,16 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - Private Helper Methods for Tools
     
+    /// Maps ``ToolInvocationPolicy`` to OpenAI `tool_choice` when the tools array is non-empty.
+    private static func toolChoiceForOpenAI(policy: ToolInvocationPolicy, toolsNonEmpty: Bool) -> ChatQuery.ChatCompletionFunctionCallOptionParam? {
+        guard toolsNonEmpty else { return nil }
+        switch policy {
+        case .automatic: return .auto
+        case .required: return .required
+        case .none: return ChatQuery.ChatCompletionFunctionCallOptionParam.none
+        }
+    }
+    
     private func callOpenAIWithTools(a2aMessage: A2AMessage, metadata: JSON?, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> (choice: ChatResult.Choice, usage: ChatResult.CompletionUsage?) {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
@@ -1278,6 +1292,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             presencePenalty: config.presencePenalty,
             stop: config.stopSequences.map { .init(stringList: $0) },
             temperature: config.temperature,
+            toolChoice: Self.toolChoiceForOpenAI(policy: config.toolInvocationPolicy, toolsNonEmpty: !tools.isEmpty),
             tools: tools,
             topP: config.topP,
             user: config.user
@@ -1430,6 +1445,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             presencePenalty: config.presencePenalty,
             stop: config.stopSequences.map { .init(stringList: $0) },
             temperature: config.temperature,
+            toolChoice: Self.toolChoiceForOpenAI(policy: config.toolInvocationPolicy, toolsNonEmpty: !tools.isEmpty),
             tools: tools,
             topP: config.topP,
             user: config.user,

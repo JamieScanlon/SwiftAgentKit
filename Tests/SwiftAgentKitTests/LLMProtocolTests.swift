@@ -16,6 +16,7 @@ import EasyJSON
         #expect(config.stream == false)
         #expect(config.availableTools.isEmpty)
         #expect(config.additionalParameters == nil)
+        #expect(config.toolInvocationPolicy == .automatic)
     }
     
     @Test("LLMRequestConfig can be initialized with custom values")
@@ -47,6 +48,7 @@ import EasyJSON
         #expect(config.availableTools.count == 1)
         #expect(config.availableTools.first?.name == "test_tool")
         #expect(config.additionalParameters != nil)
+        #expect(config.toolInvocationPolicy == .automatic)
     }
     
     @Test("LLMResponse works correctly")

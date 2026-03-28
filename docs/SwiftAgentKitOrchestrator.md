@@ -25,8 +25,17 @@
 | `mcpConnectionTimeout` | Seconds for MCP connections when the orchestrator creates its own `MCPManager` |
 | `toolCallTimeout` | Maximum wall-clock time (**seconds**) for a single tool dispatch (MCP, A2A, or `ToolManager`). Default **300** (5 minutes). On expiry, the model receives a tool-role error via `ToolCallTimeoutError` (see **Tool dispatch** below). |
 | `maxTokens`, `temperature`, `topP`, `additionalParameters` | Passed through to `LLMRequestConfig` for every LLM call |
+| `maxAgenticStepsPerUpdate` | Optional cap on LLM invocations (including tool follow-ups) per `updateConversation`; exceed → `OrchestratorError.agenticStepLimitReached` and `AgenticLoopState.maxIterationsReached` |
+| `toolInvocationPolicy` | Forwarded on each `LLMRequestConfig` (see ``ToolInvocationPolicy``); map in your `LLMProtocol` implementation |
+| `rejectAssistantTurnWithNoToolCallsWhenToolsAvailable` | When true and tools are non-empty, reject assistant turns with no tool calls **before any tool output exists in the working transcript**; append a correction message and retry (see `maxCorrectionRetries`) |
+| `maxCorrectionRetries` | Maximum correction passes after a rejected prose turn; `0` means a rejected turn throws `OrchestratorError.assistantTurnCorrectionRetriesExhausted` |
+| `correctionMessage` / `correctionRole` | Correction appended after rejection |
 
 All feature flags default to `false` unless you opt in.
+
+**When parameters apply:** `OrchestratorConfig` is immutable on the orchestrator. Each inner LLM call builds a fresh `LLMRequestConfig` from that config. To change `additionalParameters` or metadata **without** recreating the orchestrator, use ``OrchestratorInvocationOptions`` on ``updateConversation(_:availableTools:options:)`` (merged shallowly into JSON objects; per-invocation keys win).
+
+**Structured output vs tools (narrow):** For a single provider request, treat JSON / `response_format` “structured output” mode as **mutually exclusive** with native tool calling. Hosts should not send both in the same HTTP payload; use separate turns or disable tools for that request.
 
 ## Creating an orchestrator
 
@@ -53,7 +62,7 @@ let orchestrator = SwiftAgentKitOrchestrator(
 
 ## Conversation API
 
-### `updateConversation(_:availableTools:)`
+### `updateConversation(_:availableTools:)` / `updateConversation(_:availableTools:options:)`
 
 Processes the given message thread and:
 
@@ -71,6 +80,8 @@ try await orchestrator.updateConversation(
 ```
 
 You may pass a subset of definitions; the LLM only sees what you pass.
+
+Pass ``OrchestratorInvocationOptions`` to override or merge `additionalParameters`, set per-call `systemPromptMetadata`, override `toolInvocationPolicy` / `maxAgenticStepsPerUpdate`, etc., without changing `OrchestratorConfig`.
 
 ### `endMessageStream()`
 
@@ -127,6 +138,7 @@ Typical states (order may include repeats):
 
 - `started` — root entry  
 - `llmCall(iteration:)` — about to run an LLM step (iteration increases each recurse)  
+- `llmGenerationCompleted(LLMGenerationSummary)` — after each finished model generation (sync or streaming complete); includes tool names, token usage when available, and `innerStepIndex` matching `llmCall(iteration:)`  
 - `waitingForToolExecution` / `executingTools` — tool batch  
 - `betweenIterations` — about to call the LLM again with tool results  
 - `completed` — final answer without further tool calls in this branch  

@@ -71,6 +71,9 @@ try await orchestrator.updateConversation(messages, availableTools: [])
 | `mcpConnectionTimeout` | When the orchestrator creates `MCPManager` |
 | `toolCallTimeout` | Per-tool-call wall-clock limit (seconds); default **300**. See [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md#tool-dispatch-order). |
 | `maxTokens`, `temperature`, `topP`, `additionalParameters` | Passed to each `LLMRequestConfig` |
+| `maxAgenticStepsPerUpdate`, `toolInvocationPolicy`, `rejectAssistantTurnWithNoToolCallsWhenToolsAvailable`, `maxCorrectionRetries`, `correctionMessage`, `correctionRole` | Agent harness controls (see [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md)) |
+
+Per-invocation overrides: `updateConversation(_:availableTools:options:)` with `OrchestratorInvocationOptions`.
 
 ## Features
 

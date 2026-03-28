@@ -10,6 +10,38 @@ public enum AgenticLoopID: Hashable, Sendable, Codable {
     case orchestratorSession(UUID)
 }
 
+// MARK: - Generation summary
+
+/// Observed outcome of one completed model generation inside an agentic loop (beta).
+public struct LLMGenerationSummary: Sendable, Equatable, Codable {
+    /// 1-based index of this LLM completion within the current `updateConversation` tree (matches ``AgenticLoopState/llmCall(iteration:)`` for that step).
+    public var innerStepIndex: Int
+    public var hadToolCalls: Bool
+    public var toolNames: [String]
+    public var finishReason: String?
+    public var promptTokens: Int?
+    public var completionTokens: Int?
+    public var totalTokens: Int?
+
+    public init(
+        innerStepIndex: Int,
+        hadToolCalls: Bool,
+        toolNames: [String],
+        finishReason: String? = nil,
+        promptTokens: Int? = nil,
+        completionTokens: Int? = nil,
+        totalTokens: Int? = nil
+    ) {
+        self.innerStepIndex = innerStepIndex
+        self.hadToolCalls = hadToolCalls
+        self.toolNames = toolNames
+        self.finishReason = finishReason
+        self.promptTokens = promptTokens
+        self.completionTokens = completionTokens
+        self.totalTokens = totalTokens
+    }
+}
+
 // MARK: - State
 
 /// Coarse lifecycle for an agentic turn (tool loop until a final answer or failure).
@@ -18,6 +50,8 @@ public enum AgenticLoopID: Hashable, Sendable, Codable {
 public enum AgenticLoopState: Sendable, Equatable, Codable {
     case started
     case llmCall(iteration: Int)
+    /// Emitted after each finished model generation (sync or streaming complete) for observability.
+    case llmGenerationCompleted(LLMGenerationSummary)
     case waitingForToolExecution
     case executingTools
     case betweenIterations

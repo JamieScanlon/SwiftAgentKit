@@ -18,6 +18,8 @@ public struct LLMRequestConfig: Sendable {
     public let availableTools: [ToolDefinition]
     /// Additional model-specific parameters
     public let additionalParameters: JSON?
+    /// How tool calls are selected when ``availableTools`` is non-empty.
+    public let toolInvocationPolicy: ToolInvocationPolicy
     
     public init(
         maxTokens: Int? = nil,
@@ -25,7 +27,8 @@ public struct LLMRequestConfig: Sendable {
         topP: Double? = nil,
         stream: Bool = false,
         availableTools: [ToolDefinition] = [],
-        additionalParameters: JSON? = nil
+        additionalParameters: JSON? = nil,
+        toolInvocationPolicy: ToolInvocationPolicy = .automatic
     ) {
         self.maxTokens = maxTokens
         self.temperature = temperature
@@ -33,6 +36,7 @@ public struct LLMRequestConfig: Sendable {
         self.stream = stream
         self.availableTools = availableTools
         self.additionalParameters = additionalParameters
+        self.toolInvocationPolicy = toolInvocationPolicy
     }
 }
 
@@ -174,7 +178,8 @@ public extension LLMProtocol {
             topP: config.topP,
             stream: true,
             availableTools: config.availableTools,
-            additionalParameters: config.additionalParameters
+            additionalParameters: config.additionalParameters,
+            toolInvocationPolicy: config.toolInvocationPolicy
         )
     }
     
