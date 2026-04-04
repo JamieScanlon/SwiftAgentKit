@@ -60,6 +60,8 @@ let config = OpenAIAdapter.Configuration(
 let adapter = OpenAIAdapter(configuration: config)
 ```
 
+`OpenAIAdapter.Configuration` also separates **`timeoutInterval`** (HTTP client) from **`toolCallExecutionTimeout`** (per `ToolProvider.executeTool`); both default to 300 seconds unless you change them.
+
 **Supported Models:**
 - `gpt-4o` (default)
 - `gpt-4o-mini`

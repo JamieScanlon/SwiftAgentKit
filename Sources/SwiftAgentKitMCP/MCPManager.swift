@@ -66,6 +66,12 @@ public actor MCPManager {
     }
     public var toolCallsJson: [[String: Any]] = []
     public private(set) var clients: [MCPClient] = []
+
+    /// When the manager was initialized from a config file that set ``MCPConfig/toolCallTimeout``, that value is stored here. Otherwise `nil` (call sites fall back to the orchestrator’s default tool-call timeout).
+    public private(set) var toolCallTimeout: TimeInterval? = nil
+
+    /// Subprocess handles for locally booted stdio MCP servers (used by ``shutdown()``).
+    private var localServerProcesses: [String: Process] = [:]
     
     /// Initialize the MCPManager with a config file URL
     public func initialize(configFileURL: URL) async throws {
@@ -79,15 +85,43 @@ public actor MCPManager {
         }
     }
     
-    /// Initialize the A2AManager with an arrat of `MCPClient` objects
+    /// Initialize the MCPManager with an array of `MCPClient` objects (no local subprocess handles; ``shutdown()`` will not terminate external processes).
     public func initialize(clients: [MCPClient]) async throws {
+        toolCallTimeout = nil
         self.clients = clients
+        localServerProcesses = [:]
         await buildToolsJson()
+        state = .initialized
+    }
+
+    /// Disconnects MCP clients and terminates locally spawned MCP server subprocesses. Call this from app shutdown (e.g. `NSApplication.willTerminate`); it does not run when the process is killed with `SIGKILL`.
+    public func shutdown() async {
+        let processes = localServerProcesses
+        localServerProcesses.removeAll()
+        for client in clients {
+            await client.shutdown()
+        }
+        clients.removeAll()
+        for (_, process) in processes {
+            Shell.terminateProcess(process)
+        }
+        toolCallsJson = []
+        toolCallTimeout = nil
+        state = .notReady
     }
     
-    public func toolCall(_ toolCall: ToolCall) async throws -> [LLMResponse]? {
+    /// Dispatches a tool call to the first MCP client that handles it. Each client uses its own resolved timeout (per-server config, then root MCP config, then `orchestratorDefaultTimeout`).
+    public func toolCall(_ toolCall: ToolCall, orchestratorDefaultTimeout: TimeInterval = 300) async throws -> [LLMResponse]? {
         for client in clients {
-            if let contents = try await client.callTool(toolCall.name, arguments: toolCall.argumentsToValue()) {
+            let seconds = Self.resolvedToolCallTimeout(
+                client: client.toolCallTimeout,
+                configDefault: toolCallTimeout,
+                orchestrator: orchestratorDefaultTimeout
+            )
+            let contents = try await withToolCallTimeout(seconds, toolName: toolCall.name) {
+                try await client.callTool(toolCall.name, arguments: toolCall.argumentsToValue())
+            }
+            if let contents = contents {
                 var returnResponses: [LLMResponse] = []
                 for content in contents {
                     switch content {
@@ -101,6 +135,16 @@ public actor MCPManager {
             }
         }
         return nil
+    }
+    
+    private nonisolated static func resolvedToolCallTimeout(
+        client: TimeInterval?,
+        configDefault: TimeInterval?,
+        orchestrator: TimeInterval
+    ) -> TimeInterval {
+        if let v = client, v > 0 { return v }
+        if let v = configDefault, v > 0 { return v }
+        return orchestrator
     }
     
     /// Get all available tools from MCP clients
@@ -129,6 +173,7 @@ public actor MCPManager {
     }
     
     private func createClients(_ config: MCPConfig) async throws {
+        toolCallTimeout = config.toolCallTimeout
         var failedServers: [String] = []
         
         // Create clients for local servers (stdio)
@@ -138,18 +183,27 @@ public actor MCPManager {
             
             for (serverName, pipes) in serverPipes {
                 do {
-                    let client = MCPClient(name: serverName, version: "0.1.3", connectionTimeout: connectionTimeout)
+                    let boot = config.serverBootCalls.first(where: { $0.name == serverName })
+                    let client = MCPClient(
+                        name: serverName,
+                        version: "0.1.3",
+                        connectionTimeout: connectionTimeout,
+                        toolCallTimeout: boot?.toolCallTimeout
+                    )
                     try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
                     try await client.getTools()
                     clients.append(client)
+                    localServerProcesses[serverName] = pipes.process
                     logger.info(
                         "Successfully connected to local MCP server",
                         metadata: SwiftAgentKitLogging.metadata(("server", .string(serverName)))
                     )
                 } catch let mcpError as MCPClient.MCPClientError {
+                    Shell.terminateProcess(pipes.process)
                     logMCPClientError(mcpError, serverName: serverName)
                     failedServers.append(serverName)
                 } catch {
+                    Shell.terminateProcess(pipes.process)
                     logger.error(
                         "Failed to connect to local MCP server",
                         metadata: SwiftAgentKitLogging.metadata(
@@ -177,7 +231,8 @@ public actor MCPManager {
                 let client = MCPClient(
                     name: remoteConfig.name,
                     version: "0.1.3",
-                    connectionTimeout: remoteConfig.connectionTimeout ?? connectionTimeout
+                    connectionTimeout: remoteConfig.connectionTimeout ?? connectionTimeout,
+                    toolCallTimeout: remoteConfig.toolCallTimeout
                 )
 
                 if let handler = effectiveOAuthHandler {

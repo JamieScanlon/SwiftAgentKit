@@ -93,9 +93,11 @@ public actor MCPServer {
     /// Register a tool with the server using a ToolDefinition
     /// - Parameters:
     ///   - toolDefinition: The tool definition containing name, description, and parameters
+    ///   - toolCallTimeout: Optional server-side wall-clock limit (seconds) for this tool’s handler. Values ≤ 0 are ignored.
     ///   - handler: The closure that executes the tool
     public func registerTool(
         toolDefinition: ToolDefinition,
+        toolCallTimeout: TimeInterval? = nil,
         handler: @escaping @Sendable ([String: JSON]) async throws -> MCPToolResult
     ) async {
         // Convert ToolDefinition to JSON schema format
@@ -105,6 +107,7 @@ public actor MCPServer {
             name: toolDefinition.name,
             description: toolDefinition.description,
             inputSchema: inputSchema,
+            toolCallTimeout: toolCallTimeout,
             handler: handler
         )
         logger.info(

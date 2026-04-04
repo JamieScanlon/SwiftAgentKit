@@ -21,11 +21,11 @@ The framework is designed with a simple, direct API - no unnecessary abstraction
 
 | Module | Description | Documentation |
 |--------|-------------|---------------|
-| **SwiftAgentKit** | Core networking and utilities | [SwiftAgentKit.md](docs/SwiftAgentKit.md) |
+| **SwiftAgentKit** | Core networking and utilities | [SwiftAgentKit.md](docs/SwiftAgentKit.md) · [**LLM state & observation**](docs/LLMStateAndObservation.md) (`StatefulLLM`, `QueuedLLM`, state types) |
 | **SwiftAgentKitMCP** | Model Context Protocol support | [MCP.md](docs/MCP.md) |
 | **SwiftAgentKitA2A** | Agent-to-Agent communication | [A2A.md](docs/A2A.md) |
 | **SwiftAgentKitAdapters** | AI provider adapters and tool-aware architecture | [SwiftAgentKitAdapters.md](docs/SwiftAgentKitAdapters.md) |
-| **SwiftAgentKitOrchestrator** | LLM orchestrator with MCP and A2A support | [README](Sources/SwiftAgentKitOrchestrator/README.md) |
+| **SwiftAgentKitOrchestrator** | LLM orchestrator with MCP and A2A support | [SwiftAgentKitOrchestrator.md](docs/SwiftAgentKitOrchestrator.md) · [README](Sources/SwiftAgentKitOrchestrator/README.md) |
 | **SwiftAgentKitSkills** | Agent Skills specification support | [SwiftAgentKitSkills.md](docs/SwiftAgentKitSkills.md) |
 
 ## Quick Start
@@ -133,12 +133,20 @@ swift run RawFunctionToolsExample
 
 ## Documentation
 
-For detailed documentation on each module, see:
-- [SwiftAgentKit Module](docs/SwiftAgentKit.md) - Core networking and utilities
-- [MCP Module](docs/MCP.md) - Model Context Protocol support
-- [A2A Module](docs/A2A.md) - Agent-to-Agent communication
-- [SwiftAgentKitAdapters Module](docs/SwiftAgentKitAdapters.md) - AI provider adapters and tool-aware architecture
-- [SwiftAgentKitSkills Module](docs/SwiftAgentKitSkills.md) - Agent Skills specification support
+**LLM wrappers & state (read this when integrating an app):**
+
+- [**LLM state and observation**](docs/LLMStateAndObservation.md) — `StatefulLLM`, `QueuedLLM`, `LLMRuntimeState`, `LLMRequestState`, `AgenticLoopState`, and what to subscribe to.
+
+**Module guides:**
+
+- [SwiftAgentKit Module](docs/SwiftAgentKit.md) — Core networking, utilities, logging bootstrap
+- [LLMProtocolAdapter](docs/LLMProtocolAdapter.md) — A2A adapter, `agenticLoopUpdates`, per-call FIFO notes
+- [Agentic loop pattern](docs/AgenticLoopPattern.md) — Tool loop behavior inside `LLMProtocolAdapter`
+- [SwiftAgentKitOrchestrator](docs/SwiftAgentKitOrchestrator.md) — Orchestrator, `agenticLoopUpdates`
+- [MCP Module](docs/MCP.md) — Model Context Protocol
+- [A2A Module](docs/A2A.md) — Agent-to-Agent
+- [SwiftAgentKitAdapters Module](docs/SwiftAgentKitAdapters.md) — Provider adapters and tool-aware architecture
+- [SwiftAgentKitSkills Module](docs/SwiftAgentKitSkills.md) — Agent Skills specification
 
 ## Logging
 

@@ -1,138 +1,88 @@
 # SwiftAgentKitOrchestrator
 
-SwiftAgentKitOrchestrator provides building blocks for creating LLM orchestrators that can:
+Building blocks for LLM orchestrators that can:
 
-- Use tools through MCP (Model Context Protocol)
-- Communicate with other agents through A2A (Agent-to-Agent)
-- Execute local function tools via `ToolManager`
+- Use tools through **MCP** (Model Context Protocol)
+- Communicate with other agents through **A2A** (Agent-to-Agent)
+- Execute local function tools via **`ToolManager`**
+- Observe **instance**, **per-call**, and **agentic** state (see full doc below)
+
+**Full documentation:** [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md) (state streams, `updateConversation`, tool dispatch).
 
 ## Dependencies
 
-This module depends on:
-- `SwiftAgentKit` - Core functionality
-- `SwiftAgentKitA2A` - Agent-to-Agent communication
-- `SwiftAgentKitMCP` - Model Context Protocol support
-- `swift-log` - Cross-platform logging
+- `SwiftAgentKit`
+- `SwiftAgentKitA2A`
+- `SwiftAgentKitMCP`
+- `SwiftAgentKitAdapters`
+- `swift-log`
 
-## Usage
+## Quick start
 
 ```swift
 import SwiftAgentKitOrchestrator
 import SwiftAgentKit
 
-// Create an LLM that conforms to LLMProtocol
-let llm: LLMProtocol = SomeLLMImplementation(logger: logger)
-
-// Create orchestrator configuration
 let config = OrchestratorConfig(
     streamingEnabled: true,
-    mcpEnabled: true,
+    mcpEnabled: false,
     a2aEnabled: false
 )
 
-// Initialize the orchestrator with the LLM and configuration
-let orchestrator = SwiftAgentKitOrchestrator(llm: llm, config: config, logger: logger)
+let orchestrator = SwiftAgentKitOrchestrator(llm: myLLM, config: config)
 
-// Access the underlying LLM if needed
-let llmInstance = orchestrator.llmProtocol
-
-// Access the configuration
-let orchestratorConfig = orchestrator.orchestratorConfig
-
-// Process a conversation
-let conversation = [
-    Message(id: UUID(), role: .user, content: "Hello"),
-    Message(id: UUID(), role: .assistant, content: "Hi there!")
-]
-
-// Get the message stream for complete messages
+// Subscribe to complete messages (create the stream before updateConversation)
 let messageStream = await orchestrator.messageStream
-var finalConversation: [Message]?
-
-// Listen for complete messages
 Task {
     for await message in messageStream {
-        print("Received complete message: \(message.content)")
-        finalConversation = finalConversation ?? []
-        finalConversation?.append(message)
+        print("Message:", message.role, message.content.prefix(80))
     }
 }
 
-// Process the conversation (this will publish to the streams)
-try await orchestrator.updateConversation(conversation, availableTools: [])
+// Optional: agentic tool-loop progress (one session id per top-level updateConversation)
+let agenticLoop = await orchestrator.agenticLoopUpdates
+Task {
+    for await (_, state) in agenticLoop {
+        print("Agentic:", state)
+    }
+}
 
-// Note: The orchestrator automatically manages stream lifecycle and cleanup
-
-// Example with available tools
-let availableTools = [
-    ToolDefinition(
-        name: "calculator",
-        description: "A simple calculator",
-        parameters: [
-            .init(name: "expression", description: "Mathematical expression", type: "string", required: true)
-        ],
-        type: .function
-    )
+let messages = [
+    Message(id: UUID(), role: .user, content: "Hello!")
 ]
 
-let conversationWithTools = [
-    Message(id: UUID(), role: .user, content: "What's 2 + 2?")
-]
-
-let toolConversationStream = orchestrator.updateConversation(conversationWithTools, availableTools: availableTools)
+try await orchestrator.updateConversation(messages, availableTools: [])
 ```
 
-## Features
+### API reminders
 
-- **LLM Orchestration**: Coordinate multiple LLM interactions
-- **Tool Integration**: Use MCP tools for enhanced capabilities
-- **Agent Communication**: Connect with other agents via A2A
-- **Cross-platform**: Works on macOS, iOS, and visionOS
-- **Automatic Stream Management**: Handles streaming lifecycle and cleanup automatically
+- `SwiftAgentKitOrchestrator` is an **`actor`** — use `await` to access properties and methods.
+- Public surface: `llm`, `config`, `logger`, `mcpManager`, `a2aManager`, `toolManager`, `allAvailableTools`, `messageStream`, `partialContentStream`, `llmCurrentState`, `llmStateUpdates`, **`agenticLoopUpdates`**, `updateConversation`, `endMessageStream`.
+- **`updateConversation`** is `async throws` and returns **`Void`** (it pushes to streams).
 
 ## Configuration
 
-The `OrchestratorConfig` struct allows you to enable or disable specific features:
+`OrchestratorConfig` includes:
 
-- **`streamingEnabled`**: Enable streaming responses from the LLM
-- **`mcpEnabled`**: Enable MCP (Model Context Protocol) tool usage
-- **`a2aEnabled`**: Enable A2A (Agent-to-Agent) communication
+| Flag / field | Meaning |
+|----------------|--------|
+| `streamingEnabled` | `stream` vs `send` for LLM calls |
+| `mcpEnabled` / `a2aEnabled` | Enable those subsystems |
+| `mcpConnectionTimeout` | When the orchestrator creates `MCPManager` |
+| `toolCallTimeout` | Per-tool-call wall-clock limit (seconds); default **300**. See [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md#tool-dispatch-order). |
+| `maxTokens`, `temperature`, `topP`, `additionalParameters` | Passed to each `LLMRequestConfig` |
+| `maxAgenticStepsPerUpdate`, `toolInvocationPolicy`, `rejectAssistantTurnWithNoToolCallsWhenToolsAvailable`, `maxCorrectionRetries`, `correctionMessage`, `correctionRole` | Agent harness controls (see [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md)) |
 
-All configuration options default to `false` for safety.
+Per-invocation overrides: `updateConversation(_:availableTools:options:)` with `OrchestratorInvocationOptions`.
 
-## Main Functionality
+## Features
 
-The orchestrator provides an `updateConversation` method that:
-
-- Takes an array of messages representing the conversation thread
-- Takes an optional array of available tools that can be used during conversation processing
-- Supports both synchronous and streaming responses based on configuration
-- Preserves the original message order
-- Handles errors gracefully with proper logging
-- Automatically manages streaming lifecycle and cleanup
-
-### Streaming Behavior
-
-When `streamingEnabled` is `true`, the orchestrator:
-
-- Publishes partial content chunks to the `partialContentStream` as they arrive
-- Automatically finishes and cleans up the partial content stream when streaming completes
-- Publishes the final complete message to the `messageStream`
-- Handles tool calls and recursive conversation updates seamlessly
-
-### Tool Errors and Replanning
-
-When a tool execution fails, the orchestrator sends the failure back as a tool message with the original `toolCallId`. This allows the LLM to recognize the failure and select a different strategy or tool in a follow-up step.
-
-### Stream Management
-
-The orchestrator provides two main streams:
-
-- **`messageStream`**: Publishes complete messages (user, assistant, and tool messages)
-- **`partialContentStream`**: Publishes streaming text chunks during LLM responses
-
-Both streams are automatically managed and cleaned up when appropriate. The partial content stream is automatically finished when streaming completes, ensuring proper resource management.
+- Recursive agentic loop with tool results fed back to the LLM
+- **Partial** streaming chunks (`partialContentStream`) when streaming is enabled
+- **LLM runtime** visibility via `llmStateUpdates`
+- **Agentic** visibility via `agenticLoopUpdates` (`AgenticLoopID.orchestratorSession`, `AgenticLoopState`)
+- Per-call **`LLMRequestState`** (including **`queued`**) only if you wrap the LLM with `StatefulLLM` / `QueuedLLM` yourself — see [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md)
 
 ## Examples
 
-See `Examples/OrchestratorExample/` for usage examples. 
+See **`Examples/OrchestratorExample/`**.

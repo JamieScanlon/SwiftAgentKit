@@ -99,6 +99,73 @@ struct MCPConfigTests {
     
     // MARK: - MCPConfigHelper Tests
     
+    @Test("MCPConfigHelper should parse root toolCallTimeout and timeout alias")
+    func testParseRootToolCallTimeout() async throws {
+        let withExplicitKey = """
+        {
+            "toolCallTimeout": 120.5,
+            "mcpServers": {}
+        }
+        """
+        let temp1 = createTempConfigFile(content: withExplicitKey)
+        defer { try? FileManager.default.removeItem(at: temp1) }
+        let cfg1 = try MCPConfigHelper.parseMCPConfig(fileURL: temp1)
+        #expect(cfg1.toolCallTimeout == 120.5)
+        
+        let withTimeoutAlias = """
+        {
+            "timeout": 90,
+            "mcpServers": {}
+        }
+        """
+        let temp2 = createTempConfigFile(content: withTimeoutAlias)
+        defer { try? FileManager.default.removeItem(at: temp2) }
+        let cfg2 = try MCPConfigHelper.parseMCPConfig(fileURL: temp2)
+        #expect(cfg2.toolCallTimeout == 90)
+        
+        let toolCallWins = """
+        {
+            "toolCallTimeout": 10,
+            "timeout": 99,
+            "mcpServers": {}
+        }
+        """
+        let temp3 = createTempConfigFile(content: toolCallWins)
+        defer { try? FileManager.default.removeItem(at: temp3) }
+        let cfg3 = try MCPConfigHelper.parseMCPConfig(fileURL: temp3)
+        #expect(cfg3.toolCallTimeout == 10)
+    }
+    
+    @Test("MCPConfigHelper should parse per-server toolCallTimeout for local and remote")
+    func testParsePerServerToolCallTimeout() throws {
+        let json = """
+        {
+            "toolCallTimeout": 300,
+            "mcpServers": {
+                "local-a": {
+                    "command": "echo",
+                    "args": [],
+                    "env": {},
+                    "toolCallTimeout": 45
+                }
+            },
+            "remoteServers": {
+                "remote-b": {
+                    "url": "https://example.com/mcp",
+                    "timeout": 99
+                }
+            }
+        }
+        """
+        let tempURL = createTempConfigFile(content: json)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+        let cfg = try MCPConfigHelper.parseMCPConfig(fileURL: tempURL)
+        #expect(cfg.toolCallTimeout == 300)
+        #expect(cfg.serverBootCalls.first(where: { $0.name == "local-a" })?.toolCallTimeout == 45)
+        let remote = cfg.remoteServers.first(where: { $0.name == "remote-b" })
+        #expect(remote?.toolCallTimeout == 99)
+    }
+    
     @Test("MCPConfigHelper should parse local servers only")
     func testParseLocalServersOnly() async throws {
         let configJSON = """

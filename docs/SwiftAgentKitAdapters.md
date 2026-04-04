@@ -11,6 +11,8 @@ This module includes adapters for:
 
 All adapters implement the `AgentAdapter` protocol from `SwiftAgentKitA2A`, allowing them to be used with A2A servers. As of the latest API, adapter handlers accept an existing `A2ATask` and write results as `artifacts` and status updates into a shared `TaskStore` rather than returning a response object.
 
+For **`LLMProtocolAdapter`**, **`StatefulLLM`**, **`QueuedLLM`**, and the runtime / per-call / agentic state streams, see [**LLM state and observation**](LLMStateAndObservation.md) and [LLMProtocolAdapter](LLMProtocolAdapter.md).
+
 ## Tool-Aware Adapters
 
 The module also provides a composable architecture for building adapters with A2A and MCP tool calling capabilities:
@@ -78,6 +80,10 @@ let adapterWithTokens = OpenAIAdapter(
 - `presencePenalty`: Reduces repetition of any token (-2.0 to 2.0)
 - `stopSequences`: Array of strings that stop generation when encountered
 - `user`: User identifier for tracking and moderation
+- `timeoutInterval`: HTTP request timeout for the OpenAI **client** (seconds; default 300)
+- `toolCallExecutionTimeout`: Maximum wall-clock time per **`ToolProvider.executeTool`** call (seconds; default **300**). Separate from `timeoutInterval`. On expiry, tool errors are appended for the model instead of hanging the task.
+
+`LLMProtocolAdapter.Configuration` exposes the same idea as **`toolCallTimeout`** (default 300 seconds) for each `executeTool` invocation.
 
 ### Advanced Configuration
 

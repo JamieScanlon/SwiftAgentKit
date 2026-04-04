@@ -2,6 +2,9 @@
 
 The `LLMProtocolAdapter` is a generic adapter that wraps any `LLMProtocol` implementation and makes it compatible with the A2A (Agent-to-Agent) protocol. This adapter provides a bridge between the SwiftAgentKit's LLM interface and the A2A server infrastructure.
 
+> **Related**  
+> For **`StatefulLLM`**, **`QueuedLLM`**, and the full three-layer state model (**runtime / per-call / agentic**), see [**LLM state and observation**](LLMStateAndObservation.md).
+
 > ℹ️ **Logging tip**  
 > The adapter now emits detailed debug information (agentic iterations, tool execution, streaming progress) through `SwiftAgentKitLogging`. Bootstrap once prior to creating the adapter:
 > ```swift
@@ -30,9 +33,79 @@ The `LLMProtocolAdapter` allows you to:
 - **A2A Compatibility**: Full integration with the A2A protocol
 - **Conversation History**: Maintains context across multiple messages
 - **Streaming Support**: Real-time streaming responses
+- **Runtime State Visibility**: Observe reasoning/generating/completion transitions on the shared LLM instance
 - **Image Generation**: Automatic detection and support for image generation requests
 - **Configurable**: Customizable parameters and system prompts
 - **Error Handling**: Graceful error handling and recovery
+
+### Runtime State Tracking
+
+`LLMProtocol` now exposes:
+
+- `currentState: LLMRuntimeState`
+- `stateUpdates: AsyncStream<LLMRuntimeState>`
+
+If your model implementation does not override these properties, defaults are still provided (`.idle(.ready)` and a single-value stream), so existing conformers remain source-compatible.
+
+For end-to-end runtime state transitions without modifying your existing LLM, wrap it with `StatefulLLM`:
+
+```swift
+import SwiftAgentKit
+import SwiftAgentKitAdapters
+
+let rawLLM = MyCustomLLM(model: "my-model")
+let trackedLLM = StatefulLLM(baseLLM: rawLLM)
+
+let adapter = LLMProtocolAdapter(
+    llm: trackedLLM,
+    model: "my-model"
+)
+
+Task {
+    for await state in trackedLLM.stateUpdates {
+        print("LLM state:", state)
+    }
+}
+```
+
+### Three layers of state
+
+| Layer | Type | Where to observe |
+|-------|------|-------------------|
+| **Instance** (shared LLM) | `LLMRuntimeState` | `llm.stateUpdates` / `StatefulLLM` |
+| **Per-call** (one `send` / `stream` / `generateImage`) | `LLMRequestState` | `StatefulLLM.requestStateUpdates`, `QueuedLLM.requestStateUpdates` |
+| **Agentic** (full tool loop until final answer) | `AgenticLoopState` | `LLMProtocolAdapter.agenticLoopUpdates`, [`SwiftAgentKitOrchestrator.agenticLoopUpdates`](SwiftAgentKitOrchestrator.md#agentic-loop-state-agenticloopstate) |
+
+### Per-call request state (`LLMRequestState`)
+
+`LLMRuntimeState` describes the **shared LLM instance** (idle vs generating). For **each** `send` / `stream` / `generateImage` invocation, observe **`LLMRequestState`**:
+
+| API | What you get |
+|-----|----------------|
+| `StatefulLLM.requestStateUpdates` | `active`, generation sub-phases (`generating`, `streaming` when applicable), `completed` / `failed` — **no** `queued` |
+| `QueuedLLM.requestStateUpdates` | Same timeline **plus** `queued` while waiting for a queue slot (compose `QueuedLLM(base: StatefulLLM(base: provider))` for both) |
+
+### Agentic loop state (`AgenticLoopState`)
+
+For **`LLMProtocolAdapter`**, each agentic run is keyed by **`AgenticLoopID.a2a(taskId:contextId:)`**. Subscribe to **`adapter.agenticLoopUpdates`** (`AsyncStream<(AgenticLoopID, AgenticLoopState)>`) for coarse progress: `started`, `llmCall(iteration:)`, `waitingForToolExecution`, `executingTools`, `betweenIterations`, `completed`, `failed`, `maxIterationsReached`.
+
+For **`SwiftAgentKitOrchestrator`**, the id is **`AgenticLoopID.orchestratorSession(UUID)`** for one top-level **`updateConversation`** (including recursive tool continuations). Use **`await orchestrator.agenticLoopUpdates`**. See [SwiftAgentKitOrchestrator](SwiftAgentKitOrchestrator.md).
+
+**Agentic** “waiting for tool result” happens **between** LLM calls in the adapter/orchestrator loop; it is **not** a single `LLMRequestState` value. **`queued`** remains per-call only (see below).
+
+### Observing when the agentic loop is waiting on the FIFO queue
+
+`LLMProtocolAdapter` and `SwiftAgentKitOrchestrator` take `any LLMProtocol`; they do **not** surface per-request phases on the protocol itself. If you wrap the base LLM with **`QueuedLLM`**, FIFO wait appears only on **`QueuedLLM.requestStateUpdates`**, not on the shared **`stateUpdates`** stream.
+
+**`queued` is not an agentic-loop enum case.** Queue contention is **per** `send` / `stream` / `generateImage`. **`agenticLoopUpdates`** (adapter / orchestrator) answers “where are we in the tool loop?”; **`requestStateUpdates`** from the **`QueuedLLM`** you injected answers “is *this* call blocked before it reaches the inner LLM?”
+
+**How to tell the agentic turn is stalled because the request is still queued:**
+
+1. **Subscribe to both** **`agenticLoopUpdates`** (from `LLMProtocolAdapter` or `SwiftAgentKitOrchestrator`) **and** **`requestStateUpdates`** on the **same** **`QueuedLLM`** instance you pass into the adapter or orchestrator (e.g. `QueuedLLM(baseLLM: StatefulLLM(baseLLM: provider))`). You must **keep a reference** to that wrapper; the adapter does not forward per-request phases.
+2. **Correlate by timeline:** Instrumentation publishes an agentic LLM-bound state (e.g. **`llmCall(iteration:)`**) **immediately before** the `await llm.send` / `stream` that goes through `QueuedLLM`. While that call is blocked on the FIFO, **`QueuedLLM`** emits **`(LLMRequestID, .queued)`** for that invocation, then **`active`** (and later phases) after a slot is acquired. So: agentic state shows an in-flight LLM iteration **and** the latest per-request state for the current underlying call is **`.queued`** ⇒ the loop is waiting **because** the request is still in the FIFO queue (not yet executing on the base LLM).
+3. **Optional later:** Stronger correlation (e.g. pairing **agentic** and **request** IDs in TaskLocals or docs) if you need to disambiguate overlapping sessions; not required for a single in-flight turn.
+
+For **`SwiftAgentKitOrchestrator`**, the same applies: observe **`agenticLoopUpdates`** on the orchestrator **and** **`QueuedLLM.requestStateUpdates`** on the wrapper you supply as the LLM.
 
 ## Basic Usage
 
@@ -63,16 +136,20 @@ try await server.start()
 
 ### Configuration Options
 
-The `LLMProtocolAdapter.Configuration` struct supports the following parameters:
+The `LLMProtocolAdapter.Configuration` struct includes model parameters, agent card fields, **`maxAgenticIterations`**, and **`toolCallTimeout`** (seconds, default **300**). The latter bounds each **`ToolProvider.executeTool`** call via `withToolCallTimeout` so a hung tool does not stall the agentic loop; timeouts surface as tool-role errors for the model. For the full member list, see the struct in source.
 
 ```swift
+// Not exhaustive — see Sources/SwiftAgentKitAdapters/Adapters/LLMProtocolAdapter.swift
 public struct Configuration: Sendable {
-    public let model: String                    // Model identifier
-    public let maxTokens: Int?                  // Maximum tokens to generate
-    public let temperature: Double?             // Response randomness (0.0-2.0)
-    public let topP: Double?                    // Top-p sampling parameter
-    public let systemPrompt: DynamicPrompt?     // System prompt for the LLM (supports token replacement)
-    public let additionalParameters: JSON?      // Model-specific parameters
+    public let model: String
+    public let maxTokens: Int?
+    public let temperature: Double?
+    public let topP: Double?
+    public let systemPrompt: DynamicPrompt?
+    public let additionalParameters: JSON?
+    public let maxAgenticIterations: Int
+    public let toolCallTimeout: TimeInterval  // default 300
+    // … agentName, agentDescription, cardCapabilities, skills, input/output modes, etc.
 }
 ```
 

@@ -18,6 +18,8 @@ public struct LLMRequestConfig: Sendable {
     public let availableTools: [ToolDefinition]
     /// Additional model-specific parameters
     public let additionalParameters: JSON?
+    /// How tool calls are selected when ``availableTools`` is non-empty.
+    public let toolInvocationPolicy: ToolInvocationPolicy
     
     public init(
         maxTokens: Int? = nil,
@@ -25,7 +27,8 @@ public struct LLMRequestConfig: Sendable {
         topP: Double? = nil,
         stream: Bool = false,
         availableTools: [ToolDefinition] = [],
-        additionalParameters: JSON? = nil
+        additionalParameters: JSON? = nil,
+        toolInvocationPolicy: ToolInvocationPolicy = .automatic
     ) {
         self.maxTokens = maxTokens
         self.temperature = temperature
@@ -33,6 +36,7 @@ public struct LLMRequestConfig: Sendable {
         self.stream = stream
         self.availableTools = availableTools
         self.additionalParameters = additionalParameters
+        self.toolInvocationPolicy = toolInvocationPolicy
     }
 }
 
@@ -74,6 +78,19 @@ public struct ImageGenerationRequestConfig: Sendable {
 
 /// A common protocol for interacting with LLMs
 public protocol LLMProtocol: Sendable {
+    /// The current runtime state for this LLM.
+    ///
+    /// Implementers can expose detailed execution phases (e.g. reasoning, responding).
+    /// Tool-waiting and queue position are **per-request** concerns; see `LLMRequestState`
+    /// and `StatefulLLM` / `QueuedLLM`. The default implementation returns `.idle(.ready)`.
+    var currentState: LLMRuntimeState { get }
+
+    /// A stream of runtime state transitions for this LLM.
+    ///
+    /// The default implementation yields `currentState` once and then finishes.
+    /// Implementers that support live updates should override and continuously
+    /// emit transitions as request processing progresses.
+    var stateUpdates: AsyncStream<LLMRuntimeState> { get }
 
     /// Returns the model name for this LLM instance
     func getModelName() -> String
@@ -124,6 +141,16 @@ public struct ImageGenerationResponse: Sendable {
 
 /// Default implementations for the LLMProtocol
 public extension LLMProtocol {
+    var currentState: LLMRuntimeState {
+        .idle(.ready)
+    }
+
+    var stateUpdates: AsyncStream<LLMRuntimeState> {
+        AsyncStream { continuation in
+            continuation.yield(currentState)
+            continuation.finish()
+        }
+    }
     
     /// Send a message to the LLM and get a response
     /// - Parameters:
@@ -151,7 +178,8 @@ public extension LLMProtocol {
             topP: config.topP,
             stream: true,
             availableTools: config.availableTools,
-            additionalParameters: config.additionalParameters
+            additionalParameters: config.additionalParameters,
+            toolInvocationPolicy: config.toolInvocationPolicy
         )
     }
     
@@ -169,6 +197,7 @@ public enum LLMCapability: String, Codable, Sendable {
     case tools
     case insert
     case vision
+    case audio
     case embedding
     case thinking
     case imageGeneration
@@ -200,6 +229,10 @@ public enum LLMError: Error, LocalizedError, Sendable {
     // Image generation specific errors
     case imageGenerationError(ImageGenerationError)
     
+    // Queue specific errors
+    case queueFull
+    case queueTimeout
+    
     public var errorDescription: String? {
         switch self {
         case .invalidRequest(let message):
@@ -224,6 +257,10 @@ public enum LLMError: Error, LocalizedError, Sendable {
             return "Unknown error: \(error.localizedDescription)"
         case .imageGenerationError(let error):
             return error.errorDescription
+        case .queueFull:
+            return "Request rejected: LLM queue is at capacity"
+        case .queueTimeout:
+            return "Request timed out waiting in the LLM queue"
         }
     }
 }

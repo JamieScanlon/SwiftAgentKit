@@ -28,6 +28,13 @@ The SwiftAgentKit module provides core networking capabilities and utilities tha
 
 ### Utilities
 - **Shell**: Executes shell commands and manages subprocesses
+- **Tool call timeout**: **`withToolCallTimeout(_:toolName:operation:)`** and **`ToolCallTimeoutError`** bound each tool invocation (used by `SwiftAgentKitOrchestrator` and A2A adapters). See [`SwiftAgentKitOrchestrator`](SwiftAgentKitOrchestrator.md#tool-dispatch-order).
+
+### LLM (source layout)
+
+LLM-focused types live under **`Sources/SwiftAgentKit/LLM/`** (e.g. `LLMProtocol`, `LLMResponse`, `StatefulLLM` / `QueuedLLM`, `AgenticLoopState`). Shared conversation types such as **`Message`** and **`ToolCall`** remain at the module root. See [`LLM/README.md`](../Sources/SwiftAgentKit/LLM/README.md) for a file index.
+
+**Public guide (wrappers + all state types + observation):** [**LLM state and observation**](LLMStateAndObservation.md).
 
 ## Example: Basic REST API Usage
 

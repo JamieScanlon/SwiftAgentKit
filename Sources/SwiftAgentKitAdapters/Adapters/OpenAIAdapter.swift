@@ -32,9 +32,14 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         
         // Additional OpenAI configuration options
         public let organizationIdentifier: String?
+        /// Request timeout for the OpenAI HTTP client (seconds).
         public let timeoutInterval: TimeInterval
+        /// Maximum wall-clock time for each `ToolProvider.executeTool` call (seconds). Distinct from ``timeoutInterval``.
+        public let toolCallExecutionTimeout: TimeInterval
         public let customHeaders: [String: String]
         public let parsingOptions: ParsingOptions
+        /// Maps to OpenAI Chat Completions `tool_choice` when tools are non-empty (see ``ToolInvocationPolicy``).
+        public let toolInvocationPolicy: ToolInvocationPolicy
         
         public init(
             apiKey: String,
@@ -50,8 +55,10 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             user: String? = nil,
             organizationIdentifier: String? = nil,
             timeoutInterval: TimeInterval = 300.0,
+            toolCallExecutionTimeout: TimeInterval = 300.0,
             customHeaders: [String: String] = [:],
-            parsingOptions: ParsingOptions = []
+            parsingOptions: ParsingOptions = [],
+            toolInvocationPolicy: ToolInvocationPolicy = .automatic
         ) {
             self.apiKey = apiKey
             self.model = model
@@ -66,8 +73,10 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             self.user = user
             self.organizationIdentifier = organizationIdentifier
             self.timeoutInterval = timeoutInterval
+            self.toolCallExecutionTimeout = toolCallExecutionTimeout
             self.customHeaders = customHeaders
             self.parsingOptions = parsingOptions
+            self.toolInvocationPolicy = toolInvocationPolicy
         }
     }
     
@@ -201,6 +210,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         baseURL: URL = URL(string: "https://api.openai.com/v1")!,
         organizationIdentifier: String? = nil,
         timeoutInterval: TimeInterval = 300.0,
+        toolCallExecutionTimeout: TimeInterval = 300.0,
         customHeaders: [String: String] = [:],
         parsingOptions: ParsingOptions = [],
         logger: Logger? = nil
@@ -212,6 +222,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             systemPrompt: systemPrompt,
             organizationIdentifier: organizationIdentifier,
             timeoutInterval: timeoutInterval,
+            toolCallExecutionTimeout: toolCallExecutionTimeout,
             customHeaders: customHeaders,
             parsingOptions: parsingOptions
         ), logger: logger)
@@ -248,6 +259,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         baseURL: URL = URL(string: "https://api.openai.com/v1")!,
         organizationIdentifier: String? = nil,
         timeoutInterval: TimeInterval = 300.0,
+        toolCallExecutionTimeout: TimeInterval = 300.0,
         customHeaders: [String: String] = [:],
         parsingOptions: ParsingOptions = [],
         logger: Logger? = nil
@@ -260,6 +272,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             systemPrompt: systemPromptDynamic,
             organizationIdentifier: organizationIdentifier,
             timeoutInterval: timeoutInterval,
+            toolCallExecutionTimeout: toolCallExecutionTimeout,
             customHeaders: customHeaders,
             parsingOptions: parsingOptions
         ), logger: logger)
@@ -780,13 +793,14 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             }
             
             // Call OpenAI API with tools
-            let response = try await callOpenAIWithTools(a2aMessage: params.message, metadata: params.metadata, conversationHistory: conversationHistory, tools: tools)
+            let (choice, usage) = try await callOpenAIWithTools(a2aMessage: params.message, metadata: params.metadata, conversationHistory: conversationHistory, tools: tools)
             
             // Look at the text response for any tool calls not parsed automatically
-            var llmResponse = LLMResponse.llmResponse(from: response.message.content ?? "", availableTools: availableToolCalls)
+            var llmResponse = LLMResponse.llmResponse(from: choice.message.content ?? "", availableTools: availableToolCalls)
             // Add the Tool calls the LLM identified automatically
-            let myToolCalls = response.message.toolCalls?.map({ $0.toToolCall() }) ?? []
+            let myToolCalls = choice.message.toolCalls?.map({ $0.toToolCall() }) ?? []
             llmResponse = llmResponse.appending(toolCalls: myToolCalls)
+            llmResponse = llmResponse.updatingMetadata(with: llmMetadata(from: usage, finishReason: choice.finishReason))
             
             // Build message parts from response content and tool calls
             // Add the non tool call content
@@ -799,7 +813,16 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             var toolFileArtifacts: [Artifact] = []
             for toolCall in llmResponse.toolCalls {
                 for provider in toolProviders {
-                    let result = try await provider.executeTool(toolCall)
+                    let result: ToolResult
+                    do {
+                        result = try await withToolCallTimeout(config.toolCallExecutionTimeout, toolName: toolCall.name) {
+                            try await provider.executeTool(toolCall)
+                        }
+                    } catch {
+                        let errorText = (error as? ToolCallTimeoutError)?.message ?? "Tool execution failed: \(error)"
+                        responseParts.append(.text(text: "Error Executing Tool: \(toolCall.name)\nError: \(errorText)"))
+                        continue
+                    }
                     if result.success {
                         responseParts.append(.text(text: result.content))
                         
@@ -807,7 +830,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                         if let metadataDict = result.metadata.literalValue as? [String: Any],
                            let fileResources = metadataDict["fileResources"] as? [[String: Any]] {
                             for (index, fileResource) in fileResources.enumerated() {
-                                if let uri = fileResource["uri"] as? String,
+                                if fileResource["uri"] as? String != nil,
                                    let mimeType = fileResource["mimeType"] as? String,
                                    let base64Data = fileResource["data"] as? String,
                                    let fileData = Data(base64Encoded: base64Data) {
@@ -1013,11 +1036,20 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             var accumulatedText = ""
             var accumulatedTools: [ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall] = []
             var partialArtifacts: [Artifact] = []
+            var streamUsage: ChatResult.CompletionUsage?
+            var streamFinishReason: String?
             
-            for try await chunk in stream {
-                let text = chunk.content ?? ""
+            for try await streamResult in stream {
+                if let u = streamResult.usage {
+                    streamUsage = u
+                }
+                if let fr = streamResult.choices.first?.finishReason {
+                    streamFinishReason = fr.rawValue
+                }
+                guard let delta = streamResult.choices.first?.delta else { continue }
+                let text = delta.content ?? ""
                 accumulatedText += text
-                accumulatedTools.append(contentsOf: chunk.toolCalls ?? [])
+                accumulatedTools.append(contentsOf: delta.toolCalls ?? [])
                 
                 // Create artifact update event
                 let artifact = Artifact(
@@ -1056,6 +1088,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             // Add the Tool calls the LLM identified automatically
             let myToolCalls = accumulatedTools.compactMap({ $0.toToolCall() })
             llmResponse = llmResponse.appending(toolCalls: myToolCalls)
+            llmResponse = llmResponse.updatingMetadata(with: llmMetadata(from: streamUsage, finishReason: streamFinishReason))
             
             // Build message parts from response content and tool calls
             // Add the non tool call content
@@ -1068,7 +1101,16 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             var toolFileArtifacts: [Artifact] = []
             for toolCall in llmResponse.toolCalls {
                 for provider in toolProviders {
-                    let result = try await provider.executeTool(toolCall)
+                    let result: ToolResult
+                    do {
+                        result = try await withToolCallTimeout(config.toolCallExecutionTimeout, toolName: toolCall.name) {
+                            try await provider.executeTool(toolCall)
+                        }
+                    } catch {
+                        let errorText = (error as? ToolCallTimeoutError)?.message ?? "Tool execution failed: \(error)"
+                        responseParts.append(.text(text: "Error Executing Tool: \(toolCall.name)\nError: \(errorText)"))
+                        continue
+                    }
                     if result.success {
                         responseParts.append(.text(text: result.content))
                         
@@ -1076,7 +1118,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
                         if let metadataDict = result.metadata.literalValue as? [String: Any],
                            let fileResources = metadataDict["fileResources"] as? [[String: Any]] {
                             for (index, fileResource) in fileResources.enumerated() {
-                                if let uri = fileResource["uri"] as? String,
+                                if fileResource["uri"] as? String != nil,
                                    let mimeType = fileResource["mimeType"] as? String,
                                    let base64Data = fileResource["data"] as? String,
                                    let fileData = Data(base64Encoded: base64Data) {
@@ -1211,7 +1253,17 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - Private Helper Methods for Tools
     
-    private func callOpenAIWithTools(a2aMessage: A2AMessage, metadata: JSON?, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> ChatResult.Choice {
+    /// Maps ``ToolInvocationPolicy`` to OpenAI `tool_choice` when the tools array is non-empty.
+    private static func toolChoiceForOpenAI(policy: ToolInvocationPolicy, toolsNonEmpty: Bool) -> ChatQuery.ChatCompletionFunctionCallOptionParam? {
+        guard toolsNonEmpty else { return nil }
+        switch policy {
+        case .automatic: return .auto
+        case .required: return .required
+        case .none: return ChatQuery.ChatCompletionFunctionCallOptionParam.none
+        }
+    }
+    
+    private func callOpenAIWithTools(a2aMessage: A2AMessage, metadata: JSON?, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> (choice: ChatResult.Choice, usage: ChatResult.CompletionUsage?) {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
         
@@ -1240,6 +1292,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             presencePenalty: config.presencePenalty,
             stop: config.stopSequences.map { .init(stringList: $0) },
             temperature: config.temperature,
+            toolChoice: Self.toolChoiceForOpenAI(policy: config.toolInvocationPolicy, toolsNonEmpty: !tools.isEmpty),
             tools: tools,
             topP: config.topP,
             user: config.user
@@ -1251,7 +1304,17 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             throw OpenAIAdapterError.invalidResponse
         }
         
-        return firstChoice
+        return (firstChoice, response.usage)
+    }
+    
+    private func llmMetadata(from usage: ChatResult.CompletionUsage?, finishReason: String?) -> LLMMetadata? {
+        guard let usage else { return nil }
+        return LLMMetadata(
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            totalTokens: usage.totalTokens,
+            finishReason: finishReason
+        )
     }
     
     private func convertA2ARoleToMessageRole(_ a2aRole: String) -> ChatQuery.ChatCompletionMessageParam.Role {
@@ -1356,7 +1419,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         )
     }
     
-    private func streamFromOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> AsyncThrowingStream<ChatStreamResult.Choice.ChoiceDelta, Error> {
+    private func streamFromOpenAIWithTools(prompt: String, conversationHistory: [ChatQuery.ChatCompletionMessageParam] = [], tools: [ChatQuery.ChatCompletionToolParam]) async throws -> AsyncThrowingStream<ChatStreamResult, Error> {
         // Build messages array
         var messages: [ChatQuery.ChatCompletionMessageParam] = []
         
@@ -1382,18 +1445,18 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             presencePenalty: config.presencePenalty,
             stop: config.stopSequences.map { .init(stringList: $0) },
             temperature: config.temperature,
+            toolChoice: Self.toolChoiceForOpenAI(policy: config.toolInvocationPolicy, toolsNonEmpty: !tools.isEmpty),
             tools: tools,
             topP: config.topP,
-            user: config.user
+            user: config.user,
+            streamOptions: .init(includeUsage: true)
         )
         
-        return AsyncThrowingStream<ChatStreamResult.Choice.ChoiceDelta, Error> { continuation in
+        return AsyncThrowingStream<ChatStreamResult, Error> { continuation in
             Task {
                 do {
                     for try await result in openAI.chatsStream(query: query) {
-                        if let choiceDelta = result.choices.first?.delta {
-                            continuation.yield(choiceDelta)
-                        }
+                        continuation.yield(result)
                     }
                     continuation.finish()
                 } catch {

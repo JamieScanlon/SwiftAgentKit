@@ -16,6 +16,8 @@ public struct OrchestratorConfig: Sendable {
     public let a2aEnabled: Bool
     /// Connection timeout for MCP servers in seconds
     public let mcpConnectionTimeout: TimeInterval
+    /// Maximum wall-clock time for a single tool call (MCP, A2A, or ToolManager dispatch) in seconds
+    public let toolCallTimeout: TimeInterval
     /// Maximum number of tokens to generate (passed to LLM requests)
     public let maxTokens: Int?
     /// Temperature for response randomness, 0.0 to 2.0 (passed to LLM requests)
@@ -24,25 +26,49 @@ public struct OrchestratorConfig: Sendable {
     public let topP: Double?
     /// Additional model-specific parameters (passed to LLM requests)
     public let additionalParameters: JSON?
+    /// Maximum LLM invocations (including tool follow-ups) for a single `updateConversation`; `nil` means unlimited.
+    public let maxAgenticStepsPerUpdate: Int?
+    /// How tool calls are chosen when tools are passed to the orchestrator (forwarded in ``LLMRequestConfig``).
+    public let toolInvocationPolicy: ToolInvocationPolicy
+    /// When true and tools are non-empty, reject assistant turns with no tool calls and retry with a correction message (see correction fields).
+    public let rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: Bool
+    /// Maximum correction messages appended after a rejected prose turn; `0` disables retry (throws if rejected).
+    public let maxCorrectionRetries: Int
+    public let correctionMessage: String
+    public let correctionRole: MessageRole
     
     public init(
         streamingEnabled: Bool = false,
         mcpEnabled: Bool = false,
         a2aEnabled: Bool = false,
         mcpConnectionTimeout: TimeInterval = 30.0,
+        toolCallTimeout: TimeInterval = 300.0,
         maxTokens: Int? = nil,
         temperature: Double? = nil,
         topP: Double? = nil,
-        additionalParameters: JSON? = nil
+        additionalParameters: JSON? = nil,
+        maxAgenticStepsPerUpdate: Int? = nil,
+        toolInvocationPolicy: ToolInvocationPolicy = .automatic,
+        rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: Bool = false,
+        maxCorrectionRetries: Int = 0,
+        correctionMessage: String = "You must call a tool or indicate you are done.",
+        correctionRole: MessageRole = .user
     ) {
         self.streamingEnabled = streamingEnabled
         self.mcpEnabled = mcpEnabled
         self.a2aEnabled = a2aEnabled
         self.mcpConnectionTimeout = mcpConnectionTimeout
+        self.toolCallTimeout = toolCallTimeout
         self.maxTokens = maxTokens
         self.temperature = temperature
         self.topP = topP
         self.additionalParameters = additionalParameters
+        self.maxAgenticStepsPerUpdate = maxAgenticStepsPerUpdate
+        self.toolInvocationPolicy = toolInvocationPolicy
+        self.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable = rejectAssistantTurnWithNoToolCallsWhenToolsAvailable
+        self.maxCorrectionRetries = maxCorrectionRetries
+        self.correctionMessage = correctionMessage
+        self.correctionRole = correctionRole
     }
 }
 
@@ -50,6 +76,8 @@ public struct OrchestratorConfig: Sendable {
 /// that can use tools through MCP, communicate with other agents through A2A,
 /// and execute generic function tools via a configurable ToolManager.
 public actor SwiftAgentKitOrchestrator {
+    /// Published as ``AgenticLoopState/failed(_:)`` when the model requested tools but no tool responses were aggregated (e.g. nothing handled the calls).
+    public static let noToolResponsesAgenticFailureMessage = "No tool responses were produced for the model's tool calls."
     public let logger: Logger
     public let llm: LLMProtocol
     public let config: OrchestratorConfig
@@ -57,6 +85,8 @@ public actor SwiftAgentKitOrchestrator {
     public let a2aManager: A2AManager?
     /// Optional ToolManager for executing generic function tools (non-MCP, non-A2A)
     public let toolManager: ToolManager?
+
+    private let agenticLoopStateHub: AgenticLoopStateHub
     
     /// All available tools from MCP and A2A managers
     public var allAvailableTools: [ToolDefinition] {
@@ -94,6 +124,31 @@ public actor SwiftAgentKitOrchestrator {
         get async {
             return currentPartialContentStream ?? createPartialContentStream()
         }
+    }
+
+    /// Current runtime state from the underlying LLM.
+    public var llmCurrentState: LLMRuntimeState {
+        llm.currentState
+    }
+
+    /// Runtime state updates from the underlying LLM.
+    public var llmStateUpdates: AsyncStream<LLMRuntimeState> {
+        llm.stateUpdates
+    }
+
+    /// Agentic tool-loop state for this orchestrator (multi-call session per top-level `updateConversation`).
+    public var agenticLoopUpdates: AsyncStream<(AgenticLoopID, AgenticLoopState)> {
+        agenticLoopStateHub.makeStream()
+    }
+
+    /// Latest published agentic loop state for the given id, if any.
+    public func currentAgenticLoopState(for id: AgenticLoopID) -> AgenticLoopState? {
+        agenticLoopStateHub.currentState(for: id)
+    }
+
+    /// Snapshot of latest agentic loop state per id.
+    public var currentAgenticLoopStates: [AgenticLoopID: AgenticLoopState] {
+        agenticLoopStateHub.currentStates
     }
     
     /// - Parameters:
@@ -160,13 +215,21 @@ public actor SwiftAgentKitOrchestrator {
         }
         
         self.toolManager = toolManager
+        self.agenticLoopStateHub = AgenticLoopStateHub()
     }
     
     /// Process a conversation thread and publish message updates to the message stream
     /// - Parameter messages: Array of messages representing the conversation thread
     /// - Parameter availableTools: Array of available tools that can be used during conversation processing
     public func updateConversation(_ messages: [Message], availableTools: [ToolDefinition] = []) async throws {
-        
+        try await updateConversation(messages, availableTools: availableTools, options: .default)
+    }
+
+    /// Process a conversation with per-invocation options layered on ``OrchestratorConfig``.
+    ///
+    /// Each inner LLM call uses a fresh ``LLMRequestConfig`` built from the orchestrator config merged with ``OrchestratorInvocationOptions``
+    /// (additional parameters and metadata apply to every step in this `updateConversation` tree).
+    public func updateConversation(_ messages: [Message], availableTools: [ToolDefinition], options: OrchestratorInvocationOptions) async throws {
         logger.info(
             "Processing conversation",
             metadata: SwiftAgentKitLogging.metadata(
@@ -184,110 +247,90 @@ public actor SwiftAgentKitOrchestrator {
                 )
             )
         }
-        
-        // Create a copy of the conversation history
+        let context = makeInvocationContext(options: options)
+        try await updateConversationWithAgenticLoop(messages, availableTools: availableTools, iteration: 1, agenticLoopId: nil, context: context)
+    }
+
+    private func makeInvocationContext(options: OrchestratorInvocationOptions) -> OrchestratorInvocationContext {
+        var merged = mergeJSONObjectParameters(config.additionalParameters, options.additionalParameters)
+        if let meta = options.systemPromptMetadata, !meta.isEmpty {
+            let metaJSON = JSON.object(Dictionary(uniqueKeysWithValues: meta.map { ($0.key, JSON.string($0.value)) }))
+            merged = mergeJSONObjectParameters(merged, metaJSON)
+        }
+        let policy = options.toolInvocationPolicy ?? config.toolInvocationPolicy
+        let maxSteps = options.maxAgenticStepsPerUpdate ?? config.maxAgenticStepsPerUpdate
+        let reject = options.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable ?? config.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable
+        let maxCorr = options.maxCorrectionRetries ?? config.maxCorrectionRetries
+        let msg = options.correctionMessage ?? config.correctionMessage
+        let role = options.correctionRole ?? config.correctionRole
+        return OrchestratorInvocationContext(
+            mergedAdditionalParameters: merged,
+            toolInvocationPolicy: policy,
+            maxAgenticStepsPerUpdate: maxSteps,
+            rejectProseWithoutTools: reject,
+            maxCorrectionRetries: maxCorr,
+            correctionMessage: msg,
+            correctionRole: role
+        )
+    }
+
+    private func updateConversationWithAgenticLoop(
+        _ messages: [Message],
+        availableTools: [ToolDefinition],
+        iteration: Int,
+        agenticLoopId: AgenticLoopID?,
+        context: OrchestratorInvocationContext
+    ) async throws {
+        let loopId = agenticLoopId ?? AgenticLoopID.orchestratorSession(UUID())
+        let isRootEntry = agenticLoopId == nil
+        if isRootEntry {
+            agenticLoopStateHub.publish(loopId, .started)
+        }
+        if let max = context.maxAgenticStepsPerUpdate, iteration > max {
+            agenticLoopStateHub.publish(loopId, .maxIterationsReached)
+            throw OrchestratorError.agenticStepLimitReached(limit: max)
+        }
+        agenticLoopStateHub.publish(loopId, .llmCall(iteration: iteration))
+
         var updatedMessages = messages
-        
-        // Determine if we should use streaming based on configuration
+
         let requestConfig = LLMRequestConfig(
             maxTokens: config.maxTokens,
             temperature: config.temperature,
             topP: config.topP,
             stream: config.streamingEnabled,
             availableTools: availableTools,
-            additionalParameters: config.additionalParameters
+            additionalParameters: context.mergedAdditionalParameters,
+            toolInvocationPolicy: context.toolInvocationPolicy
         )
-                
-        if config.streamingEnabled {
-            // Handle streaming response
-            let stream = llm.stream(messages, config: requestConfig)
-            
-            for try await result in stream {
-                switch result {
-                case .stream(let response):
-                    logger.debug(
-                        "Received streaming chunk",
-                        metadata: metadataForStreamingContent(response.content)
-                    )
-                    // Publish the streaming chunk to partial content stream
-                    publishPartialContent(response.content)
-                    
-                case .complete(let response):
-                    logger.info(
-                        "Received complete streaming response",
-                        metadata: SwiftAgentKitLogging.metadata(
-                            ("contentLength", .stringConvertible(response.content.count)),
-                            ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
-                        )
-                    )
 
-                    // Ensure all tool calls have IDs (some models don't provide them)
-                    let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
-                    
-                    // Convert LLMResponse to Message for conversation history
-                    let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
-                    updatedMessages.append(responseMessage)
-                    // Publish the message
-                    publishMessage(responseMessage)
-                    
-                    if response.hasToolCalls {
-                        
-                        // Execute tool calls
-                        logger.info(
-                            "Response contains tool calls",
-                            metadata: SwiftAgentKitLogging.metadata(
-                                ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
-                            )
-                        )
-                        let toolResponses = await executeToolCalls(toolCallsWithIds)
-                        
-                        guard !toolResponses.isEmpty else { continue }
-                        
-                        // Create tool response messages with proper toolCallId mapping
-                        // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
-                        logger.info(
-                            "Sending tool responses back to LLM",
-                            metadata: SwiftAgentKitLogging.metadata(
-                                ("responseCount", .stringConvertible(toolResponses.count))
-                            )
-                        )
-                        let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
-                        updatedMessages.append(contentsOf: toolResponseMessages)
-                        toolResponseMessages.forEach { publishMessage($0) }
-                        
-                        // Recurse here with the updated message history
-                        try await updateConversation(updatedMessages, availableTools: availableTools)
-                    }
-                    
-                    // Finish and nil out the partial content stream continuation since streaming is complete
-                    partialContentStreamContinuation?.finish()
-                    partialContentStreamContinuation = nil
-                    currentPartialContentStream = nil
-                }
-            }
-        } else {
-            // Handle synchronous response
-            let response = try await llm.send(messages, config: requestConfig)
-            
+        do {
+            let response = try await performAgenticLLMCall(
+                initialMessages: messages,
+                availableTools: availableTools,
+                requestConfig: requestConfig,
+                loopId: loopId,
+                iteration: iteration,
+                context: context
+            )
+
             logger.info(
-                "Received complete response",
+                "Received model response",
                 metadata: SwiftAgentKitLogging.metadata(
                     ("contentLength", .stringConvertible(response.content.count)),
                     ("hasToolCalls", .string(response.hasToolCalls ? "true" : "false"))
                 )
             )
-            // Ensure all tool calls have IDs (some models don't provide them)
+
             let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
-            
-            // Convert LLMResponse to Message for conversation history
             let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
             updatedMessages.append(responseMessage)
-            // Publish the final conversation history
             publishMessage(responseMessage)
-            
+
             if response.hasToolCalls {
-                
-                // Execute tool calls
+                transitionLLMState(to: .idle(.ready))
+                agenticLoopStateHub.publish(loopId, .waitingForToolExecution)
+                agenticLoopStateHub.publish(loopId, .executingTools)
                 logger.info(
                     "Response contains tool calls",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -295,11 +338,20 @@ public actor SwiftAgentKitOrchestrator {
                     )
                 )
                 let toolResponses = await executeToolCalls(toolCallsWithIds)
-                
-                guard !toolResponses.isEmpty else { return }
-                
-                // Create tool response messages with proper toolCallId mapping
-                // TODO: We need to show the full tool call to the user so we should publish summarized tool call messages. Something like "Calling tool \(name)..."
+
+                guard !toolResponses.isEmpty else {
+                    logger.warning(
+                        "No tool responses after model requested tool calls; ending agentic loop",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("iteration", .stringConvertible(iteration)),
+                            ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
+                        )
+                    )
+                    transitionLLMState(to: .idle(.ready))
+                    agenticLoopStateHub.publish(loopId, .failed(Self.noToolResponsesAgenticFailureMessage))
+                    return
+                }
+
                 logger.info(
                     "Sending tool responses back to LLM",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -309,11 +361,124 @@ public actor SwiftAgentKitOrchestrator {
                 let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
                 updatedMessages.append(contentsOf: toolResponseMessages)
                 toolResponseMessages.forEach { publishMessage($0) }
-                
-                // Recurse here with the updated message history
-                try await updateConversation(updatedMessages, availableTools: availableTools)
+
+                agenticLoopStateHub.publish(loopId, .betweenIterations)
+                try await LLMQueuePriority.$current.withValue(.continuation) {
+                    try await updateConversationWithAgenticLoop(updatedMessages, availableTools: availableTools, iteration: iteration + 1, agenticLoopId: loopId, context: context)
+                }
+            } else {
+                agenticLoopStateHub.publish(loopId, .completed)
+                transitionLLMState(to: .idle(.completed))
+                transitionLLMState(to: .idle(.ready))
+            }
+        } catch {
+            agenticLoopStateHub.publish(loopId, .failed(error.localizedDescription))
+            transitionLLMState(to: .failed(error.localizedDescription))
+            transitionLLMState(to: .idle(.ready))
+            throw error
+        }
+    }
+
+    private func performAgenticLLMCall(
+        initialMessages: [Message],
+        availableTools: [ToolDefinition],
+        requestConfig: LLMRequestConfig,
+        loopId: AgenticLoopID,
+        iteration: Int,
+        context: OrchestratorInvocationContext
+    ) async throws -> LLMResponse {
+        var working = initialMessages
+        var remainingCorrections = context.maxCorrectionRetries
+
+        while true {
+            let response: LLMResponse
+            if config.streamingEnabled {
+                response = try await streamToCompleteLLMResponse(messages: working, config: requestConfig)
+            } else {
+                transitionLLMState(to: .generating(.reasoning))
+                response = try await llm.send(working, config: requestConfig)
+                transitionLLMState(to: .generating(.responding))
+            }
+
+            let summary = Self.makeGenerationSummary(iteration: iteration, response: response)
+            agenticLoopStateHub.publish(loopId, .llmGenerationCompleted(summary))
+
+            let reject = shouldRejectAssistantTurn(
+                response: response,
+                conversationMessages: working,
+                availableTools: availableTools,
+                context: context
+            )
+            if !reject {
+                return response
+            }
+            if remainingCorrections == 0 {
+                throw OrchestratorError.assistantTurnCorrectionRetriesExhausted(configuredMaxCorrectionRetries: context.maxCorrectionRetries)
+            }
+            remainingCorrections -= 1
+            let correction = Message(
+                id: UUID(),
+                role: context.correctionRole,
+                content: context.correctionMessage
+            )
+            working.append(correction)
+        }
+    }
+
+    private static func makeGenerationSummary(iteration: Int, response: LLMResponse) -> LLMGenerationSummary {
+        let meta = response.metadata
+        return LLMGenerationSummary(
+            innerStepIndex: iteration,
+            hadToolCalls: response.hasToolCalls,
+            toolNames: response.toolCalls.map(\.name),
+            finishReason: meta?.finishReason,
+            promptTokens: meta?.promptTokens,
+            completionTokens: meta?.completionTokens,
+            totalTokens: meta?.totalTokens
+        )
+    }
+
+    private func shouldRejectAssistantTurn(
+        response: LLMResponse,
+        conversationMessages: [Message],
+        availableTools: [ToolDefinition],
+        context: OrchestratorInvocationContext
+    ) -> Bool {
+        guard context.rejectProseWithoutTools,
+              !availableTools.isEmpty,
+              !response.hasToolCalls
+        else { return false }
+        // After tool outputs exist in the thread, allow plain assistant text (e.g. final summary).
+        let hadToolOutput = conversationMessages.contains { $0.role == .tool }
+        return !hadToolOutput
+    }
+
+    private func streamToCompleteLLMResponse(messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        if currentPartialContentStream == nil {
+            _ = createPartialContentStream()
+        }
+        transitionLLMState(to: .generating(.reasoning))
+        let stream = llm.stream(messages, config: config)
+        var finalResponse: LLMResponse?
+        for try await result in stream {
+            switch result {
+            case .stream(let response):
+                transitionLLMState(to: .generating(.responding))
+                logger.debug(
+                    "Received streaming chunk",
+                    metadata: metadataForStreamingContent(response.content)
+                )
+                publishPartialContent(response.content)
+            case .complete(let response):
+                finalResponse = response
             }
         }
+        guard let response = finalResponse else {
+            throw LLMError.invalidResponse("Streaming ended without a complete response")
+        }
+        transitionLLMState(to: .generating(.responding))
+        finishPartialContentStreamForStreamingTurn()
+        return response
     }
     
     /// Finish the message stream
@@ -356,6 +521,19 @@ public actor SwiftAgentKitOrchestrator {
             metadata: metadataForStreamingContent(content)
         )
         partialContentStreamContinuation?.yield(content)
+    }
+
+    private func transitionLLMState(to state: LLMRuntimeState) {
+        guard let controllable = llm as? any LLMRuntimeStateControllable else {
+            return
+        }
+        controllable.transition(to: state)
+    }
+
+    private func finishPartialContentStreamForStreamingTurn() {
+        partialContentStreamContinuation?.finish()
+        partialContentStreamContinuation = nil
+        currentPartialContentStream = nil
     }
     
     /// Create a message stream if one does not exist
@@ -415,6 +593,13 @@ public actor SwiftAgentKitOrchestrator {
         return LLMResponse.complete(content: content, metadata: metadata, toolCallId: toolCallId)
     }
     
+    private func llmResponseFromToolExecutionError(_ error: Error, toolCallId: String?) -> LLMResponse {
+        if let timeout = error as? ToolCallTimeoutError {
+            return LLMResponse.complete(content: timeout.message, toolCallId: toolCallId)
+        }
+        return LLMResponse.complete(content: "Tool execution failed: \(error)", toolCallId: toolCallId)
+    }
+    
     /// Builds a conversation Message from a tool call LLMResponse, including images and file references.
     /// When the response contains files (URLs or data), appends a text summary so the next LLM turn sees them.
     private func messageFromToolResponse(_ response: LLMResponse) -> Message {
@@ -453,15 +638,18 @@ public actor SwiftAgentKitOrchestrator {
                 "Executing tool call",
                 metadata: metadataForToolCall(toolCall, provider: "orchestrator")
             )
-            do {
-                var callResponses: [LLMResponse] = []
-                // Try MCP manager first
-                if let mcpManager = mcpManager, config.mcpEnabled {
-                    logger.debug(
-                        "Dispatching MCP tool call",
-                        metadata: metadataForToolCall(toolCall, provider: "mcp")
-                    )
-                    if let mcpResponses = try await mcpManager.toolCall(toolCall) {
+            var callResponses: [LLMResponse] = []
+            var abortedWithError: LLMResponse?
+            
+            // Try MCP manager first
+            if let mcpManager = mcpManager, config.mcpEnabled {
+                logger.debug(
+                    "Dispatching MCP tool call",
+                    metadata: metadataForToolCall(toolCall, provider: "mcp")
+                )
+                do {
+                    let mcpResponses = try await mcpManager.toolCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
+                    if let mcpResponses = mcpResponses {
                         if mcpResponses.isEmpty {
                             logger.debug(
                                 "MCP tool call returned no responses",
@@ -472,7 +660,6 @@ public actor SwiftAgentKitOrchestrator {
                                 "MCP tool call responses received",
                                 metadata: metadataForResponses(mcpResponses, provider: "mcp")
                             )
-                            // Set toolCallId on each response
                             let responsesWithId = mcpResponses.map { response in
                                 LLMResponse(
                                     content: response.content,
@@ -490,14 +677,31 @@ public actor SwiftAgentKitOrchestrator {
                             metadata: metadataForToolCall(toolCall, provider: "mcp")
                         )
                     }
-                }
-                // Try A2A manager
-                if let a2aManager = a2aManager, config.a2aEnabled {
-                    logger.debug(
-                        "Dispatching A2A agent call",
-                        metadata: metadataForToolCall(toolCall, provider: "a2a")
+                } catch {
+                    logger.error(
+                        "MCP tool call failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("toolName", .string(toolCall.name)),
+                            ("error", .string(String(describing: error)))
+                        )
                     )
-                    if let a2aResponses = try await a2aManager.agentCall(toolCall) {
+                    abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
+                }
+            }
+            if let err = abortedWithError {
+                aggregatedResponses.append(err)
+                continue
+            }
+            
+            // Try A2A manager
+            if let a2aManager = a2aManager, config.a2aEnabled {
+                logger.debug(
+                    "Dispatching A2A agent call",
+                    metadata: metadataForToolCall(toolCall, provider: "a2a")
+                )
+                do {
+                    let a2aResponses = try await a2aManager.agentCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
+                    if let a2aResponses = a2aResponses {
                         if a2aResponses.isEmpty {
                             logger.debug(
                                 "A2A agent call returned no responses",
@@ -508,7 +712,6 @@ public actor SwiftAgentKitOrchestrator {
                                 "A2A agent call responses received",
                                 metadata: metadataForResponses(a2aResponses, provider: "a2a")
                             )
-                            // Set toolCallId on each response
                             let responsesWithId = a2aResponses.map { response in
                                 LLMResponse(
                                     content: response.content,
@@ -526,65 +729,87 @@ public actor SwiftAgentKitOrchestrator {
                             metadata: metadataForToolCall(toolCall, provider: "a2a")
                         )
                     }
-                }
-                // Try generic ToolManager if MCP and A2A didn't handle the tool
-                if callResponses.isEmpty, let toolManager = toolManager {
-                    logger.debug(
-                        "Dispatching to ToolManager",
-                        metadata: metadataForToolCall(toolCall, provider: "toolManager")
+                } catch {
+                    logger.error(
+                        "A2A agent call failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("toolName", .string(toolCall.name)),
+                            ("error", .string(String(describing: error)))
+                        )
                     )
-                    do {
-                        let result = try await toolManager.executeTool(toolCall)
-                        let response = llmResponseFromToolResult(result, toolCallId: toolCall.id)
-                        if result.success {
-                            logger.debug(
-                                "ToolManager executed tool successfully",
-                                metadata: metadataForToolCall(toolCall, provider: "toolManager")
-                            )
-                        } else {
-                            logger.warning(
-                                "ToolManager reported tool execution failure",
-                                metadata: SwiftAgentKitLogging.metadata(
-                                    ("toolName", .string(toolCall.name)),
-                                    ("error", .string(result.error ?? "unknown"))
-                                )
-                            )
-                        }
-                        callResponses.append(response)
-                    } catch {
-                        logger.error(
-                            "ToolManager tool execution failed",
+                    abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
+                }
+            }
+            if let err = abortedWithError {
+                aggregatedResponses.append(err)
+                continue
+            }
+            
+            // Try generic ToolManager if MCP and A2A didn't handle the tool
+            if callResponses.isEmpty, let toolManager = toolManager {
+                logger.debug(
+                    "Dispatching to ToolManager",
+                    metadata: metadataForToolCall(toolCall, provider: "toolManager")
+                )
+                do {
+                    let result = try await withToolCallTimeout(config.toolCallTimeout, toolName: toolCall.name) {
+                        try await toolManager.executeTool(toolCall)
+                    }
+                    let response = llmResponseFromToolResult(result, toolCallId: toolCall.id)
+                    if result.success {
+                        logger.debug(
+                            "ToolManager executed tool successfully",
+                            metadata: metadataForToolCall(toolCall, provider: "toolManager")
+                        )
+                    } else {
+                        logger.warning(
+                            "ToolManager reported tool execution failure",
                             metadata: SwiftAgentKitLogging.metadata(
                                 ("toolName", .string(toolCall.name)),
-                                ("error", .string(String(describing: error)))
+                                ("error", .string(result.error ?? "unknown"))
                             )
                         )
-                        callResponses.append(LLMResponse.complete(
-                            content: "Tool execution failed: \(error)",
-                            toolCallId: toolCall.id
-                        ))
                     }
-                }
-                
-                var successMetadata = metadataForToolCall(toolCall, provider: "orchestrator")
-                successMetadata["responseCount"] = .stringConvertible(callResponses.count)
-                logger.info(
-                    "Tool call executed successfully",
-                    metadata: successMetadata
-                )
-                aggregatedResponses.append(contentsOf: callResponses)
-            } catch {
-                logger.error(
-                    "Tool call failed",
-                    metadata: SwiftAgentKitLogging.metadata(
-                        ("toolName", .string(toolCall.name)),
-                        ("error", .string(String(describing: error)))
+                    callResponses.append(response)
+                } catch {
+                    logger.error(
+                        "ToolManager tool execution failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("toolName", .string(toolCall.name)),
+                            ("error", .string(String(describing: error)))
+                        )
                     )
-                )
+                    callResponses.append(llmResponseFromToolExecutionError(error, toolCallId: toolCall.id))
+                }
             }
+            
+            var successMetadata = metadataForToolCall(toolCall, provider: "orchestrator")
+            successMetadata["responseCount"] = .stringConvertible(callResponses.count)
+            logger.info(
+                "Tool call finished",
+                metadata: successMetadata
+            )
+            aggregatedResponses.append(contentsOf: callResponses)
         }
         return aggregatedResponses
     }
+
+    /// Shuts down MCP local subprocesses and A2A boot processes. Call from normal app termination; it does not run when the process receives `SIGKILL`.
+    public func shutdown() async {
+        await mcpManager?.shutdown()
+        await a2aManager?.shutdown()
+    }
+}
+
+/// Resolved per-`updateConversation` parameters (config + ``OrchestratorInvocationOptions``).
+private struct OrchestratorInvocationContext: Sendable {
+    let mergedAdditionalParameters: JSON?
+    let toolInvocationPolicy: ToolInvocationPolicy
+    let maxAgenticStepsPerUpdate: Int?
+    let rejectProseWithoutTools: Bool
+    let maxCorrectionRetries: Int
+    let correctionMessage: String
+    let correctionRole: MessageRole
 }
 
 // MARK: - Logging helpers

@@ -66,6 +66,11 @@ func newMCPArchitectureExample() async {
     do {
         logger.info("Booting MCP servers using MCPServerManager...")
         let serverPipes = try await serverManager.bootServers(config: config)
+        defer {
+            for (_, boot) in serverPipes {
+                Shell.terminateProcess(boot.process)
+            }
+        }
         logger.info("Successfully booted \(serverPipes.count) MCP servers")
         
         // Step 3: Create MCPClient instances and connect them
@@ -249,6 +254,11 @@ func multipleServersExample() async {
     do {
         logger.info("Booting multiple servers...")
         let serverPipes = try await serverManager.bootServers(config: config)
+        defer {
+            for (_, boot) in serverPipes {
+                Shell.terminateProcess(boot.process)
+            }
+        }
         logger.info("✓ Booted \(serverPipes.count) servers")
         
         // Create and connect clients for each server

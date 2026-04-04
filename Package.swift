@@ -103,6 +103,11 @@ let package = Package(
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "EasyJSON", package: "EasyJSON"),
+            ],
+            exclude: [
+                "Authentication/README.md",
+                "Authentication/OAuth/ManualFlow/README.md",
+                "LLM/README.md",
             ]),
         
         // A2A (Agent-to-Agent) module

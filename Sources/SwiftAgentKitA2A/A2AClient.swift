@@ -50,7 +50,14 @@ public actor A2AClient {
             var environment = globalEnvironment.a2aEnvironment
             let bootCallEnvironment = bootCall.environment.a2aEnvironment
             environment.merge(bootCallEnvironment, uniquingKeysWith: { (_, new) in new })
-            let (_, outPipe) = Shell.shell(bootCall.command, arguments: bootCall.arguments, environment: environment)
+            let launched = Shell.launchSubprocess(
+                command: bootCall.command,
+                arguments: bootCall.arguments,
+                environment: environment,
+                useShell: bootCall.useShell
+            )
+            bootProcess = launched.process
+            let outPipe = launched.outPipe
             Task.detached {
                 outPipe.fileHandleForReading.readabilityHandler = { pipeHandle in
                     let data = pipeHandle.availableData
@@ -102,6 +109,16 @@ public actor A2AClient {
         }
         
         logger.info("A2A client initialized successfully")
+    }
+
+    /// Terminates the boot subprocess (if any) and clears the REST client. Call when tearing down the host (see ``SwiftAgentKitOrchestrator/shutdown()``).
+    public func shutdown() async {
+        if let bootProcess {
+            Shell.terminateProcess(bootProcess)
+            self.bootProcess = nil
+        }
+        apiManager = nil
+        agentCard = nil
     }
     
     // MARK: Methods
@@ -449,6 +466,7 @@ public actor A2AClient {
     private let server: A2AConfig.A2AConfigServer
     private var apiManager: RestAPIManager?
     private var bootCall: A2AConfig.ServerBootCall?
+    private var bootProcess: Process?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var authHeaders: [String: String]? {
@@ -607,7 +625,11 @@ public enum MessageResult: Encodable, Sendable {
     case taskArtifactUpdate(TaskArtifactUpdateEvent)
 }
 
-extension A2AClient: A2AAgentStreamClient {}
+extension A2AClient: A2AAgentStreamClient {
+    public var toolCallTimeout: TimeInterval? {
+        get async { server.toolCallTimeout }
+    }
+}
 
 // MARK: - Custom Errors
 

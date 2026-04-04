@@ -7,6 +7,98 @@ import SwiftAgentKitA2A
 import Logging
 import EasyJSON
 
+/*
+ Why this suite used to “hang” the test runner
+
+ `SwiftAgentKitOrchestrator.messageStream` (and similar hub-backed streams such as `agenticLoopUpdates`)
+ are long-lived `AsyncStream`s: the library yields updates but does not call `finish()` during normal use.
+
+ Anti-patterns that leave work running after a test returns:
+ • `_ = Task { for await _ in messageStream {} }` — the drain never ends, so the runner can stall.
+ • The same with a collector: `Task { for await message in messageStream { await collector.append(message) } }` without cancellation.
+
+ What we do instead:
+ • Use `drainPublishedMessagesWhileRunning` to run `updateConversation` (or similar) while a background task
+   consumes the stream, then cancel that task in `defer` when the operation completes.
+ • After the operation, sleep briefly (`try? await Task.sleep`) so buffered yields are drained before cancel.
+ • For a second subscriber (e.g. agentic state collection), use `defer { collectTask.cancel() }` so teardown runs on throw too.
+ • Prefer bounded iteration or `collectLLMRuntimeStatesAfter` when you only need a finite prefix.
+
+ Other modules: adapter tests that subscribe to `agenticLoopUpdates` may need `await Task.yield()` before the producer runs
+ so the `for await` has registered; see `LLMProtocolAdapterTests`.
+
+ For product semantics of runtime vs request vs agentic state, see `docs/LLMStateAndObservation.md`.
+ */
+
+/// Collects ``AgenticLoopState`` from an async stream without non-Sendable shared mutable state in `Task` closures.
+fileprivate actor AgenticLoopStateCollector {
+    private var states: [AgenticLoopState] = []
+    func append(_ state: AgenticLoopState) {
+        states.append(state)
+    }
+    func snapshot() -> [AgenticLoopState] { states }
+}
+
+/// Subscribes to `stream` (iterator created before `body`), runs `body`, then drains until a terminal `.idle(.ready)`.
+fileprivate func collectLLMRuntimeStatesAfter(
+    stream: AsyncStream<LLMRuntimeState>,
+    body: () async throws -> Void
+) async rethrows -> [LLMRuntimeState] {
+    var iterator = stream.makeAsyncIterator()
+    try await body()
+    var observed: [LLMRuntimeState] = []
+    while let state = await iterator.next() {
+        observed.append(state)
+        if observed.count > 1 && state == .idle(.ready) {
+            break
+        }
+    }
+    return observed
+}
+
+/// Drains `messageStream` in the background so `publishMessage` does not stall on a full buffer.
+/// Cancels the drain task after `operation` completes and a short yield so buffered messages are consumed.
+fileprivate func drainPublishedMessagesWhileRunning(
+    _ messageStream: AsyncStream<Message>,
+    operation: () async throws -> Void
+) async rethrows {
+    let drain = Task {
+        for await _ in messageStream {
+            if Task.isCancelled { break }
+        }
+    }
+    defer { drain.cancel() }
+    try await operation()
+    // Let the concurrent drain task run past the producer finishing (yields may still be in flight).
+    _ = try? await Task.sleep(nanoseconds: 15_000_000)
+}
+
+/// Holds a per-message handler so the drain `Task` does not capture a non-`Sendable` closure (Swift 6).
+private final class UncheckedMessageDrainHandler: @unchecked Sendable {
+    let onMessage: (Message) async -> Void
+    init(_ onMessage: @escaping (Message) async -> Void) {
+        self.onMessage = onMessage
+    }
+}
+
+/// Like ``drainPublishedMessagesWhileRunning(_:operation:)`` but forwards each message to `processMessage` (e.g. for collectors).
+fileprivate func drainPublishedMessagesWhileRunning(
+    _ messageStream: AsyncStream<Message>,
+    processMessage: @escaping (Message) async -> Void,
+    operation: () async throws -> Void
+) async rethrows {
+    let handler = UncheckedMessageDrainHandler(processMessage)
+    let drain = Task {
+        for await message in messageStream {
+            if Task.isCancelled { break }
+            await handler.onMessage(message)
+        }
+    }
+    defer { drain.cancel() }
+    try await operation()
+    _ = try? await Task.sleep(nanoseconds: 15_000_000)
+}
+
 // Mock LLM for testing
 struct MockLLM: LLMProtocol {
     let model: String
@@ -229,6 +321,19 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(mockLLM.getModelName() == "test-model")
     }
     
+    @Test("Orchestrator works with QueuedLLM wrapper")
+    func testOrchestratorWithQueuedLLM() async throws {
+        let mockLLM = MockLLM(model: "queued-test", logger: Logger(label: "MockLLM"))
+        let queuedLLM = QueuedLLM(baseLLM: mockLLM)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: queuedLLM,
+            config: OrchestratorConfig(streamingEnabled: false)
+        )
+
+        let messages = [Message(id: UUID(), role: .user, content: "Hello")]
+        try await orchestrator.updateConversation(messages)
+    }
+
     @Test("OrchestratorConfig can be initialized with default values")
     func testOrchestratorConfigDefaultInit() throws {
         let config = OrchestratorConfig()
@@ -240,6 +345,10 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(config.temperature == nil)
         #expect(config.topP == nil)
         #expect(config.additionalParameters == nil)
+        #expect(config.maxAgenticStepsPerUpdate == nil)
+        #expect(config.toolInvocationPolicy == .automatic)
+        #expect(config.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable == false)
+        #expect(config.maxCorrectionRetries == 0)
     }
     
     @Test("OrchestratorConfig can be initialized with custom values")
@@ -274,6 +383,27 @@ struct MockFunctionToolProvider: ToolProvider {
             #expect(val == 0.5)
         }
     }
+
+    @Test("Orchestrator publishes LLM runtime states during conversation update")
+    func testOrchestratorPublishesRuntimeStates() async throws {
+        let baseLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let trackedLLM = StatefulLLM(baseLLM: baseLLM)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: trackedLLM,
+            config: OrchestratorConfig(streamingEnabled: false)
+        )
+
+        let messages = [Message(id: UUID(), role: .user, content: "Hello there")]
+        let observed = try await collectLLMRuntimeStatesAfter(stream: orchestrator.llmStateUpdates) {
+            try await orchestrator.updateConversation(messages)
+        }
+
+        #expect(observed.first == .idle(.ready))
+        #expect(observed.contains(.generating(.reasoning)))
+        #expect(observed.contains(.generating(.responding)))
+        #expect(observed.contains(.idle(.completed)))
+        #expect(observed.last == .idle(.ready))
+    }
     
     @Test("updateConversation passes maxTokens, temperature, topP, and additionalParameters to LLM")
     func testUpdateConversationPassesLLMRequestParams() async throws {
@@ -301,13 +431,11 @@ struct MockFunctionToolProvider: ToolProvider {
             func append(_ message: Message) { messages.append(message) }
         }
         let collector = MessageCollector()
-        _ = Task {
-            for await message in messageStream {
-                await collector.append(message)
-            }
+        try await drainPublishedMessagesWhileRunning(messageStream, processMessage: { message in
+            await collector.append(message)
+        }) {
+            try await orchestrator.updateConversation(initialMessages, availableTools: [])
         }
-        
-        try await orchestrator.updateConversation(initialMessages, availableTools: [])
         try? await Task.sleep(nanoseconds: 10_000_000)
         
         let configs = await configCapture.getConfigs()
@@ -348,13 +476,11 @@ struct MockFunctionToolProvider: ToolProvider {
             func append(_ message: Message) { messages.append(message) }
         }
         let collector = MessageCollector()
-        _ = Task {
-            for await message in messageStream {
-                await collector.append(message)
-            }
+        try await drainPublishedMessagesWhileRunning(messageStream, processMessage: { message in
+            await collector.append(message)
+        }) {
+            try await orchestrator.updateConversation(initialMessages, availableTools: [])
         }
-        
-        try await orchestrator.updateConversation(initialMessages, availableTools: [])
         try? await Task.sleep(nanoseconds: 10_000_000)
         
         let configs = await configCapture.getConfigs()
@@ -405,16 +531,12 @@ struct MockFunctionToolProvider: ToolProvider {
         }
         let collector = MessageCollector()
         
-        // Start listening to the stream
-        _ = Task {
-            for await message in messageStream {
-                #expect(message.role == .assistant)
-                await collector.append(message)
-            }
+        try await drainPublishedMessagesWhileRunning(messageStream, processMessage: { message in
+            #expect(message.role == .assistant)
+            await collector.append(message)
+        }) {
+            try await orchestrator.updateConversation(initialMessages, availableTools: [])
         }
-        
-        // Process the conversation
-        try await orchestrator.updateConversation(initialMessages, availableTools: [])
         
         // Give a small delay to allow stream listeners to process messages
         try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
@@ -449,16 +571,12 @@ struct MockFunctionToolProvider: ToolProvider {
         }
         let collector = MessageCollector()
         
-        // Start listening to the stream
-        _ = Task {
-            for await message in messageStream {
-                #expect(message.role == .assistant)
-                await collector.append(message)
-            }
+        try await drainPublishedMessagesWhileRunning(messageStream, processMessage: { message in
+            #expect(message.role == .assistant)
+            await collector.append(message)
+        }) {
+            try await orchestrator.updateConversation(initialMessages, availableTools: [])
         }
-        
-        // Process the conversation
-        try await orchestrator.updateConversation(initialMessages, availableTools: [])
         
         // Give a small delay to allow stream listeners to process messages
         try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
@@ -493,16 +611,12 @@ struct MockFunctionToolProvider: ToolProvider {
         }
         let collector = MessageCollector()
         
-        // Start listening to the stream
-        _ = Task {
-            for await message in messageStream {
-                #expect(message.role == .assistant)
-                await collector.append(message)
-            }
+        try await drainPublishedMessagesWhileRunning(messageStream, processMessage: { message in
+            #expect(message.role == .assistant)
+            await collector.append(message)
+        }) {
+            try await orchestrator.updateConversation(initialMessages, availableTools: [])
         }
-        
-        // Process the conversation
-        try await orchestrator.updateConversation(initialMessages, availableTools: [])
         
         // Give a small delay to allow stream listeners to process messages
         try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
@@ -546,16 +660,12 @@ struct MockFunctionToolProvider: ToolProvider {
         }
         let collector = MessageCollector()
         
-        // Start listening to the stream
-        _ = Task {
-            for await message in messageStream {
-                #expect(message.role == .assistant)
-                await collector.append(message)
-            }
+        try await drainPublishedMessagesWhileRunning(messageStream, processMessage: { message in
+            #expect(message.role == .assistant)
+            await collector.append(message)
+        }) {
+            try await orchestrator.updateConversation(initialMessages, availableTools: availableTools)
         }
-        
-        // Process the conversation
-        try await orchestrator.updateConversation(initialMessages, availableTools: availableTools)
         
         // Give a small delay to allow stream listeners to process messages
         try? await Task.sleep(nanoseconds: 10_000_000) // 0.01 seconds
@@ -637,14 +747,11 @@ struct MockFunctionToolProvider: ToolProvider {
         let collector = MessageCollector()
         
         let messageStream = await orchestrator.messageStream
-        _ = Task {
-            for await message in messageStream {
-                await collector.append(message)
-            }
+        try await drainPublishedMessagesWhileRunning(messageStream, processMessage: { message in
+            await collector.append(message)
+        }) {
+            try await orchestrator.updateConversation(initialMessages, availableTools: [])
         }
-        
-        // Process conversation - this should handle tool calls
-        try await orchestrator.updateConversation(initialMessages, availableTools: [])
         
         // Give time for processing
         try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
@@ -826,14 +933,11 @@ struct MockFunctionToolProvider: ToolProvider {
         let collector = MessageCollector()
         
         let messageStream = await orchestrator.messageStream
-        _ = Task {
-            for await message in messageStream {
-                await collector.append(message)
-            }
+        try await drainPublishedMessagesWhileRunning(messageStream, processMessage: { message in
+            await collector.append(message)
+        }) {
+            try await orchestrator.updateConversation(initialMessages, availableTools: [])
         }
-        
-        // Process conversation
-        try await orchestrator.updateConversation(initialMessages, availableTools: [])
         
         // Give time for processing
         try? await Task.sleep(nanoseconds: 50_000_000) // 0.05 seconds
@@ -922,12 +1026,12 @@ struct MockFunctionToolProvider: ToolProvider {
         let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config, a2aManager: a2aManager)
         
         let messageStream = await orchestrator.messageStream
-        _ = Task { for await _ in messageStream {} }
-        
-        try await orchestrator.updateConversation(
-            [Message(id: UUID(), role: .user, content: "Generate an image")],
-            availableTools: []
-        )
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Generate an image")],
+                availableTools: []
+            )
+        }
         try? await Task.sleep(nanoseconds: 50_000_000)
         
         let invocations = await capture.getInvocations()
@@ -973,12 +1077,12 @@ struct MockFunctionToolProvider: ToolProvider {
         let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config, a2aManager: a2aManager)
         
         let messageStream = await orchestrator.messageStream
-        _ = Task { for await _ in messageStream {} }
-        
-        try await orchestrator.updateConversation(
-            [Message(id: UUID(), role: .user, content: "Get the document")],
-            availableTools: []
-        )
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Get the document")],
+                availableTools: []
+            )
+        }
         try? await Task.sleep(nanoseconds: 50_000_000)
         
         let invocations = await capture.getInvocations()
@@ -1031,12 +1135,12 @@ struct MockFunctionToolProvider: ToolProvider {
         let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config, a2aManager: a2aManager)
         
         let messageStream = await orchestrator.messageStream
-        _ = Task { for await _ in messageStream {} }
-        
-        try await orchestrator.updateConversation(
-            [Message(id: UUID(), role: .user, content: "Generate media")],
-            availableTools: []
-        )
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Generate media")],
+                availableTools: []
+            )
+        }
         try? await Task.sleep(nanoseconds: 50_000_000)
         
         let invocations = await capture.getInvocations()
@@ -1085,12 +1189,12 @@ struct MockFunctionToolProvider: ToolProvider {
         let orchestrator = SwiftAgentKitOrchestrator(llm: capturingLLM, config: config, a2aManager: a2aManager)
         
         let messageStream = await orchestrator.messageStream
-        _ = Task { for await _ in messageStream {} }
-        
-        try await orchestrator.updateConversation(
-            [Message(id: UUID(), role: .user, content: "Send image only")],
-            availableTools: []
-        )
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Send image only")],
+                availableTools: []
+            )
+        }
         try? await Task.sleep(nanoseconds: 50_000_000)
         
         let invocations = await capture.getInvocations()
@@ -1151,12 +1255,12 @@ struct MockFunctionToolProvider: ToolProvider {
         let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
         
         let messageStream = await orchestrator.messageStream
-        _ = Task { for await _ in messageStream {} }
-        
-        try await orchestrator.updateConversation(
-            [Message(id: UUID(), role: .user, content: "What time is it?")],
-            availableTools: []
-        )
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "What time is it?")],
+                availableTools: []
+            )
+        }
         try? await Task.sleep(nanoseconds: 50_000_000)
         
         let invocations = await capture.getInvocations()
@@ -1167,6 +1271,56 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(toolMessage != nil)
         #expect(toolMessage!.content == expectedContent)
         #expect(toolMessage!.toolCallId == toolCallId)
+    }
+
+    @Test("updateConversation publishes agentic loop states through ToolManager tool iteration")
+    func testAgenticLoopUpdatesThroughToolManager() async throws {
+        let toolCallId = "call-agentic-1"
+        let toolCall = ToolCall(
+            name: "get_current_time",
+            arguments: .object([:]),
+            id: toolCallId
+        )
+
+        let capture = SendCapture()
+        let mockLLM = CapturingMockLLM(
+            logger: Logger(label: "Capture"),
+            toolCallsToReturn: [toolCall],
+            capture: capture
+        )
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time", resultContent: "2025-02-14T15:30:00Z", resultSuccess: true)
+        ])
+        let config = OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: false)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
+
+        let messageStream = await orchestrator.messageStream
+
+        let agenticStream = await orchestrator.agenticLoopUpdates
+        let agenticStateCollector = AgenticLoopStateCollector()
+        let collectTask = Task {
+            for await (_, state) in agenticStream {
+                await agenticStateCollector.append(state)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "What time is it?")],
+                availableTools: []
+            )
+        }
+        try? await Task.sleep(nanoseconds: 50_000_000)
+
+        let agenticStates = await agenticStateCollector.snapshot()
+        #expect(agenticStates.contains(.started))
+        #expect(agenticStates.contains(.llmCall(iteration: 1)))
+        #expect(agenticStates.contains(.waitingForToolExecution))
+        #expect(agenticStates.contains(.executingTools))
+        #expect(agenticStates.contains(.betweenIterations))
+        #expect(agenticStates.contains(.llmCall(iteration: 2)))
+        #expect(agenticStates.contains(.completed))
     }
     
     @Test("ToolManager passes error to LLM when tool is not found in any provider")
@@ -1194,12 +1348,12 @@ struct MockFunctionToolProvider: ToolProvider {
         let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, toolManager: toolManager)
         
         let messageStream = await orchestrator.messageStream
-        _ = Task { for await _ in messageStream {} }
-        
-        try await orchestrator.updateConversation(
-            [Message(id: UUID(), role: .user, content: "Use unknown_tool")],
-            availableTools: []
-        )
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Use unknown_tool")],
+                availableTools: []
+            )
+        }
         try? await Task.sleep(nanoseconds: 50_000_000)
         
         let invocations = await capture.getInvocations()
@@ -1241,12 +1395,12 @@ struct MockFunctionToolProvider: ToolProvider {
         )
         
         let messageStream = await orchestrator.messageStream
-        _ = Task { for await _ in messageStream {} }
-        
-        try await orchestrator.updateConversation(
-            [Message(id: UUID(), role: .user, content: "What time is it?")],
-            availableTools: []
-        )
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "What time is it?")],
+                availableTools: []
+            )
+        }
         try? await Task.sleep(nanoseconds: 50_000_000)
         
         // ToolManager should have handled it since MCP/A2A have no clients
@@ -1272,5 +1426,234 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(tools.count == 2)
         #expect(tools.contains { $0.name == "get_current_time" })
         #expect(tools.contains { $0.name == "get_weather" })
+    }
+
+    @Test("OrchestratorInvocationOptions merges parameters for each LLM request")
+    func testInvocationOptionsMergeParameters() async throws {
+        let configCapture = ConfigCapture()
+        let base = OrchestratorConfig(
+            streamingEnabled: false,
+            additionalParameters: .object(["fromConfig": .string("cfg")])
+        )
+        let capturing = CapturingMockLLM(
+            logger: Logger(label: "merge"),
+            toolCallsToReturn: [],
+            configCapture: configCapture
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(llm: capturing, config: base)
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Hi")],
+                availableTools: [],
+                options: OrchestratorInvocationOptions(
+                    additionalParameters: .object(["fromOptions": .string("opt")]),
+                    systemPromptMetadata: ["plan": "step1"]
+                )
+            )
+        }
+        let configs = await configCapture.getConfigs()
+        #expect(configs.count >= 1)
+        guard case .object(let dict) = configs[0].additionalParameters else {
+            Issue.record("Expected merged JSON object")
+            return
+        }
+        guard case .string(let a) = dict["fromConfig"], a == "cfg" else {
+            Issue.record("fromConfig")
+            return
+        }
+        guard case .string(let b) = dict["fromOptions"], b == "opt" else {
+            Issue.record("fromOptions")
+            return
+        }
+        guard case .string(let p) = dict["plan"], p == "step1" else {
+            Issue.record("plan")
+            return
+        }
+    }
+
+    @Test("updateConversation passes toolInvocationPolicy to LLMRequestConfig")
+    func testToolInvocationPolicyForwarded() async throws {
+        let configCapture = ConfigCapture()
+        let capturing = CapturingMockLLM(
+            logger: Logger(label: "policy"),
+            toolCallsToReturn: [],
+            configCapture: configCapture
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: capturing,
+            config: OrchestratorConfig(streamingEnabled: false, toolInvocationPolicy: .required)
+        )
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Hi")],
+                availableTools: []
+            )
+        }
+        let configs = await configCapture.getConfigs()
+        #expect(configs.first?.toolInvocationPolicy == .required)
+    }
+
+    @Test("maxAgenticStepsPerUpdate stops runaway tool loops")
+    func testMaxAgenticStepsPerUpdate() async throws {
+        let toolCall = ToolCall(
+            name: "get_current_time",
+            arguments: .object([:]),
+            id: "loop"
+        )
+        let mock = InfiniteToolMockLLM(toolCall: toolCall)
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time", resultContent: "t", resultSuccess: true)
+        ])
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: mock,
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                mcpEnabled: false,
+                a2aEnabled: false,
+                maxAgenticStepsPerUpdate: 2
+            ),
+            toolManager: toolManager
+        )
+        let messageStream = await orchestrator.messageStream
+        await #expect(throws: OrchestratorError.self) {
+            try await drainPublishedMessagesWhileRunning(messageStream) {
+                try await orchestrator.updateConversation(
+                    [Message(id: UUID(), role: .user, content: "x")],
+                    availableTools: [ToolDefinition(
+                        name: "get_current_time",
+                        description: "t",
+                        parameters: [],
+                        type: .function
+                    )]
+                )
+            }
+        }
+    }
+
+    @Test("llmGenerationCompleted is published with metadata")
+    func testLlmGenerationCompletedEvent() async throws {
+        let mock = MockLLM(model: "m", logger: Logger(label: "m"))
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: mock,
+            config: OrchestratorConfig(streamingEnabled: false)
+        )
+        let agenticStream = await orchestrator.agenticLoopUpdates
+        let collector = AgenticLoopStateCollector()
+        let collectTask = Task {
+            for await (_, state) in agenticStream {
+                await collector.append(state)
+            }
+        }
+        defer { collectTask.cancel() }
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Hi")],
+                availableTools: []
+            )
+        }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+        let states = await collector.snapshot()
+        let completed = states.compactMap { state -> LLMGenerationSummary? in
+            if case .llmGenerationCompleted(let s) = state { return s }
+            return nil
+        }
+        #expect(completed.count >= 1)
+        #expect(completed[0].innerStepIndex == 1)
+        #expect(completed[0].hadToolCalls == false)
+    }
+
+    @Test("reject prose retries then accepts tool call")
+    func testAssistantTurnCorrectionRetry() async throws {
+        let toolCall = ToolCall(
+            name: "get_current_time",
+            arguments: .object([:]),
+            id: "c1"
+        )
+        let correctionMock = AssistantCorrectionMockLLM(toolCall: toolCall)
+        let toolManager = ToolManager(providers: [
+            MockFunctionToolProvider(toolName: "get_current_time", resultContent: "ok", resultSuccess: true)
+        ])
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: correctionMock,
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: true,
+                maxCorrectionRetries: 2,
+                correctionMessage: "Use a tool."
+            ),
+            toolManager: toolManager
+        )
+        let def = ToolDefinition(
+            name: "get_current_time",
+            description: "time",
+            parameters: [],
+            type: .function
+        )
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Hey")],
+                availableTools: [def]
+            )
+        }
+        #expect(correctionMock.sendInvocationCount >= 2)
+    }
+}
+
+// MARK: - Harness test doubles
+
+/// Always requests the same tool so the agentic loop continues until ``OrchestratorConfig/maxAgenticStepsPerUpdate``.
+private struct InfiniteToolMockLLM: LLMProtocol {
+    let toolCall: ToolCall
+    init(toolCall: ToolCall) {
+        self.toolCall = toolCall
+    }
+    func getModelName() -> String { "infinite-tools" }
+    func getCapabilities() -> [LLMCapability] { [.tools] }
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        LLMResponse.withToolCalls(content: "", toolCalls: [toolCall])
+    }
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.complete(LLMResponse.withToolCalls(content: "", toolCalls: [toolCall])))
+            continuation.finish()
+        }
+    }
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        throw LLMError.unsupportedCapability(.imageGeneration)
+    }
+}
+
+/// Returns prose until the correction message appears in the transcript, then tool calls.
+private final class AssistantCorrectionMockLLM: LLMProtocol, @unchecked Sendable {
+    private let toolCall: ToolCall
+    private let correctionSnippet: String
+    private(set) var sendInvocationCount = 0
+    init(toolCall: ToolCall, correctionSnippet: String = "Use a tool.") {
+        self.toolCall = toolCall
+        self.correctionSnippet = correctionSnippet
+    }
+    func getModelName() -> String { "correction-mock" }
+    func getCapabilities() -> [LLMCapability] { [.tools] }
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        sendInvocationCount += 1
+        let hasToolTurn = messages.contains { $0.role == .tool }
+        if hasToolTurn {
+            return LLMResponse.complete(content: "Done after tool.")
+        }
+        let sawCorrection = messages.contains { $0.content.contains(correctionSnippet) }
+        if sawCorrection {
+            return LLMResponse.withToolCalls(content: "", toolCalls: [toolCall])
+        }
+        return LLMResponse.complete(content: "I will just chat.")
+    }
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+    func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
+        throw LLMError.unsupportedCapability(.imageGeneration)
     }
 } 

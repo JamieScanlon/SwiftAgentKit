@@ -26,11 +26,17 @@ The MCP module follows a **separation of concerns** architecture:
 
 ## Key Types
 
-- **MCPServerManager**: Boots and manages MCP server processes, returns communication pipes
+- **MCPServerManager**: Boots and manages MCP server processes, returns communication pipes and a ``Process`` handle for each server
 - **MCPClient**: Manages the connection to an MCP server, tool invocation, and resource access
 - **ClientTransport**: Implements the Transport protocol for stdio-based communication
 - **MCPManager**: Manages multiple MCP clients and tool calls (uses new architecture internally)
 - **MCPConfig**: Configuration for MCP servers and environments
+
+### Local subprocess lifecycle
+
+- **`MCPManager.shutdown()`** disconnects clients and terminates subprocesses that were started from configuration. Call it from normal app teardown (for example `NSApplication.willTerminate` or a CLI `defer`). If you boot servers only via ``MCPServerManager``, retain each returned ``Process`` and call ``Shell/terminateProcess(_:gracePeriod:)`` when finished.
+- **`useShell`**: Set `useShell: true` on ``MCPConfig/ServerBootCall`` only when you need shell features in `command`/`args`. The default (`false`) launches through `/usr/bin/env` on Apple platforms so the top-level child is easier to terminate.
+- **Abrupt exit**: If the host process is killed with `SIGKILL` or crashes, Swift teardown does not run; subprocess cleanup requires cooperative shutdown or OS-specific mechanisms outside this library.
 
 ## New Architecture: Step-by-Step Usage
 
@@ -47,7 +53,8 @@ let serverBootCall = MCPConfig.ServerBootCall(
     environment: .object([
         "API_KEY": .string("your-api-key"),
         "MODEL": .string("gpt-4")
-    ])
+    ]),
+    useShell: false
 )
 
 var config = MCPConfig()
@@ -65,9 +72,10 @@ config.globalEnvironment = .object([
 let serverManager = MCPServerManager()
 let serverPipes = try await serverManager.bootServers(config: config)
 
-// serverPipes is a dictionary: [String: (inPipe: Pipe, outPipe: Pipe)]
+// serverPipes is [String: (inPipe: Pipe, outPipe: Pipe, process: Process)]
 for (serverName, pipes) in serverPipes {
     print("Server \(serverName) is ready for connection")
+    // Hold `pipes.process` until disconnect, then call `Shell.terminateProcess(pipes.process)` or use `MCPManager.shutdown()`.
 }
 ```
 
@@ -225,6 +233,7 @@ The MCP module uses a JSON configuration file to define MCP servers and environm
   - **arguments**: Array of command-line arguments for the server
   - **environment**: Environment variables specific to this server
 - **globalEnvironment**: Environment variables shared across all servers
+- **toolCallTimeout** / **timeout** (optional): At the **root**, sets the default MCP tool-call limit (seconds) for servers that do not specify their own. On each **`mcpServers`** and **`remoteServers`** entry, you can set **`toolCallTimeout`** or **`timeout`** for a **per-server** override (seconds). Precedence for each MCP client is: per-server value → root MCP JSON → `OrchestratorConfig.toolCallTimeout`. **`toolCallTimeout`** wins over **`timeout`** when both appear on the same object.
 
 ## Architecture Benefits
 

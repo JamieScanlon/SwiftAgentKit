@@ -16,12 +16,50 @@ public struct MCPConfig: Codable, Sendable {
         public let command: String
         public let arguments: [String]
         public let environment: JSON
-        
-        public init(name: String, command: String, arguments: [String], environment: JSON) {
+        /// When `true`, runs `command` through a shell (legacy; shell syntax in arguments is supported).
+        /// When `false` (default), launches via `/usr/bin/env` on Apple/Linux so the subprocess can be terminated reliably.
+        public let useShell: Bool
+        /// Per-server tool-call limit (seconds); falls back to root ``MCPConfig/toolCallTimeout`` then orchestrator default.
+        public let toolCallTimeout: TimeInterval?
+
+        public init(
+            name: String,
+            command: String,
+            arguments: [String],
+            environment: JSON,
+            useShell: Bool = false,
+            toolCallTimeout: TimeInterval? = nil
+        ) {
             self.name = name
             self.command = command
             self.arguments = arguments
             self.environment = environment
+            self.useShell = useShell
+            self.toolCallTimeout = toolCallTimeout
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case name, command, arguments, environment, useShell, toolCallTimeout
+        }
+
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            name = try c.decode(String.self, forKey: .name)
+            command = try c.decode(String.self, forKey: .command)
+            arguments = try c.decode([String].self, forKey: .arguments)
+            environment = try c.decode(JSON.self, forKey: .environment)
+            useShell = try c.decodeIfPresent(Bool.self, forKey: .useShell) ?? false
+            toolCallTimeout = try c.decodeIfPresent(TimeInterval.self, forKey: .toolCallTimeout)
+        }
+
+        public func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(name, forKey: .name)
+            try c.encode(command, forKey: .command)
+            try c.encode(arguments, forKey: .arguments)
+            try c.encode(environment, forKey: .environment)
+            try c.encode(useShell, forKey: .useShell)
+            try c.encodeIfPresent(toolCallTimeout, forKey: .toolCallTimeout)
         }
     }
     
@@ -35,6 +73,8 @@ public struct MCPConfig: Codable, Sendable {
         public let requestTimeout: TimeInterval?
         public let maxRetries: Int?
         public let clientID: String?
+        /// Per-server tool-call limit (seconds); falls back to root ``MCPConfig/toolCallTimeout`` then orchestrator default.
+        public let toolCallTimeout: TimeInterval?
         
         public init(
             name: String,
@@ -44,7 +84,8 @@ public struct MCPConfig: Codable, Sendable {
             connectionTimeout: TimeInterval? = nil,
             requestTimeout: TimeInterval? = nil,
             maxRetries: Int? = nil,
-            clientID: String? = nil
+            clientID: String? = nil,
+            toolCallTimeout: TimeInterval? = nil
         ) {
             self.name = name
             self.url = url
@@ -54,6 +95,7 @@ public struct MCPConfig: Codable, Sendable {
             self.requestTimeout = requestTimeout
             self.maxRetries = maxRetries
             self.clientID = clientID
+            self.toolCallTimeout = toolCallTimeout
         }
     }
     
@@ -176,6 +218,8 @@ public struct MCPConfig: Codable, Sendable {
     public var serverBootCalls: [ServerBootCall] = []
     public var remoteServers: [RemoteServerConfig] = []
     public var globalEnvironment: JSON = .object([:])
+    /// When set from JSON (see ``MCPConfigHelper``), bounds each MCP tool call duration for orchestrators that read ``MCPManager/toolCallTimeout``.
+    public var toolCallTimeout: TimeInterval? = nil
     
     public init() {}
 }
@@ -207,7 +251,19 @@ public struct MCPConfigHelper {
                 let arguments = mcpServerConfig["args"] as? [String] ?? []
                 let environment = mcpServerConfig["env"] as? [String: Any] ?? [:]
                 let envJson = (try? JSON(environment)) ?? .object([:])
-                serverBootCalls.append(MCPConfig.ServerBootCall(name: name, command: command, arguments: arguments, environment: envJson))
+                let useShell = mcpServerConfig["useShell"] as? Bool ?? false
+                let perServerTimeout = Self.optionalTimeInterval(mcpServerConfig["toolCallTimeout"])
+                    ?? Self.optionalTimeInterval(mcpServerConfig["timeout"])
+                serverBootCalls.append(
+                    MCPConfig.ServerBootCall(
+                        name: name,
+                        command: command,
+                        arguments: arguments,
+                        environment: envJson,
+                        useShell: useShell,
+                        toolCallTimeout: perServerTimeout
+                    )
+                )
             }
             mcpConfig.serverBootCalls = serverBootCalls
         }
@@ -215,6 +271,9 @@ public struct MCPConfigHelper {
         if let globalEnvironment = json["globalEnv"] as? [String: Any] {
             mcpConfig.globalEnvironment = (try? JSON(globalEnvironment)) ?? .object([:])
         }
+        
+        mcpConfig.toolCallTimeout = Self.optionalTimeInterval(json["toolCallTimeout"])
+            ?? Self.optionalTimeInterval(json["timeout"])
         
         // Parse remote servers configuration
         if let remoteServers = json["remoteServers"] as? [String: Any] {
@@ -233,6 +292,8 @@ public struct MCPConfigHelper {
                 let requestTimeout = remoteServerConfig["requestTimeout"] as? TimeInterval
                 let maxRetries = remoteServerConfig["maxRetries"] as? Int
                 let clientID = remoteServerConfig["clientID"] as? String
+                let toolCallTimeout = Self.optionalTimeInterval(remoteServerConfig["toolCallTimeout"])
+                    ?? Self.optionalTimeInterval(remoteServerConfig["timeout"])
                 
                 let authConfigJson = authConfig != nil ? (try? JSON(authConfig!)) : nil
                 
@@ -244,13 +305,22 @@ public struct MCPConfigHelper {
                     connectionTimeout: connectionTimeout,
                     requestTimeout: requestTimeout,
                     maxRetries: maxRetries,
-                    clientID: clientID
+                    clientID: clientID,
+                    toolCallTimeout: toolCallTimeout
                 ))
             }
             mcpConfig.remoteServers = remoteServerConfigs
         }
         
         return mcpConfig
+    }
+    
+    private static func optionalTimeInterval(_ value: Any?) -> TimeInterval? {
+        guard let value else { return nil }
+        if let d = value as? Double { return d }
+        if let i = value as? Int { return TimeInterval(i) }
+        if let n = value as? NSNumber { return n.doubleValue }
+        return nil
     }
     
     /// Creates a remote server configuration with Dynamic Client Registration authentication
@@ -282,7 +352,8 @@ public struct MCPConfigHelper {
         connectionTimeout: TimeInterval? = nil,
         requestTimeout: TimeInterval? = nil,
         maxRetries: Int? = nil,
-        clientID: String? = nil
+        clientID: String? = nil,
+        toolCallTimeout: TimeInterval? = nil
     ) -> MCPConfig.RemoteServerConfig {
         
         let dynamicClientRegConfig = MCPConfig.DynamicClientRegistrationConfig.mcpClientConfig(
@@ -315,7 +386,8 @@ public struct MCPConfigHelper {
             connectionTimeout: connectionTimeout,
             requestTimeout: requestTimeout,
             maxRetries: maxRetries,
-            clientID: clientID
+            clientID: clientID,
+            toolCallTimeout: toolCallTimeout
         )
     }
     
@@ -346,7 +418,8 @@ public struct MCPConfigHelper {
         connectionTimeout: TimeInterval? = nil,
         requestTimeout: TimeInterval? = nil,
         maxRetries: Int? = nil,
-        clientID: String? = nil
+        clientID: String? = nil,
+        toolCallTimeout: TimeInterval? = nil
     ) -> MCPConfig.RemoteServerConfig? {
         
         guard let registrationEndpoint = serverMetadata.registrationEndpoint else {
@@ -365,7 +438,8 @@ public struct MCPConfigHelper {
             connectionTimeout: connectionTimeout,
             requestTimeout: requestTimeout,
             maxRetries: maxRetries,
-            clientID: clientID
+            clientID: clientID,
+            toolCallTimeout: toolCallTimeout
         )
     }
 }

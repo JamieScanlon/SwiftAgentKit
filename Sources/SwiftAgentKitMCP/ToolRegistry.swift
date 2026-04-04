@@ -34,17 +34,20 @@ public actor ToolRegistry {
     ///   - name: The name of the tool
     ///   - description: Description of what the tool does
     ///   - inputSchema: JSON schema for the tool's input parameters as EasyJSON
+    ///   - toolCallTimeout: Optional server-side wall-clock limit (seconds) for this handler. Values ≤ 0 are ignored (no cap).
     ///   - handler: The closure that executes the tool
     public func registerTool(
         name: String,
         description: String,
         inputSchema: JSON,
+        toolCallTimeout: TimeInterval? = nil,
         handler: @escaping @Sendable ([String: JSON]) async throws -> MCPToolResult
     ) {
         let tool = RegisteredTool(
             name: name,
             description: description,
             inputSchema: inputSchema,
+            toolCallTimeout: toolCallTimeout,
             handler: handler
         )
         
@@ -84,12 +87,28 @@ public actor ToolRegistry {
         let args = arguments.mapValues { convertMCPValueToJSON($0) }
         
         do {
-            let result = try await tool.handler(args)
+            let result: MCPToolResult
+            if let cap = tool.toolCallTimeout, cap > 0 {
+                result = try await withToolCallTimeout(cap, toolName: name) {
+                    try await tool.handler(args)
+                }
+            } else {
+                result = try await tool.handler(args)
+            }
             logger.info(
                 "Tool executed successfully",
                 metadata: SwiftAgentKitLogging.metadata(("tool", .string(name)))
             )
             return result
+        } catch let timeout as ToolCallTimeoutError {
+            logger.error(
+                "Tool execution timed out",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("tool", .string(name)),
+                    ("error", .string(timeout.message))
+                )
+            )
+            return .error("TOOL_CALL_TIMEOUT", timeout.message)
         } catch {
             logger.error(
                 "Tool execution failed",
@@ -172,6 +191,8 @@ private struct RegisteredTool {
     let name: String
     let description: String
     let inputSchema: JSON
+    /// Server-side cap (seconds); `nil` or ≤ 0 means no limit.
+    let toolCallTimeout: TimeInterval?
     let handler: @Sendable ([String: JSON]) async throws -> MCPToolResult
     
     /// Convert to MCP Tool format
