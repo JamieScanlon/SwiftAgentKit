@@ -197,6 +197,7 @@ public enum LLMCapability: String, Codable, Sendable {
     case tools
     case insert
     case vision
+    case audio
     case embedding
     case thinking
     case imageGeneration
