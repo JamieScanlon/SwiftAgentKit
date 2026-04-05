@@ -1661,6 +1661,20 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         }.joined(separator: "\n")
     }
     
+    /// Interprets JSON metadata numeric values as `Int` (handles `Int`, `Double`, and `NSNumber` from JSON).
+    private func metadataIntegerValue(_ value: Any?) -> Int? {
+        switch value {
+        case let n as Int:
+            return n
+        case let n as Double:
+            return Int(exactly: n)
+        case let n as NSNumber:
+            return n.intValue
+        default:
+            return nil
+        }
+    }
+    
     // MARK: - Image Generation Helpers
     
     /// Detects MIME type for an image file based on its URL extension
@@ -1895,7 +1909,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         
         // Extract and validate n parameter
         let n: Int?
-        if let nValue = metadata?["n"] as? Int {
+        if let nValue = metadataIntegerValue(metadata?["n"]) {
             if nValue < 1 || nValue > 10 {
                 logger.warning("Invalid 'n' parameter: \(nValue). Must be between 1 and 10. Using default: 1")
                 n = 1

@@ -198,13 +198,14 @@ struct TestLLM: LLMProtocol {
             throw LLMError.unsupportedCapability(.imageGeneration)
         }
         
-        // Create test image URLs
+        // Create test image URLs (unique paths per call so parallel tests do not clobber the same files)
         let tempDir = FileManager.default.temporaryDirectory
         let imageCount = config.n ?? 1
         var imageURLs: [URL] = []
+        let batchId = UUID().uuidString
         
         for i in 0..<imageCount {
-            let imageURL = tempDir.appendingPathComponent("test-image-\(i).png")
+            let imageURL = tempDir.appendingPathComponent("test-image-\(batchId)-\(i).png")
             // Create a minimal PNG file for testing
             let pngData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) // PNG header
             try? pngData.write(to: imageURL)
