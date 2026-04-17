@@ -87,6 +87,7 @@ public actor SwiftAgentKitOrchestrator {
     public let toolManager: ToolManager?
 
     private let agenticLoopStateHub: AgenticLoopStateHub
+    private let orchestrationObservation: OrchestrationObservationCoordinator
     
     /// All available tools from MCP and A2A managers
     public var allAvailableTools: [ToolDefinition] {
@@ -149,6 +150,18 @@ public actor SwiftAgentKitOrchestrator {
     /// Snapshot of latest agentic loop state per id.
     public var currentAgenticLoopStates: [AgenticLoopID: AgenticLoopState] {
         agenticLoopStateHub.currentStates
+    }
+
+    /// Single call returning LLM runtime, per-request states, and agentic-loop states together (see
+    /// ``OrchestrationObservationCoordinator``).
+    public func currentOrchestrationSnapshot() -> OrchestrationSnapshot {
+        orchestrationObservation.currentSnapshot()
+    }
+
+    /// Emits ``OrchestrationSnapshotEvent`` whenever any of the underlying observation streams
+    /// advances, with a monotonic ``OrchestrationSnapshotEvent/generation`` per emission.
+    public var orchestrationSnapshotUpdates: AsyncStream<OrchestrationSnapshotEvent> {
+        orchestrationObservation.snapshotUpdates()
     }
     
     /// - Parameters:
@@ -215,7 +228,12 @@ public actor SwiftAgentKitOrchestrator {
         }
         
         self.toolManager = toolManager
-        self.agenticLoopStateHub = AgenticLoopStateHub()
+        let agenticHub = AgenticLoopStateHub()
+        self.agenticLoopStateHub = agenticHub
+        self.orchestrationObservation = OrchestrationObservationCoordinator(
+            llm: llm,
+            agenticLoopStateHub: agenticHub
+        )
     }
     
     /// Process a conversation thread and publish message updates to the message stream

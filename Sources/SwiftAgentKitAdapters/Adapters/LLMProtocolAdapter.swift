@@ -115,6 +115,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     private let config: Configuration
     private let logger: Logger
     private let agenticLoopStateHub: AgenticLoopStateHub
+    private let orchestrationObservation: OrchestrationObservationCoordinator
     
     // Custom URLSession for image downloads with optimized settings
     private static let imageDownloadSession: URLSession = {
@@ -135,7 +136,12 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     ) {
         self.llm = llm
         self.config = configuration
-        self.agenticLoopStateHub = AgenticLoopStateHub()
+        let agenticHub = AgenticLoopStateHub()
+        self.agenticLoopStateHub = agenticHub
+        self.orchestrationObservation = OrchestrationObservationCoordinator(
+            llm: llm,
+            agenticLoopStateHub: agenticHub
+        )
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .adapters("LLMProtocolAdapter"),
             metadata: SwiftAgentKitLogging.metadata(
@@ -311,6 +317,16 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
     /// Snapshot of latest agentic loop state per id.
     public var currentAgenticLoopStates: [AgenticLoopID: AgenticLoopState] {
         agenticLoopStateHub.currentStates
+    }
+
+    /// Single call returning LLM runtime, per-request states, and agentic-loop states together.
+    public func currentOrchestrationSnapshot() -> OrchestrationSnapshot {
+        orchestrationObservation.currentSnapshot()
+    }
+
+    /// Emits a unified snapshot whenever any underlying observation stream advances.
+    public var orchestrationSnapshotUpdates: AsyncStream<OrchestrationSnapshotEvent> {
+        orchestrationObservation.snapshotUpdates()
     }
     
     public func responseType(for params: MessageSendParams) -> AdapterResponseType {

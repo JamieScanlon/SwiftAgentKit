@@ -16,6 +16,7 @@ For the **tool-loop control flow** inside `LLMProtocolAdapter` (iterations, max 
 | **1. LLM instance**     | What the **shared model** is doing (idle vs generating vs failed).               | `LLMRuntimeState`, `LLMIdleState`, `LLMGenerationState` | `llm.stateUpdates` (often via `**StatefulLLM`** wrapping your provider)                         |
 | **2. Per-call request** | Lifecycle of **one** `send` / `stream` / `generateImage` invocation.             | `LLMRequestID`, `LLMRequestState`                       | `**StatefulLLM.requestStateUpdates`** and/or `**QueuedLLM.requestStateUpdates**`                |
 | **3. Agentic session**  | One **multi-call** tool loop until a final answer (or failure / max iterations). | `AgenticLoopID`, `AgenticLoopState`                     | `**LLMProtocolAdapter.agenticLoopUpdates`**, `**SwiftAgentKitOrchestrator.agenticLoopUpdates**` |
+| **Unified (recommended)** | One combined snapshot of layers 1–3 for UI correlation | ``OrchestrationSnapshot`` | ``LLMProtocolAdapter.currentOrchestrationSnapshot()`` / ``orchestrationSnapshotUpdates``; ``await SwiftAgentKitOrchestrator.currentOrchestrationSnapshot()`` / ``orchestrationSnapshotUpdates`` (orchestrator is an actor) |
 
 
 - **Instance** state does **not** include queue position or “waiting for tools between calls.”
@@ -125,6 +126,30 @@ The adapter and orchestrator hold their own `**AgenticLoopStateHub`**; they are 
 
 `**AgenticLoopID.current`** (`TaskLocal`) may be set in future versions for nested correlation; v1 observation is stream-based.
 
+### Lifecycle and “which loop is authoritative?”
+
+- **`AgenticLoopStateHub`** stores the **latest** state per id until overwritten (see class documentation on ``AgenticLoopStateHub``). **Completed** sessions remain in ``currentAgenticLoopStates`` / ``currentStates`` until another publish for that **same** id replaces them (or the process exits). There is **no** automatic retirement of ids.
+- **`AgenticLoopID.orchestratorSession(UUID)`** — SwiftAgentKit allocates a **fresh** UUID for each top-level ``SwiftAgentKitOrchestrator/updateConversation``; nested recursive continuations reuse that id. For UI, bind to the session id for the **current** turn you started (or the id you captured when kicking off work), not “whatever id appears first in the map.”
+- **`AgenticLoopID.a2a(taskId:contextId:)`** — one id per A2A task/context pair in ``LLMProtocolAdapter``; a new agentic run for the same pair **overwrites** the hub entry for that key.
+
+---
+
+## Unified orchestration snapshots (`OrchestrationSnapshot`)
+
+Hosts that subscribe separately to ``LLMProtocol/stateUpdates``, ``LLMPerRequestStateSource/requestStateUpdates``, and ``agenticLoopUpdates`` can observe **torn reads** (each stream delivers on its own timeline). Prefer:
+
+- **Pull:** ``currentOrchestrationSnapshot()`` — returns one ``OrchestrationSnapshot`` with ``llmRuntime``, ``perRequestStates``, and ``agenticLoopStates`` read together in one coordinator pass.
+- **Push:** ``orchestrationSnapshotUpdates`` — ``AsyncStream<OrchestrationSnapshotEvent>``; each element has a monotonically increasing ``OrchestrationSnapshotEvent/generation`` (per coordinator, starting at `1` for the first subscriber) and a full ``OrchestrationSnapshot``. Use ``generation`` to drop stale UI updates when multiple events arrive before the next frame.
+
+Per-request data is populated only when the orchestrator/adapter’s ``LLMProtocol`` instance is a ``LLMPerRequestStateSource`` (``StatefulLLM``, ``QueuedLLM``); otherwise ``perRequestStates`` is empty.
+
+---
+
+## Ordering guarantees
+
+- **Across the three legacy streams** — ``llmStateUpdates`` (from the wrapped ``LLMProtocol``), ``requestStateUpdates`` (when using a per-request source), and ``agenticLoopUpdates`` — there is **no** total order. Each stream preserves **its own** publication order only; interleaving between streams is arbitrary relative to wall-clock and task scheduling.
+- **Unified stream** — ``orchestrationSnapshotUpdates`` emits one ``OrchestrationSnapshotEvent`` whenever **any** connected underlying stream delivers (plus an initial emission when the first subscriber attaches). Successive events have strictly increasing ``generation``. This does **not** retroactively impose a global order on the three legacy streams; it only gives you **consistent triples** at each emission.
+
 ---
 
 ## Relation to `LLMProtocolAdapter`’s agentic loop
@@ -148,5 +173,6 @@ Library diagnostics use `**SwiftAgentKitLogging**` (see [SwiftAgentKit](SwiftAge
 | **Queue** wait + per-call phases      | `QueuedLLM` + `requestStateUpdates`            |
 | **Tool loop** progress (adapter)      | `LLMProtocolAdapter.agenticLoopUpdates`        |
 | **Tool loop** progress (orchestrator) | `SwiftAgentKitOrchestrator.agenticLoopUpdates` |
+| **All three layers without torn reads** | `currentOrchestrationSnapshot()` / `orchestrationSnapshotUpdates` |
 
 

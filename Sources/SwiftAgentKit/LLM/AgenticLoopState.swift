@@ -63,6 +63,14 @@ public enum AgenticLoopState: Sendable, Equatable, Codable {
 // MARK: - Hub
 
 /// Broadcasts agentic-loop state updates to all subscribers.
+///
+/// **Retention:** The hub keeps the **last published** state per ``AgenticLoopID`` until it is
+/// overwritten by another `publish` for the **same** id (or until the process exits). Completed
+/// loops are **not** removed automatically. For ``AgenticLoopID/orchestratorSession(_:)``, each
+/// top-level ``SwiftAgentKitOrchestrator/updateConversation`` uses a **new** UUID, so older session
+/// ids typically remain in ``currentStates`` as `.completed` / `.failed` while new turns add new
+/// entries. Hosts should treat the loop id tied to the **current** user turn (or task) as
+/// authoritative for UI, not “the only id in the dictionary.”
 public final class AgenticLoopStateHub: @unchecked Sendable {
     private let lock = NSLock()
     private var continuations: [UUID: AsyncStream<(AgenticLoopID, AgenticLoopState)>.Continuation] = [:]
