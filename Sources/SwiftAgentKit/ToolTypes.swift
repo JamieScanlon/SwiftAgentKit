@@ -131,18 +131,38 @@ public struct ToolManager: Sendable {
         return Array(chosenToolsByName.values)
     }
     
+    /// Dispatches to providers that list `toolCall.name`, in ``prioritizedProviders(for:)`` order (local function providers first).
+    /// One matching provider: returns its result (including `success: false`) or rethrows. Several: tries in order until `success: true`;
+    /// on repeated failure returns the **last** `ToolResult` with `success: false`. Throws from a candidate are skipped so the next provider may run.
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
-        let providersByPriority = await prioritizedProviders(for: toolCall.name)
-        for provider in providersByPriority {
+        let prioritized = await prioritizedProviders(for: toolCall.name)
+        var candidates: [ToolProvider] = []
+        candidates.reserveCapacity(prioritized.count)
+        for provider in prioritized {
+            let available = await provider.availableTools()
+            guard available.contains(where: { $0.name == toolCall.name }) else { continue }
+            candidates.append(provider)
+        }
+        
+        if candidates.count == 1 {
+            return try await candidates[0].executeTool(toolCall)
+        }
+        
+        var lastHandledFailure: ToolResult?
+        for provider in candidates {
             do {
                 let result = try await provider.executeTool(toolCall)
                 if result.success {
                     return result
                 }
+                lastHandledFailure = result
             } catch {
-                // Continue to next provider
                 continue
             }
+        }
+        
+        if let lastHandledFailure {
+            return lastHandledFailure
         }
         
         return ToolResult(

@@ -141,4 +141,125 @@ import EasyJSON
         #expect(result.toolCallId == "call_weather_1")
         #expect(result.error?.contains("Try a different tool or approach.") == true)
     }
+    
+    // MARK: - ToolManager execution semantics
+    
+    struct FixedResultToolProvider: ToolProvider {
+        let toolName: String
+        let result: ToolResult
+        
+        var name: String { "FixedResultToolProvider" }
+        
+        func availableTools() async -> [ToolDefinition] {
+            [
+                ToolDefinition(
+                    name: toolName,
+                    description: "test",
+                    parameters: [],
+                    type: .function
+                )
+            ]
+        }
+        
+        func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+            result
+        }
+    }
+    
+    struct ThrowingToolProvider: ToolProvider {
+        let toolName: String
+        
+        struct TestError: Error, Equatable {}
+        
+        var name: String { "ThrowingToolProvider" }
+        
+        func availableTools() async -> [ToolDefinition] {
+            [
+                ToolDefinition(
+                    name: toolName,
+                    description: "test",
+                    parameters: [],
+                    type: .function
+                )
+            ]
+        }
+        
+        func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+            throw TestError()
+        }
+    }
+    
+    @Test("ToolManager returns provider failure when exactly one provider lists the tool and returns success false")
+    func testToolManagerPropagatesSingleProviderFailure() async throws {
+        let expectedError = "validation failed"
+        let provider = FixedResultToolProvider(
+            toolName: "foo",
+            result: ToolResult(success: false, content: "", toolCallId: "c1", error: expectedError)
+        )
+        let manager = ToolManager(providers: [provider])
+        let result = try await manager.executeTool(
+            ToolCall(name: "foo", arguments: .object([:]), id: "c1")
+        )
+        #expect(result.success == false)
+        #expect(result.error == expectedError)
+    }
+    
+    @Test("ToolManager propagates throw when exactly one provider lists the tool")
+    func testToolManagerPropagatesSingleProviderThrow() async throws {
+        let provider = ThrowingToolProvider(toolName: "foo")
+        let manager = ToolManager(providers: [provider])
+        await #expect(throws: ThrowingToolProvider.TestError.self) {
+            try await manager.executeTool(ToolCall(name: "foo", arguments: .object([:]), id: "c1"))
+        }
+    }
+    
+    @Test("ToolManager tries next provider when first returns success false and second succeeds")
+    func testToolManagerFallbackOnFailureUntilSuccess() async throws {
+        let first = FixedResultToolProvider(
+            toolName: "foo",
+            result: ToolResult(success: false, content: "", toolCallId: "c1", error: "first failed")
+        )
+        let second = FixedResultToolProvider(
+            toolName: "foo",
+            result: ToolResult(success: true, content: "ok", toolCallId: "c1", error: nil)
+        )
+        let manager = ToolManager(providers: [first, second])
+        let result = try await manager.executeTool(
+            ToolCall(name: "foo", arguments: .object([:]), id: "c1")
+        )
+        #expect(result.success == true)
+        #expect(result.content == "ok")
+    }
+    
+    @Test("ToolManager returns last failure when multiple providers list the tool and all return success false")
+    func testToolManagerReturnsLastFailureWhenAllFail() async throws {
+        let first = FixedResultToolProvider(
+            toolName: "foo",
+            result: ToolResult(success: false, content: "", toolCallId: "c1", error: "first failed")
+        )
+        let second = FixedResultToolProvider(
+            toolName: "foo",
+            result: ToolResult(success: false, content: "", toolCallId: "c1", error: "second failed")
+        )
+        let manager = ToolManager(providers: [first, second])
+        let result = try await manager.executeTool(
+            ToolCall(name: "foo", arguments: .object([:]), id: "c1")
+        )
+        #expect(result.success == false)
+        #expect(result.error == "second failed")
+    }
+    
+    @Test("ToolManager reports not found when no provider lists the tool")
+    func testToolManagerNotFoundWhenUnlisted() async throws {
+        let provider = FixedResultToolProvider(
+            toolName: "foo",
+            result: ToolResult(success: true, content: "ok", toolCallId: "c1", error: nil)
+        )
+        let manager = ToolManager(providers: [provider])
+        let result = try await manager.executeTool(
+            ToolCall(name: "bar", arguments: .object([:]), id: "c1")
+        )
+        #expect(result.success == false)
+        #expect(result.error == "Tool 'bar' not found in any provider")
+    }
 }
