@@ -84,13 +84,13 @@ public struct QueuedLLM: LLMProtocol {
                         return response
                     } catch {
                         if !Self.baseEmitsRequestTerminals(baseLLM) {
-                            requestStateHub.publish(rid, .failed(error.localizedDescription))
+                            Self.publishHubTerminal(for: error, hub: requestStateHub, requestID: rid)
                         }
                         await queue.release(slot)
                         throw error
                     }
                 } catch {
-                    requestStateHub.publish(rid, .failed(error.localizedDescription))
+                    Self.publishHubTerminal(for: error, hub: requestStateHub, requestID: rid)
                     throw error
                 }
             }
@@ -99,8 +99,8 @@ public struct QueuedLLM: LLMProtocol {
 
     public func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
         AsyncThrowingStream { continuation in
-            Task {
-                let rid = LLMRequestID()
+            let rid = LLMRequestID()
+            let work = Task {
                 do {
                     try await LLMRequestStateHub.$current.withValue(requestStateHub) {
                         try await LLMRequestID.$current.withValue(rid) {
@@ -120,7 +120,7 @@ public struct QueuedLLM: LLMProtocol {
                             } catch {
                                 continuation.finish(throwing: error)
                                 if !Self.baseEmitsRequestTerminals(baseLLM) {
-                                    requestStateHub.publish(rid, .failed(error.localizedDescription))
+                                    Self.publishHubTerminal(for: error, hub: requestStateHub, requestID: rid)
                                 }
                                 await queue.release(slot)
                             }
@@ -128,9 +128,23 @@ public struct QueuedLLM: LLMProtocol {
                     }
                 } catch {
                     continuation.finish(throwing: error)
-                    requestStateHub.publish(rid, .failed(error.localizedDescription))
+                    Self.publishHubTerminal(for: error, hub: requestStateHub, requestID: rid)
                 }
             }
+            continuation.onTermination = { @Sendable _ in
+                work.cancel()
+            }
+        }
+    }
+
+    /// When the base does not publish per-request terminals (e.g. raw provider), map cancellation distinctly from failures.
+    private static func publishHubTerminal(for error: Error, hub: LLMRequestStateHub, requestID: LLMRequestID) {
+        if error is CancellationError {
+            hub.publish(requestID, .cancelled)
+        } else if (error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled {
+            hub.publish(requestID, .cancelled)
+        } else {
+            hub.publish(requestID, .failed(error.localizedDescription))
         }
     }
 
@@ -151,13 +165,13 @@ public struct QueuedLLM: LLMProtocol {
                         return response
                     } catch {
                         if !Self.baseEmitsRequestTerminals(baseLLM) {
-                            requestStateHub.publish(rid, .failed(error.localizedDescription))
+                            Self.publishHubTerminal(for: error, hub: requestStateHub, requestID: rid)
                         }
                         await queue.release(slot)
                         throw error
                     }
                 } catch {
-                    requestStateHub.publish(rid, .failed(error.localizedDescription))
+                    Self.publishHubTerminal(for: error, hub: requestStateHub, requestID: rid)
                     throw error
                 }
             }

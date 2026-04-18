@@ -400,9 +400,40 @@ struct MockFunctionToolProvider: ToolProvider {
 
         #expect(observed.first == .idle(.ready))
         #expect(observed.contains(.generating(.reasoning)))
-        #expect(observed.contains(.generating(.responding)))
+        // `StatefulLLM.send` does not emit `.responding`; orchestrator must not overwrite idle with a stale `.responding` after the call completes.
         #expect(observed.contains(.idle(.completed)))
         #expect(observed.last == .idle(.ready))
+    }
+
+    @Test("currentOrchestrationSnapshot has no stale in-flight request or agentic phases after updateConversation")
+    func testOrchestrationSnapshotConsistentAfterUpdateConversation() async throws {
+        let baseLLM = MockLLM(model: "test-model", logger: Logger(label: "MockLLM"))
+        let trackedLLM = StatefulLLM(baseLLM: baseLLM)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: trackedLLM,
+            config: OrchestratorConfig(streamingEnabled: false)
+        )
+        let messages = [Message(id: UUID(), role: .user, content: "Hello there")]
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(messages)
+        }
+        let snap = await orchestrator.currentOrchestrationSnapshot()
+        #expect(!snap.llmRuntime.isGeneratingTokens)
+        let hasStaleRequest = snap.perRequestStates.values.contains {
+            switch $0 {
+            case .active, .generating, .streaming: return true
+            default: return false
+            }
+        }
+        #expect(!hasStaleRequest)
+        let hasStaleAgentic = snap.agenticLoopStates.values.contains {
+            switch $0 {
+            case .started, .llmCall, .betweenIterations: return true
+            default: return false
+            }
+        }
+        #expect(!hasStaleAgentic)
     }
     
     @Test("updateConversation passes maxTokens, temperature, topP, and additionalParameters to LLM")

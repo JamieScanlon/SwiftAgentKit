@@ -415,7 +415,6 @@ public actor SwiftAgentKitOrchestrator {
             } else {
                 transitionLLMState(to: .generating(.reasoning))
                 response = try await llm.send(working, config: requestConfig)
-                transitionLLMState(to: .generating(.responding))
             }
 
             let summary = Self.makeGenerationSummary(iteration: iteration, response: response)
@@ -494,7 +493,6 @@ public actor SwiftAgentKitOrchestrator {
         guard let response = finalResponse else {
             throw LLMError.invalidResponse("Streaming ended without a complete response")
         }
-        transitionLLMState(to: .generating(.responding))
         finishPartialContentStreamForStreamingTurn()
         return response
     }

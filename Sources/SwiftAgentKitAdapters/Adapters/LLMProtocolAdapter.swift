@@ -409,8 +409,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
             // Call the LLM
             transitionLLMState(to: .generating(.reasoning))
             let response = try await llm.send(messages, config: llmConfig)
-            transitionLLMState(to: .generating(.responding))
-            
+
             // Create response Artifact
             let responseArtifact = Artifact(
                 artifactId: UUID().uuidString,
@@ -847,8 +846,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                 } else {
                     response = try await llm.send(messages, config: llmConfig)
                 }
-                transitionLLMState(to: .generating(.responding))
-                
+
                 // Look at the text response for any tool calls not parsed automatically
                 var llmResponse = LLMResponse.llmResponse(from: response.content, availableTools: availableToolCalls)
                 // Add the Tool calls the LLM identified automatically

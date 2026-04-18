@@ -27,6 +27,64 @@ public struct OrchestrationSnapshot: Sendable, Equatable {
         self.perRequestStates = perRequestStates
         self.agenticLoopStates = agenticLoopStates
     }
+
+    /// Returns a copy where per-request and agentic-loop entries that still look in-flight are
+    /// reconciled with ``llmRuntime`` when the model is not in ``LLMRuntimeState/generating(_:)``.
+    ///
+    /// This masks torn reads between the runtime store, per-request hubs, and agentic hub (e.g. after a
+    /// turn completes or work is abandoned) so UI does not show “generating” for a call that has already
+    /// finished while the instance is idle. Legitimate non-LLM phases such as
+    /// ``AgenticLoopState/waitingForToolExecution`` / ``AgenticLoopState/executingTools`` are preserved.
+    public func reconcilingStaleInFlightPhases() -> OrchestrationSnapshot {
+        guard !llmRuntime.isGeneratingTokens else { return self }
+        let requests = Dictionary(uniqueKeysWithValues: perRequestStates.map { id, state in
+            (id, Self.reconciledRequestState(llmRuntime: llmRuntime, state: state))
+        })
+        let loops = Dictionary(uniqueKeysWithValues: agenticLoopStates.map { id, state in
+            (id, Self.reconciledAgenticState(llmRuntime: llmRuntime, state: state))
+        })
+        return OrchestrationSnapshot(
+            llmRuntime: llmRuntime,
+            perRequestStates: requests,
+            agenticLoopStates: loops
+        )
+    }
+
+    private static func reconciledRequestState(
+        llmRuntime: LLMRuntimeState,
+        state: LLMRequestState
+    ) -> LLMRequestState {
+        switch state {
+        case .active, .generating, .streaming:
+            switch llmRuntime {
+            case .failed(let message):
+                return .failed(message)
+            default:
+                return .completed
+            }
+        default:
+            return state
+        }
+    }
+
+    private static func reconciledAgenticState(
+        llmRuntime: LLMRuntimeState,
+        state: AgenticLoopState
+    ) -> AgenticLoopState {
+        switch state {
+        case .waitingForToolExecution, .executingTools,
+             .completed, .failed, .maxIterationsReached,
+             .llmGenerationCompleted:
+            return state
+        case .started, .llmCall, .betweenIterations:
+            switch llmRuntime {
+            case .failed(let message):
+                return .failed(message)
+            default:
+                return .completed
+            }
+        }
+    }
 }
 
 /// One emission from ``OrchestrationObservationCoordinator/snapshotUpdates()`` with a monotonic
@@ -116,6 +174,7 @@ public final class OrchestrationObservationCoordinator: @unchecked Sendable {
             perRequestStates: requests,
             agenticLoopStates: agenticLoopStateHub.currentStates
         )
+        .reconcilingStaleInFlightPhases()
     }
 
     private func emitSnapshot() {
@@ -155,36 +214,34 @@ public final class OrchestrationObservationCoordinator: @unchecked Sendable {
         }
     }
 
+    /// Subscribes to all observation streams **once** per merge task so `hub.publish` cannot be missed
+    /// before `AsyncStream` registration (see tests: resubscribe + rapid publish).
     private func runMergedObservers() async {
+        let llmStream = llm.stateUpdates
+        let agenticStream = agenticLoopStateHub.makeStream()
+        let requestStream = (llm as? any LLMPerRequestStateSource).map { $0.requestStateUpdates }
+
         await withTaskGroup(of: Void.self) { group in
-            group.addTask { await self.llmPump() }
-            group.addTask { await self.agenticPump() }
-            if llm is any LLMPerRequestStateSource {
-                group.addTask { await self.requestPump() }
+            group.addTask {
+                for await _ in llmStream {
+                    if Task.isCancelled { return }
+                    self.emitSnapshot()
+                }
             }
-        }
-    }
-
-    private func llmPump() async {
-        for await _ in llm.stateUpdates {
-            if Task.isCancelled { return }
-            emitSnapshot()
-        }
-    }
-
-    private func agenticPump() async {
-        let stream = agenticLoopStateHub.makeStream()
-        for await _ in stream {
-            if Task.isCancelled { return }
-            emitSnapshot()
-        }
-    }
-
-    private func requestPump() async {
-        guard let source = llm as? any LLMPerRequestStateSource else { return }
-        for await _ in source.requestStateUpdates {
-            if Task.isCancelled { return }
-            emitSnapshot()
+            group.addTask {
+                for await _ in agenticStream {
+                    if Task.isCancelled { return }
+                    self.emitSnapshot()
+                }
+            }
+            if let requestStream {
+                group.addTask {
+                    for await _ in requestStream {
+                        if Task.isCancelled { return }
+                        self.emitSnapshot()
+                    }
+                }
+            }
         }
     }
 }

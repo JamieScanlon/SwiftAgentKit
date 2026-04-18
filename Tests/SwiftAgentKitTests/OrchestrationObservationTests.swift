@@ -67,4 +67,49 @@ import SwiftAgentKit
         #expect(snap.agenticLoopStates[loopID] == .executingTools)
         #expect(snap.perRequestStates[rid] == .completed)
     }
+
+    @Test("reconcilingStaleInFlightPhases clears stale per-request phases when runtime is idle")
+    func testReconcilePerRequestWhenIdle() {
+        let rid = LLMRequestID()
+        let snap = OrchestrationSnapshot(
+            llmRuntime: .idle(.ready),
+            perRequestStates: [rid: .generating(.responding)],
+            agenticLoopStates: [:]
+        ).reconcilingStaleInFlightPhases()
+        #expect(snap.perRequestStates[rid] == .completed)
+    }
+
+    @Test("reconcilingStaleInFlightPhases preserves tool execution when runtime is idle")
+    func testReconcilePreservesToolPhases() {
+        let loopID = AgenticLoopID.orchestratorSession(UUID())
+        let snap = OrchestrationSnapshot(
+            llmRuntime: .idle(.ready),
+            perRequestStates: [:],
+            agenticLoopStates: [loopID: .executingTools]
+        ).reconcilingStaleInFlightPhases()
+        #expect(snap.agenticLoopStates[loopID] == .executingTools)
+    }
+
+    @Test("reconcilingStaleInFlightPhases maps stale agentic in-progress to completed when runtime is idle")
+    func testReconcileAgenticBetweenIterationsWhenIdle() {
+        let loopID = AgenticLoopID.orchestratorSession(UUID())
+        let snap = OrchestrationSnapshot(
+            llmRuntime: .idle(.completed),
+            perRequestStates: [:],
+            agenticLoopStates: [loopID: .betweenIterations]
+        ).reconcilingStaleInFlightPhases()
+        #expect(snap.agenticLoopStates[loopID] == .completed)
+    }
+
+    @Test("reconcilingStaleInFlightPhases leaves snapshot unchanged while runtime is generating")
+    func testReconcileNoOpWhileGenerating() {
+        let loopID = AgenticLoopID.orchestratorSession(UUID())
+        let raw = OrchestrationSnapshot(
+            llmRuntime: .generating(.reasoning),
+            perRequestStates: [:],
+            agenticLoopStates: [loopID: .betweenIterations]
+        )
+        let snap = raw.reconcilingStaleInFlightPhases()
+        #expect(snap == raw)
+    }
 }

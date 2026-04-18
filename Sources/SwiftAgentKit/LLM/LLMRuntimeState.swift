@@ -37,6 +37,12 @@ public enum LLMRuntimeState: Sendable, Codable, Equatable {
     case generating(LLMGenerationState)
     /// The most recent request ended in failure.
     case failed(String?)
+
+    /// `true` while the shared instance is in ``generating(_:)`` (actively generating tokens).
+    public var isGeneratingTokens: Bool {
+        if case .generating = self { return true }
+        return false
+    }
 }
 
 /// Optional protocol for actively publishing runtime state transitions.
@@ -185,9 +191,7 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
             hub.publish(rid, .completed)
             return response
         } catch {
-            transition(to: .failed(error.localizedDescription))
-            hub.publish(rid, .failed(error.localizedDescription))
-            transition(to: .idle(.ready))
+            Self.handleInvocationError(error, hub: hub, requestID: rid, transition: { self.transition(to: $0) })
             throw error
         }
     }
@@ -201,8 +205,9 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
 
         let upstream = baseLLM.stream(messages, config: config)
         return AsyncThrowingStream { continuation in
-            Task {
+            let consumeTask = Task {
                 do {
+                    var sawComplete = false
                     for try await result in upstream {
                         switch result {
                         case .stream:
@@ -210,18 +215,28 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
                             hub.publish(rid, .generating(.responding))
                             hub.publish(rid, .streaming)
                         case .complete:
+                            sawComplete = true
                             transition(to: .idle(.completed))
                             hub.publish(rid, .completed)
                         }
                         continuation.yield(result)
                     }
+                    if !sawComplete {
+                        transition(to: .idle(.ready))
+                        if Task.isCancelled {
+                            hub.publish(rid, .cancelled)
+                        } else {
+                            hub.publish(rid, .failed(Self.streamEndedWithoutComplete))
+                        }
+                    }
                     continuation.finish()
                 } catch {
-                    transition(to: .failed(error.localizedDescription))
-                    hub.publish(rid, .failed(error.localizedDescription))
-                    transition(to: .idle(.ready))
+                    Self.handleInvocationError(error, hub: hub, requestID: rid, transition: { self.transition(to: $0) })
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { @Sendable _ in
+                consumeTask.cancel()
             }
         }
     }
@@ -239,10 +254,34 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
             hub.publish(rid, .completed)
             return response
         } catch {
-            transition(to: .failed(error.localizedDescription))
-            hub.publish(rid, .failed(error.localizedDescription))
-            transition(to: .idle(.ready))
+            Self.handleInvocationError(error, hub: hub, requestID: rid, transition: { self.transition(to: $0) })
             throw error
         }
     }
+
+    /// Standard terminal handling for cancelled work vs real failures (shared by ``send``, ``stream``, ``generateImage``).
+    private static func handleInvocationError(
+        _ error: Error,
+        hub: LLMRequestStateHub,
+        requestID: LLMRequestID,
+        transition: (LLMRuntimeState) -> Void
+    ) {
+        if isCancellation(error) {
+            transition(.idle(.ready))
+            hub.publish(requestID, .cancelled)
+        } else {
+            let message = error.localizedDescription
+            transition(.failed(message))
+            hub.publish(requestID, .failed(message))
+            transition(.idle(.ready))
+        }
+    }
+
+    private static func isCancellation(_ error: Error) -> Bool {
+        error is CancellationError
+            || (error as NSError).domain == NSURLErrorDomain && (error as NSError).code == NSURLErrorCancelled
+    }
+
+    private static let streamEndedWithoutComplete = "Stream ended without a complete response"
 }
+
