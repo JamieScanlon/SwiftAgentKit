@@ -11,7 +11,7 @@ import EasyJSON
 @testable import SwiftAgentKitA2A
 @testable import SwiftAgentKit
 
-@Suite("A2AManager Tests")
+@Suite("A2AManager Tests", .serialized)
 struct A2AManagerTests {
     
     // MARK: - Mock Classes

@@ -120,10 +120,28 @@ public actor SwiftAgentKitOrchestrator {
         }
     }
     
-    /// Stream of partial content updates (streaming text chunks) from the orchestrator
+    /// Stream of partial content updates (streaming assistant text chunks only) from the orchestrator.
+    ///
+    /// Reasoning and tool-call fragments are excluded; use ``partialFragmentsStream`` for discriminated deltas.
     public var partialContentStream: AsyncStream<String> {
         get async {
-            return currentPartialContentStream ?? createPartialContentStream()
+            if currentPartialContentStream == nil {
+                createPartialStreams()
+            }
+            return currentPartialContentStream!
+        }
+    }
+
+    /// Discriminated partial streaming deltas (text, reasoning, tool-call argument fragments).
+    ///
+    /// Created together with ``partialContentStream`` on first access; subscribe before ``updateConversation``
+    /// if you need every chunk.
+    public var partialFragmentsStream: AsyncStream<PartialFragment> {
+        get async {
+            if currentPartialFragmentsStream == nil {
+                createPartialStreams()
+            }
+            return currentPartialFragmentsStream!
         }
     }
 
@@ -472,7 +490,7 @@ public actor SwiftAgentKitOrchestrator {
 
     private func streamToCompleteLLMResponse(messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         if currentPartialContentStream == nil {
-            _ = createPartialContentStream()
+            createPartialStreams()
         }
         transitionLLMState(to: .generating(.reasoning))
         let stream = llm.stream(messages, config: config)
@@ -483,9 +501,9 @@ public actor SwiftAgentKitOrchestrator {
                 transitionLLMState(to: .generating(.responding))
                 logger.debug(
                     "Received streaming chunk",
-                    metadata: metadataForStreamingContent(response.content)
+                    metadata: metadataForStreamingPartial(response)
                 )
-                publishPartialContent(response.content)
+                publishStreamingPartial(from: response)
             case .complete(let response):
                 finalResponse = response
             }
@@ -493,11 +511,11 @@ public actor SwiftAgentKitOrchestrator {
         guard let response = finalResponse else {
             throw LLMError.invalidResponse("Streaming ended without a complete response")
         }
-        finishPartialContentStreamForStreamingTurn()
+        finishPartialStreamsForStreamingTurn()
         return response
     }
     
-    /// Finish the message stream
+    /// Finishes ``messageStream``, ``partialContentStream``, and ``partialFragmentsStream`` continuations.
     public func endMessageStream() {
         messageStreamContinuation?.finish()
         messageStreamContinuation = nil
@@ -505,6 +523,9 @@ public actor SwiftAgentKitOrchestrator {
         partialContentStreamContinuation?.finish()
         partialContentStreamContinuation = nil
         currentPartialContentStream = nil
+        partialFragmentsStreamContinuation?.finish()
+        partialFragmentsStreamContinuation = nil
+        currentPartialFragmentsStream = nil
     }
     
     // MARK: - Private
@@ -512,14 +533,20 @@ public actor SwiftAgentKitOrchestrator {
     /// Current message stream
     private var currentMessageStream: AsyncStream<Message>?
     
-    /// Current partial content stream
+    /// Current partial content stream (assistant text only)
     private var currentPartialContentStream: AsyncStream<String>?
-    
+
+    /// Current discriminated partial fragments stream
+    private var currentPartialFragmentsStream: AsyncStream<PartialFragment>?
+
     /// Internal stream continuation for publishing messages
     private var messageStreamContinuation: AsyncStream<Message>.Continuation?
-    
-    /// Internal stream continuation for publishing partial content
+
+    /// Internal stream continuation for publishing partial assistant text
     private var partialContentStreamContinuation: AsyncStream<String>.Continuation?
+
+    /// Internal stream continuation for publishing ``PartialFragment`` values
+    private var partialFragmentsStreamContinuation: AsyncStream<PartialFragment>.Continuation?
     
     /// Publish a message to the stream
     private func publishMessage(_ message: Message) {
@@ -530,13 +557,22 @@ public actor SwiftAgentKitOrchestrator {
         messageStreamContinuation?.yield(message)
     }
     
-    /// Publish partial content to the partial content stream
+    /// Publish partial content to the legacy string stream (assistant ``PartialFragment/text`` only).
     private func publishPartialContent(_ content: String) {
         logger.debug(
             "Publishing partial content chunk",
             metadata: metadataForStreamingContent(content)
         )
         partialContentStreamContinuation?.yield(content)
+    }
+
+    /// Classifies a streaming chunk and publishes to both partial streams.
+    private func publishStreamingPartial(from response: LLMResponse) {
+        let fragment = response.streamingFragment ?? .text(response.content)
+        partialFragmentsStreamContinuation?.yield(fragment)
+        if case .text(let text) = fragment {
+            publishPartialContent(text)
+        }
     }
 
     private func transitionLLMState(to state: LLMRuntimeState) {
@@ -546,10 +582,13 @@ public actor SwiftAgentKitOrchestrator {
         controllable.transition(to: state)
     }
 
-    private func finishPartialContentStreamForStreamingTurn() {
+    private func finishPartialStreamsForStreamingTurn() {
         partialContentStreamContinuation?.finish()
         partialContentStreamContinuation = nil
         currentPartialContentStream = nil
+        partialFragmentsStreamContinuation?.finish()
+        partialFragmentsStreamContinuation = nil
+        currentPartialFragmentsStream = nil
     }
     
     /// Create a message stream if one does not exist
@@ -562,14 +601,17 @@ public actor SwiftAgentKitOrchestrator {
         return stream
     }
     
-    /// Create a partial content stream if one does not exist
-    private func createPartialContentStream() -> AsyncStream<String> {
-        let stream = AsyncStream { continuation in
+    /// Creates partial text and partial fragments streams together if they do not exist.
+    private func createPartialStreams() {
+        let stringStream = AsyncStream<String> { continuation in
             self.partialContentStreamContinuation = continuation
         }
-        self.currentPartialContentStream = stream
-        logger.debug("Created partial content stream")
-        return stream
+        self.currentPartialContentStream = stringStream
+        let fragmentsStream = AsyncStream<PartialFragment> { continuation in
+            self.partialFragmentsStreamContinuation = continuation
+        }
+        self.currentPartialFragmentsStream = fragmentsStream
+        logger.debug("Created partial content and partial fragments streams")
     }
     
     /// Ensures all tool calls have IDs, generating them if missing
@@ -837,7 +879,33 @@ private extension SwiftAgentKitOrchestrator {
             ("length", .stringConvertible(content.count))
         )
     }
-    
+
+    nonisolated func metadataForStreamingPartial(_ response: LLMResponse) -> Logger.Metadata {
+        let fragment = response.streamingFragment ?? .text(response.content)
+        switch fragment {
+        case .text(let text):
+            var meta = SwiftAgentKitLogging.metadata(
+                ("partialKind", .string("text")),
+                ("length", .stringConvertible(text.count))
+            )
+            meta["content"] = .string(text)
+            return meta
+        case .reasoning(let text):
+            return SwiftAgentKitLogging.metadata(
+                ("partialKind", .string("reasoning")),
+                ("length", .stringConvertible(text.count))
+            )
+        case .toolCall(let id, let name, let argumentsFragment):
+            var meta = SwiftAgentKitLogging.metadata(
+                ("partialKind", .string("toolCall")),
+                ("argumentsFragmentLength", .stringConvertible(argumentsFragment.count))
+            )
+            if let id { meta["toolCallId"] = .string(id) }
+            if let name { meta["toolName"] = .string(name) }
+            return meta
+        }
+    }
+
     nonisolated func metadataForMessage(_ message: Message) -> Logger.Metadata {
         var metadata = SwiftAgentKitLogging.metadata(
             ("role", .string(message.role.rawValue)),

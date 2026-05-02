@@ -85,16 +85,19 @@ Pass ``OrchestratorInvocationOptions`` to override or merge `additionalParameter
 
 ### `endMessageStream()`
 
-Finishes the async stream continuations for **`messageStream`** and **`partialContentStream`**. Call when tearing down a session so consumers stop waiting.
+Finishes the async stream continuations for **`messageStream`**, **`partialContentStream`**, and **`partialFragmentsStream`**. Call when tearing down a session so consumers stop waiting.
 
 ## Output streams
 
 | API | Content |
 |-----|---------|
 | **`messageStream`** | Complete `Message` values (user, assistant, tool) as the turn progresses |
-| **`partialContentStream`** | Incremental text chunks while **`streamingEnabled`** is `true` |
+| **`partialContentStream`** | Incremental **assistant-visible text** chunks only while **`streamingEnabled`** is `true` (legacy path; reasoning and tool-call deltas are excluded) |
+| **`partialFragmentsStream`** | Discriminated streaming deltas (`PartialFragment`: text, reasoning, tool-call argument fragments) while **`streamingEnabled`** is `true` |
 
-Both are created on first access; subscribe **before** calling `updateConversation` if you need to observe every event.
+**Classification:** The orchestrator derives each `PartialFragment` from each streaming `LLMResponse` chunk: if ``LLMResponse/streamingFragment`` is `nil`, the chunk is treated as ``PartialFragment/text(_:)`` using ``LLMResponse/content`` (backward compatible). If your provider exposes reasoning or streaming tool metadata, set ``LLMResponse/streamingFragment`` on incomplete chunks at the point you build those responses (typically in your `LLMProtocol` implementation). Downstream servers can map cases directly to their wire format (for example text / reasoning / toolCall content deltas).
+
+The partial streams are created together on first access to either; subscribe **before** calling `updateConversation` if you need to observe every event.
 
 ```swift
 let stream = await orchestrator.messageStream

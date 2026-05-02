@@ -57,7 +57,7 @@ try await orchestrator.updateConversation(messages, availableTools: [])
 ### API reminders
 
 - `SwiftAgentKitOrchestrator` is an **`actor`** — use `await` to access properties and methods.
-- Public surface: `llm`, `config`, `logger`, `mcpManager`, `a2aManager`, `toolManager`, `allAvailableTools`, `messageStream`, `partialContentStream`, `llmCurrentState`, `llmStateUpdates`, **`agenticLoopUpdates`**, `updateConversation`, `endMessageStream`.
+- Public surface: `llm`, `config`, `logger`, `mcpManager`, `a2aManager`, `toolManager`, `allAvailableTools`, `messageStream`, `partialContentStream`, **`partialFragmentsStream`**, `llmCurrentState`, `llmStateUpdates`, **`agenticLoopUpdates`**, `updateConversation`, `endMessageStream`.
 - **`updateConversation`** is `async throws` and returns **`Void`** (it pushes to streams).
 
 ## Configuration
@@ -78,7 +78,7 @@ Per-invocation overrides: `updateConversation(_:availableTools:options:)` with `
 ## Features
 
 - Recursive agentic loop with tool results fed back to the LLM
-- **Partial** streaming chunks (`partialContentStream`) when streaming is enabled
+- **Partial** streaming: assistant text only on `partialContentStream`; discriminated `PartialFragment` values on **`partialFragmentsStream`** when streaming is enabled
 - **LLM runtime** visibility via `llmStateUpdates`
 - **Agentic** visibility via `agenticLoopUpdates` (`AgenticLoopID.orchestratorSession`, `AgenticLoopState`)
 - Per-call **`LLMRequestState`** (including **`queued`**) only if you wrap the LLM with `StatefulLLM` / `QueuedLLM` yourself — see [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md)

@@ -157,6 +157,49 @@ struct MockLLM: LLMProtocol {
     }
 }
 
+/// Yields streaming chunks with explicit ``LLMResponse/streamingFragment`` for partial-stream tests.
+struct FragmentStreamingMockLLM: LLMProtocol {
+    let logger: Logger
+
+    init(logger: Logger) {
+        self.logger = logger
+    }
+
+    func getModelName() -> String { "fragment-mock" }
+
+    func getCapabilities() -> [LLMCapability] { [.completion] }
+
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        LLMResponse.complete(content: "Hello")
+    }
+
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                continuation.yield(.stream(LLMResponse(
+                    content: "",
+                    toolCalls: [],
+                    metadata: nil,
+                    isComplete: false,
+                    toolCallId: nil,
+                    streamingFragment: .reasoning("step")
+                )))
+                continuation.yield(.stream(LLMResponse.streamChunk("Hello")))
+                continuation.yield(.stream(LLMResponse(
+                    content: "",
+                    toolCalls: [],
+                    metadata: nil,
+                    isComplete: false,
+                    toolCallId: nil,
+                    streamingFragment: .toolCall(id: "call_x", name: "todo", argumentsFragment: "{\"q\":")
+                )))
+                continuation.yield(.complete(LLMResponse.complete(content: "Hello")))
+                continuation.finish()
+            }
+        }
+    }
+}
+
 // MARK: - Config capture (records LLMRequestConfig for assertions)
 
 actor ConfigCapture {
@@ -617,6 +660,50 @@ struct MockFunctionToolProvider: ToolProvider {
         #expect(streamCount > 0) // Should have received some streaming chunks
         #expect(finalConversation.count >= 1) // At least one new message
         #expect(finalConversation.last?.role == .assistant)
+    }
+
+    @Test("partialFragmentsStream classifies streaming chunks; partialContentStream yields assistant text only")
+    func testPartialFragmentsStreamVsLegacyTextStream() async throws {
+        let logger = Logger(label: "FragmentStreamingMockLLM")
+        let llm = FragmentStreamingMockLLM(logger: logger)
+        let config = OrchestratorConfig(streamingEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: llm, config: config)
+
+        let messageStream = await orchestrator.messageStream
+        let fragmentsStream = await orchestrator.partialFragmentsStream
+        let textStream = await orchestrator.partialContentStream
+
+        let collectFrags = Task { () -> [PartialFragment] in
+            var collected: [PartialFragment] = []
+            for await fragment in fragmentsStream {
+                collected.append(fragment)
+            }
+            return collected
+        }
+        let collectText = Task { () -> [String] in
+            var collected: [String] = []
+            for await text in textStream {
+                collected.append(text)
+            }
+            return collected
+        }
+
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Hi")],
+                availableTools: []
+            )
+        }
+
+        let frags = await collectFrags.value
+        let texts = await collectText.value
+
+        #expect(frags == [
+            .reasoning("step"),
+            .text("Hello"),
+            .toolCall(id: "call_x", name: "todo", argumentsFragment: "{\"q\":")
+        ])
+        #expect(texts == ["Hello"])
     }
     
     @Test("updateConversation preserves original message order")

@@ -134,9 +134,10 @@ func main() async {
     ]
     
     do {
-        // Get both streams
+        // Subscribe before updateConversation (message + partial streams)
         let messageStream = await orchestrator.messageStream
         let partialContentStream = await orchestrator.partialContentStream
+        let partialFragmentsStream = await orchestrator.partialFragmentsStream
         logger.info("Processing conversation...")
         
         // Start listening to streams before processing
@@ -149,6 +150,12 @@ func main() async {
         _ = Task {
             for await partialContent in partialContentStream {
                 logger.info("Received partial content: \(partialContent)")
+            }
+        }
+
+        _ = Task {
+            for await fragment in partialFragmentsStream {
+                logger.info("Received partial fragment: \(String(describing: fragment))")
             }
         }
         

@@ -52,19 +52,30 @@ public struct LLMResponse: Sendable {
     
     /// The ID of the tool call this response is associated with (for tool role messages)
     public let toolCallId: String?
-    
+
+    /// Optional semantic classification for an incomplete streaming chunk.
+    ///
+    /// When `nil`, orchestrators treat the chunk as ``PartialFragment/text(_:)`` using ``content``
+    /// (backward compatible with providers that only fill ``content``).
+    ///
+    /// When non-nil, this value is the source of truth for classification; ``content`` may be empty
+    /// for reasoning- or tool-only deltas.
+    public let streamingFragment: PartialFragment?
+
     public init(
         content: String,
         toolCalls: [ToolCall] = [],
         metadata: LLMMetadata? = nil,
         isComplete: Bool = true,
-        toolCallId: String? = nil
+        toolCallId: String? = nil,
+        streamingFragment: PartialFragment? = nil
     ) {
         self.content = content
         self.toolCalls = toolCalls
         self.metadata = metadata
         self.isComplete = isComplete
         self.toolCallId = toolCallId
+        self.streamingFragment = streamingFragment
     }
 }
 
@@ -121,7 +132,7 @@ public extension LLMResponse {
     
     /// Create a simple text response
     static func text(_ content: String, isComplete: Bool = true) -> LLMResponse {
-        return LLMResponse(content: content, isComplete: isComplete)
+        return LLMResponse(content: content, isComplete: isComplete, streamingFragment: nil)
     }
     
     /// Create a response with tool calls
@@ -137,13 +148,14 @@ public extension LLMResponse {
             toolCalls: toolCalls,
             metadata: metadata,
             isComplete: isComplete,
-            toolCallId: toolCallId
+            toolCallId: toolCallId,
+            streamingFragment: nil
         )
     }
     
     /// Create a streaming chunk response
-    static func streamChunk(_ content: String) -> LLMResponse {
-        return LLMResponse(content: content, isComplete: false)
+    static func streamChunk(_ content: String, streamingFragment: PartialFragment? = nil) -> LLMResponse {
+        return LLMResponse(content: content, isComplete: false, streamingFragment: streamingFragment)
     }
     
     /// Create a complete response with metadata
@@ -156,7 +168,8 @@ public extension LLMResponse {
             content: content,
             metadata: metadata,
             isComplete: true,
-            toolCallId: toolCallId
+            toolCallId: toolCallId,
+            streamingFragment: nil
         )
     }
     
@@ -168,7 +181,8 @@ public extension LLMResponse {
             toolCalls: updatedToolCalls,
             metadata: metadata,
             isComplete: isComplete,
-            toolCallId: toolCallId
+            toolCallId: toolCallId,
+            streamingFragment: streamingFragment
         )
     }
     
@@ -178,7 +192,8 @@ public extension LLMResponse {
             toolCalls: [],
             metadata: metadata,
             isComplete: isComplete,
-            toolCallId: toolCallId
+            toolCallId: toolCallId,
+            streamingFragment: streamingFragment
         )
     }
     
@@ -188,7 +203,8 @@ public extension LLMResponse {
             toolCalls: toolCalls,
             metadata: metadata,
             isComplete: isComplete,
-            toolCallId: toolCallId
+            toolCallId: toolCallId,
+            streamingFragment: streamingFragment
         )
     }
     
@@ -198,7 +214,8 @@ public extension LLMResponse {
             toolCalls: toolCalls,
             metadata: newMetadata,
             isComplete: isComplete,
-            toolCallId: toolCallId
+            toolCallId: toolCallId,
+            streamingFragment: streamingFragment
         )
     }
     
@@ -208,7 +225,8 @@ public extension LLMResponse {
             toolCalls: toolCalls,
             metadata: metadata,
             isComplete: true,
-            toolCallId: toolCallId
+            toolCallId: toolCallId,
+            streamingFragment: nil
         )
     }
     
@@ -218,7 +236,8 @@ public extension LLMResponse {
             toolCalls: toolCalls,
             metadata: metadata,
             isComplete: false,
-            toolCallId: toolCallId
+            toolCallId: toolCallId,
+            streamingFragment: streamingFragment
         )
     }
 }
