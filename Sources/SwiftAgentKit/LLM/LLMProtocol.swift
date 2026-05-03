@@ -283,6 +283,18 @@ public struct ModelRequestFeatures: Sendable, Hashable, Codable {
         parallelToolCalls: .unsupported,
         reasoningEfforts: []
     )
+
+    public init(
+        streaming: Bool,
+        responseFormats: Set<ResponseFormatKind>,
+        parallelToolCalls: ParallelToolCallSupport,
+        reasoningEfforts: Set<ReasoningEffort>
+    ) {
+        self.streaming = streaming
+        self.responseFormats = responseFormats
+        self.parallelToolCalls = parallelToolCalls
+        self.reasoningEfforts = reasoningEfforts
+    }
 }
 
 /// Common errors that can occur when interacting with LLMs

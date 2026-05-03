@@ -531,4 +531,107 @@ import EasyJSON
             Issue.record("Expected imageGenerationError case")
         }
     }
+
+    @Test("ModelRequestFeatures public initializer matches equivalent presets")
+    func testModelRequestFeaturesPublicInit() throws {
+        let custom = ModelRequestFeatures(
+            streaming: false,
+            responseFormats: [.text],
+            parallelToolCalls: .unsupported,
+            reasoningEfforts: []
+        )
+        #expect(custom == ModelRequestFeatures.unknown)
+
+        let baseline = ModelRequestFeatures(
+            streaming: true,
+            responseFormats: [.text],
+            parallelToolCalls: .unsupported,
+            reasoningEfforts: []
+        )
+        #expect(baseline == ModelRequestFeatures.chatBaseline)
+
+        let full = ModelRequestFeatures(
+            streaming: true,
+            responseFormats: [.text, .jsonObject],
+            parallelToolCalls: .capped(4),
+            reasoningEfforts: [.low, .high]
+        )
+        #expect(full.streaming)
+        #expect(full.responseFormats == [.text, .jsonObject])
+        #expect(full.parallelToolCalls == .capped(4))
+        #expect(full.reasoningEfforts == [.low, .high])
+    }
+
+    @Test("LLMCapability Codable round-trip")
+    func testLLMCapabilityCodableRoundTrip() throws {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        for capability in [LLMCapability.tools, .vision, .reasoningRequired, .promptCacheEphemeral] {
+            let data = try encoder.encode(capability)
+            let decoded = try decoder.decode(LLMCapability.self, from: data)
+            #expect(decoded == capability)
+        }
+    }
+
+    @Test("ParallelToolCallSupport Codable round-trip including capped")
+    func testParallelToolCallSupportCodableRoundTrip() throws {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        for value: ParallelToolCallSupport in [.unsupported, .uncapped, .capped(3)] {
+            let data = try encoder.encode(value)
+            let decoded = try decoder.decode(ParallelToolCallSupport.self, from: data)
+            #expect(decoded == value)
+        }
+    }
+
+    @Test("ModelRequestFeatures Codable round-trip")
+    func testModelRequestFeaturesCodableRoundTrip() throws {
+        let original = ModelRequestFeatures(
+            streaming: true,
+            responseFormats: [.text, .jsonSchema],
+            parallelToolCalls: .capped(2),
+            reasoningEfforts: [.medium]
+        )
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let data = try encoder.encode(original)
+        let decoded = try decoder.decode(ModelRequestFeatures.self, from: data)
+        #expect(decoded == original)
+    }
+
+    @Test("createStreamingConfig forwards request knobs and sets stream true")
+    func testCreateStreamingConfigForwarding() async throws {
+        struct StubLLM: LLMProtocol {
+            func getModelName() -> String { "stub" }
+            func getCapabilities() -> [LLMCapability] { [.completion] }
+            func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+                .complete(content: "")
+            }
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+                AsyncThrowingStream { $0.finish() }
+            }
+        }
+
+        let base = LLMRequestConfig(
+            maxTokens: 99,
+            temperature: 0.5,
+            topP: 0.9,
+            stream: false,
+            responseFormat: .jsonObject,
+            parallelToolCalls: true,
+            reasoningEffort: .high
+        )
+        let streaming = StubLLM().createStreamingConfig(from: base)
+        #expect(streaming.stream == true)
+        #expect(streaming.maxTokens == base.maxTokens)
+        #expect(streaming.temperature == base.temperature)
+        #expect(streaming.topP == base.topP)
+        #expect(streaming.toolInvocationPolicy == base.toolInvocationPolicy)
+        #expect(streaming.parallelToolCalls == base.parallelToolCalls)
+        #expect(streaming.reasoningEffort == base.reasoningEffort)
+        guard case .jsonObject? = base.responseFormat, case .jsonObject? = streaming.responseFormat else {
+            Issue.record("expected jsonObject responseFormat forwarded")
+            return
+        }
+    }
 } 
