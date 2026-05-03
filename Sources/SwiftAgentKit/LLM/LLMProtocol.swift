@@ -20,6 +20,12 @@ public struct LLMRequestConfig: Sendable {
     public let additionalParameters: JSON?
     /// How tool calls are selected when ``availableTools`` is non-empty.
     public let toolInvocationPolicy: ToolInvocationPolicy
+    /// .text / .jsonObject / .jsonSchema(JSON)
+    public let responseFormat: ResponseFormatRequest?  
+    /// honored when ParallelToolCallSupport != .unsupported    
+    public let parallelToolCalls: Bool?            
+    /// honored when ModelRequestFeatures.reasoningEfforts contains it        
+    public let reasoningEffort: ReasoningEffort?           
     
     public init(
         maxTokens: Int? = nil,
@@ -28,7 +34,10 @@ public struct LLMRequestConfig: Sendable {
         stream: Bool = false,
         availableTools: [ToolDefinition] = [],
         additionalParameters: JSON? = nil,
-        toolInvocationPolicy: ToolInvocationPolicy = .automatic
+        toolInvocationPolicy: ToolInvocationPolicy = .automatic,
+        responseFormat: ResponseFormatRequest? = nil,
+        parallelToolCalls: Bool? = nil,
+        reasoningEffort: ReasoningEffort? = nil
     ) {
         self.maxTokens = maxTokens
         self.temperature = temperature
@@ -37,7 +46,18 @@ public struct LLMRequestConfig: Sendable {
         self.availableTools = availableTools
         self.additionalParameters = additionalParameters
         self.toolInvocationPolicy = toolInvocationPolicy
+        self.responseFormat = responseFormat
+        self.parallelToolCalls = parallelToolCalls
+        self.reasoningEffort = reasoningEffort
     }
+}
+
+/// Per-call response-format request. Pair with ``ModelRequestFeatures/responseFormats``
+/// to validate that the model accepts the chosen kind.
+public enum ResponseFormatRequest: Sendable {
+    case text
+    case jsonObject
+    case jsonSchema(name: String, schema: JSON)
 }
 
 /// Configuration options for image generation requests
@@ -117,6 +137,16 @@ public protocol LLMProtocol: Sendable {
     ///   - config: Configuration for the image generation request
     /// - Returns: The image generation response containing generated images
     func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse
+
+    /// The per-call request features this LLM honors.
+    ///
+    /// Companion to ``getCapabilities()``: capabilities gate features on/off
+    /// (can the model do X at all?), while request features describe the legal
+    /// values for the per-call knobs on ``LLMRequestConfig`` (which response
+    /// formats, parallel-tool-call cap, reasoning-effort levels, etc.).
+    ///
+    /// - Returns: The accepted request-feature menu for this model.
+    func getRequestFeatures() -> ModelRequestFeatures
 }
 
 /// Response from an image generation request
@@ -179,7 +209,10 @@ public extension LLMProtocol {
             stream: true,
             availableTools: config.availableTools,
             additionalParameters: config.additionalParameters,
-            toolInvocationPolicy: config.toolInvocationPolicy
+            toolInvocationPolicy: config.toolInvocationPolicy,
+            responseFormat: config.responseFormat,
+            parallelToolCalls: config.parallelToolCalls,
+            reasoningEffort: config.reasoningEffort
         )
     }
     
@@ -187,6 +220,12 @@ public extension LLMProtocol {
     /// Implementations that support image generation should override this method
     func generateImage(_ config: ImageGenerationRequestConfig) async throws -> ImageGenerationResponse {
         throw LLMError.unsupportedCapability(.imageGeneration)
+    }
+
+    /// Default returns ``ModelRequestFeatures/unknown``; adapters that know
+    /// their backend should override.
+    func getRequestFeatures() -> ModelRequestFeatures {
+        return ModelRequestFeatures.unknown
     }
 }
 
@@ -199,8 +238,51 @@ public enum LLMCapability: String, Codable, Sendable {
     case vision
     case audio
     case embedding
-    case thinking
+    case thinking                  // supports OPTIONAL reasoning (caller may enable)
+    case reasoningRequired         // ALWAYS reasons; no opt-out (e.g. deepseek-r1)
+    case promptCacheEphemeral      // provider/model supports ephemeral cache breakpoints
+    case promptCachePersistent     // provider/model supports persistent cache breakpoints
     case imageGeneration
+}
+
+public enum ResponseFormatKind: String, Codable, Sendable {
+    case text          // implicit baseline; absence => text only
+    case jsonObject    // OpenAI response_format=json_object / Ollama format=json
+    case jsonSchema    // schema-constrained structured output
+}
+
+public enum ReasoningEffort: String, Codable, Sendable {
+    case minimal
+    case low
+    case medium
+    case high
+}
+
+public enum ParallelToolCallSupport: Sendable, Hashable, Codable {
+    case unsupported
+    case uncapped
+    case capped(Int)   // max simultaneous tool calls per turn
+}
+
+public struct ModelRequestFeatures: Sendable, Hashable, Codable {
+    public var streaming: Bool // Does this model honor stream: true requests?
+    public var responseFormats: Set<ResponseFormatKind> // Which response_format values can I send it?"
+    public var parallelToolCalls: ParallelToolCallSupport // If I ask for parallel tool calls, will it accept it, and is there a cap?
+    public var reasoningEfforts: Set<ReasoningEffort>     // If reasoning is opt‑in, which reasoning_effort levels does it accept? empty when no opt-in reasoning
+
+    public static let unknown = ModelRequestFeatures(
+        streaming: false,
+        responseFormats: [.text],
+        parallelToolCalls: .unsupported,
+        reasoningEfforts: []
+    )
+
+    public static let chatBaseline = ModelRequestFeatures(
+        streaming: true,
+        responseFormats: [.text],
+        parallelToolCalls: .unsupported,
+        reasoningEfforts: []
+    )
 }
 
 /// Common errors that can occur when interacting with LLMs

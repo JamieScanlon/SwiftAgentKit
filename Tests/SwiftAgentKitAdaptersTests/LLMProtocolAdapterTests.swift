@@ -222,7 +222,8 @@ struct TestLLM: LLMProtocol {
 
 // MARK: - Tests
 
-@Suite struct LLMProtocolAdapterTests {
+@Suite(.serialized)
+struct LLMProtocolAdapterTests {
     
     @Test("LLMProtocolAdapter works with QueuedLLM wrapper")
     func testAdapterWithQueuedLLM() throws {
