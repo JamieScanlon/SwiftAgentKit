@@ -13,6 +13,18 @@ public enum MessageRole: String, Codable, Sendable {
 // TODO: Add explicit property for file references (local or remote URLs) so messages can carry file references without overloading images.
 // TODO: Add property for generic binary file attachments (non-image data) so messages can carry arbitrary file data.
 public struct Message: Identifiable, Codable, Sendable {
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case role
+        case content
+        case timestamp
+        case images
+        case toolCalls
+        case toolCallId
+        case responseFormat
+        case inputTrustRaw = "inputTrust"
+    }
     
     public struct Image: Codable, Equatable, Sendable {
         /// `name` must be unique
@@ -204,8 +216,13 @@ public struct Message: Identifiable, Codable, Sendable {
     /// When this message is a response to a tool call, this id represents the id of the original tool call
     public var toolCallId: String?
     public var responseFormat: String?
+    /// Optional provenance hint for how much the runtime trusts this message as genuine end-user input (versus automation, injected content, or unknown origin).
+    ///
+    /// Values are opaque identifiers from a small, product-defined vocabulary; SwiftAgentKit does not interpret them. ``nil`` means unspecified or legacy data.
+    /// Older JSON payloads without the corresponding key decode as ``nil``; encoding omits the field when ``nil``.
+    public var inputTrustRaw: String?
     
-    public init(id: UUID, role: MessageRole, content: String, timestamp: Date = Date(), images: [Image] = [], toolCalls: [ToolCall] = [], toolCallId: String? = nil, responseFormat: String? = nil) {
+    public init(id: UUID, role: MessageRole, content: String, timestamp: Date = Date(), images: [Image] = [], toolCalls: [ToolCall] = [], toolCallId: String? = nil, responseFormat: String? = nil, inputTrustRaw: String? = nil) {
         self.id = id
         self.role = role
         self.content = content
@@ -214,6 +231,7 @@ public struct Message: Identifiable, Codable, Sendable {
         self.toolCalls = toolCalls
         self.toolCallId = toolCallId
         self.responseFormat = responseFormat
+        self.inputTrustRaw = inputTrustRaw
     }
     
     public func toJSON(includeImageData: Bool = false, includeThumbData: Bool = true) -> [String: Sendable] {
@@ -227,7 +245,7 @@ public struct Message: Identifiable, Codable, Sendable {
             let returnJSON: Sendable = ["name": name, "arguments": arguments, "instructions": instructions, "id": id]
             return returnJSON
         })
-        return [
+        var payload: [String: Sendable] = [
             "id": id.uuidString,
             "role": role.rawValue,
             "content": content,
@@ -237,6 +255,10 @@ public struct Message: Identifiable, Codable, Sendable {
             "images": images.map{ $0.toJSON(includeImageData: includeImageData, includeThumbData: includeThumbData) },
             "responseFormat": responseFormat ?? "",
         ]
+        if let inputTrustRaw {
+            payload["inputTrust"] = inputTrustRaw
+        }
+        return payload
     }
     
     public func toEasyJSON(includeImageData: Bool = false, includeThumbData: Bool = true) -> JSON {
@@ -250,6 +272,9 @@ public struct Message: Identifiable, Codable, Sendable {
         if let toolCallId { dict["toolCallId"] = .string(toolCallId) }
         dict["images"] = .array(images.map { $0.toEasyJSON(includeImageData: includeImageData, includeThumbData: includeThumbData) })
         dict["responseFormat"] = .string(responseFormat ?? "")
+        if let inputTrustRaw {
+            dict["inputTrust"] = .string(inputTrustRaw)
+        }
         return .object(dict)
     }
     
@@ -287,8 +312,12 @@ public struct Message: Identifiable, Codable, Sendable {
         
         let toolCallId = json["toolCallId"] as? String
         let responseFormat = json["responseFormat"] as? String
+        let inputTrustRaw: String? = {
+            guard let s = json["inputTrust"] as? String, !s.isEmpty else { return nil }
+            return s
+        }()
         
-        return Message(id: id, role: role, content: content, timestamp: timestamp, images: images, toolCalls: toolCalls, toolCallId: toolCallId, responseFormat: responseFormat)
+        return Message(id: id, role: role, content: content, timestamp: timestamp, images: images, toolCalls: toolCalls, toolCallId: toolCallId, responseFormat: responseFormat, inputTrustRaw: inputTrustRaw)
     }
     
     public static func fromEasyJSON(_ json: JSON) -> Message? {
@@ -368,6 +397,13 @@ public struct Message: Identifiable, Codable, Sendable {
             return nil
         }()
         
-        return Message(id: id, role: role, content: content, timestamp: timestamp, images: images, toolCalls: toolCalls, toolCallId: toolCallId, responseFormat: responseFormat)
+        let inputTrustRaw: String? = {
+            if case .string(let trust) = dict["inputTrust"], !trust.isEmpty {
+                return trust
+            }
+            return nil
+        }()
+        
+        return Message(id: id, role: role, content: content, timestamp: timestamp, images: images, toolCalls: toolCalls, toolCallId: toolCallId, responseFormat: responseFormat, inputTrustRaw: inputTrustRaw)
     }
 }

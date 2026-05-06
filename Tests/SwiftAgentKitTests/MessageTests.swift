@@ -1112,8 +1112,68 @@ struct MessageTests {
         #expect(decoded.content == original.content)
         #expect(decoded.toolCallId == original.toolCallId)
         #expect(decoded.responseFormat == original.responseFormat)
+        #expect(decoded.inputTrustRaw == original.inputTrustRaw)
         #expect(decoded.toolCalls.count == original.toolCalls.count)
         #expect(decoded.images.count == original.images.count)
+    }
+    
+    @Test("Message - inputTrust round-trip (Codable)")
+    func testMessageInputTrustCodableRoundTrip() throws {
+        let original = Message(
+            id: UUID(),
+            role: .user,
+            content: "Hi",
+            inputTrustRaw: "direct_user_entry"
+        )
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(Message.self, from: data)
+        #expect(decoded.inputTrustRaw == "direct_user_entry")
+    }
+    
+    @Test("Message - Codable omits inputTrust when nil and decodes legacy payloads")
+    func testMessageCodableOmitsInputTrustWhenNil() throws {
+        let original = Message(id: UUID(), role: .user, content: "legacy")
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(Message.self, from: data)
+        #expect(decoded.inputTrustRaw == nil)
+        let obj = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(obj["inputTrust"] == nil)
+    }
+    
+    @Test("Message - inputTrust EasyJSON round-trip")
+    func testMessageInputTrustEasyJSONRoundTrip() throws {
+        let original = Message(
+            id: UUID(),
+            role: .user,
+            content: "Hello",
+            inputTrustRaw: "automation"
+        )
+        let json = original.toEasyJSON()
+        guard let decoded = Message.fromEasyJSON(json) else {
+            #expect(Bool(false), "fromEasyJSON should succeed")
+            return
+        }
+        #expect(decoded.inputTrustRaw == "automation")
+    }
+    
+    @Test("Message - inputTrust legacy JSON round-trip")
+    func testMessageInputTrustLegacyJSONRoundTrip() throws {
+        let id = UUID()
+        let ts = Date()
+        let original = Message(
+            id: id,
+            role: .user,
+            content: "Ping",
+            timestamp: ts,
+            inputTrustRaw: "scripted"
+        )
+        let payload = original.toJSON()
+        guard let decoded = Message.fromJSON(payload) else {
+            #expect(Bool(false), "fromJSON should succeed")
+            return
+        }
+        #expect(decoded.inputTrustRaw == "scripted")
+        #expect(payload["inputTrust"] as? String == "scripted")
     }
 }
 
