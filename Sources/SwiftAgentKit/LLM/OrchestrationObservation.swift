@@ -73,7 +73,7 @@ public struct OrchestrationSnapshot: Sendable, Equatable {
     ) -> AgenticLoopState {
         switch state {
         case .waitingForToolExecution, .executingTools,
-             .completed, .failed, .maxIterationsReached,
+             .completed, .cancelled, .failed, .maxIterationsReached,
              .llmGenerationCompleted:
             return state
         case .started, .llmCall, .betweenIterations:

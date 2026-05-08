@@ -56,6 +56,7 @@ public enum AgenticLoopState: Sendable, Equatable, Codable {
     case executingTools
     case betweenIterations
     case completed
+    case cancelled
     case failed(String?)
     case maxIterationsReached
 }

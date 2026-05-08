@@ -11,6 +11,7 @@ public struct OrchestratorInvocationOptions: Sendable {
     /// Convenience for string metadata; shallow-merged as a JSON object into additional parameters.
     public var systemPromptMetadata: [String: String]?
     public var toolInvocationPolicy: ToolInvocationPolicy?
+    public var assistantPersistenceMode: AssistantPersistenceMode?
     public var parallelToolDispatchEnabled: Bool?
     /// Optional per-call safety metadata keyed by toolCallID.
     public var toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]?
@@ -26,6 +27,7 @@ public struct OrchestratorInvocationOptions: Sendable {
         additionalParameters: JSON? = nil,
         systemPromptMetadata: [String: String]? = nil,
         toolInvocationPolicy: ToolInvocationPolicy? = nil,
+        assistantPersistenceMode: AssistantPersistenceMode? = nil,
         parallelToolDispatchEnabled: Bool? = nil,
         toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]? = nil,
         maxAgenticStepsPerUpdate: Int? = nil,
@@ -37,6 +39,7 @@ public struct OrchestratorInvocationOptions: Sendable {
         self.additionalParameters = additionalParameters
         self.systemPromptMetadata = systemPromptMetadata
         self.toolInvocationPolicy = toolInvocationPolicy
+        self.assistantPersistenceMode = assistantPersistenceMode
         self.parallelToolDispatchEnabled = parallelToolDispatchEnabled
         self.toolParallelSafetyMetadata = toolParallelSafetyMetadata
         self.maxAgenticStepsPerUpdate = maxAgenticStepsPerUpdate

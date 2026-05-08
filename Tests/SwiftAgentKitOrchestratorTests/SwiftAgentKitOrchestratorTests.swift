@@ -200,6 +200,37 @@ struct FragmentStreamingMockLLM: LLMProtocol {
     }
 }
 
+struct SlowStreamingCancelMockLLM: LLMProtocol {
+    let logger: Logger
+    let sleepNanos: UInt64
+
+    init(logger: Logger, sleepNanos: UInt64 = 50_000_000) {
+        self.logger = logger
+        self.sleepNanos = sleepNanos
+    }
+
+    func getModelName() -> String { "slow-streaming-cancel-mock" }
+    func getCapabilities() -> [LLMCapability] { [.completion] }
+
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        LLMResponse.complete(content: "sync")
+    }
+
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        let sleepNanos = sleepNanos
+        return AsyncThrowingStream { continuation in
+            Task {
+                continuation.yield(.stream(LLMResponse.streamChunk("part-1")))
+                try? await Task.sleep(nanoseconds: sleepNanos)
+                continuation.yield(.stream(LLMResponse.streamChunk("part-2")))
+                try? await Task.sleep(nanoseconds: sleepNanos)
+                continuation.yield(.complete(LLMResponse.complete(content: "final")))
+                continuation.finish()
+            }
+        }
+    }
+}
+
 // MARK: - Config capture (records LLMRequestConfig for assertions)
 
 actor ConfigCapture {
@@ -2097,6 +2128,135 @@ struct PendingMockToolProvider: ToolProvider {
         let events = await collector.snapshot().filter { $0.toolCallID == "pending_timeout_call" }
         #expect(events.contains(where: { $0.state == .pending }))
         #expect(events.contains(where: { $0.state == .cancelled }))
+    }
+
+    @Test("staged assistant persistence commits exactly once on natural completion")
+    func testStagedAssistantCommitOnNaturalCompletion() async throws {
+        let llm = MockLLM(model: "staged-complete", logger: Logger(label: "staged-complete"))
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false, assistantPersistenceMode: .stagedCommit)
+        )
+
+        actor MessageCollector {
+            var assistantMessages: [Message] = []
+            func append(_ message: Message) {
+                if message.role == .assistant { assistantMessages.append(message) }
+            }
+        }
+        let collector = MessageCollector()
+        let messageStream = await orchestrator.messageStream
+        let collectTask = Task {
+            for await message in messageStream {
+                await collector.append(message)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let outcome = await orchestrator.updateConversationWithOutcome(
+            [Message(id: UUID(), role: .user, content: "hello")],
+            availableTools: []
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let assistantMessages = await collector.assistantMessages
+
+        #expect(outcome.terminalState == .completed)
+        #expect(outcome.terminalReason == .naturalStop)
+        #expect(outcome.assistantCommitted == true)
+        #expect(assistantMessages.count == 1)
+    }
+
+    @Test("staged assistant persistence rolls back on cancellation")
+    func testStagedAssistantRollbackOnCancellation() async throws {
+        let llm = SlowStreamingCancelMockLLM(logger: Logger(label: "staged-cancel"))
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: true, assistantPersistenceMode: .stagedCommit)
+        )
+
+        actor MessageCollector {
+            var assistantMessages: [Message] = []
+            func append(_ message: Message) {
+                if message.role == .assistant { assistantMessages.append(message) }
+            }
+        }
+        let collector = MessageCollector()
+        let messageStream = await orchestrator.messageStream
+        let collectTask = Task {
+            for await message in messageStream {
+                await collector.append(message)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let updateTask = Task { () -> UpdateConversationOutcome in
+            await orchestrator.updateConversationWithOutcome(
+                [Message(id: UUID(), role: .user, content: "stream and cancel")],
+                availableTools: []
+            )
+        }
+        try? await Task.sleep(nanoseconds: 10_000_000)
+        updateTask.cancel()
+        let outcome = await updateTask.value
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let assistantMessages = await collector.assistantMessages
+
+        #expect(outcome.terminalState == .cancelled)
+        #expect(outcome.terminalReason == .externalCancellation)
+        #expect(outcome.assistantCommitted == false)
+        #expect(assistantMessages.isEmpty)
+    }
+
+    @Test("cancelRun cancels pending handles and late completion is ignored")
+    func testCancelRunCancelsPendingAndIgnoresLateCompletion() async throws {
+        let toolCall = ToolCall(name: "pending_cancel_tool", arguments: .object([:]), id: "pending_cancel_call")
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "pending-cancel"),
+            toolCallsToReturn: [toolCall]
+        )
+        let provider = PendingMockToolProvider(toolName: "pending_cancel_tool")
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false),
+            toolManager: ToolManager(providers: [provider])
+        )
+
+        let outcome = await orchestrator.updateConversationWithOutcome(
+            [Message(id: UUID(), role: .user, content: "start pending and cancel run")],
+            availableTools: []
+        )
+        let runID = outcome.runID
+        let snapshot = await orchestrator.recoverableActiveRunsSnapshot()
+        #expect(snapshot.contains(where: { $0.runID == runID }))
+
+        let cancelOutcome = await orchestrator.cancelRun(runID: runID, conversationID: nil)
+        #expect(cancelOutcome.terminalState == .cancelled)
+        #expect(cancelOutcome.cancelledToolHandles.count == 1)
+
+        actor PendingCollector {
+            var completions: [PendingToolCompletion] = []
+            func append(_ completion: PendingToolCompletion) { completions.append(completion) }
+            func snapshot() -> [PendingToolCompletion] { completions }
+        }
+        let pendingCollector = PendingCollector()
+        let pendingStream = await orchestrator.pendingToolCompletions
+        let collectTask = Task {
+            for await completion in pendingStream {
+                await pendingCollector.append(completion)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        await orchestrator.submitPendingCompletion(
+            PendingToolCompletion(
+                handleID: "handle-pending_cancel_call",
+                toolCallID: "pending_cancel_call",
+                result: ToolResult(success: true, content: "late", toolCallId: "pending_cancel_call")
+            )
+        )
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        let completions = await pendingCollector.snapshot()
+        #expect(completions.isEmpty)
     }
 }
 

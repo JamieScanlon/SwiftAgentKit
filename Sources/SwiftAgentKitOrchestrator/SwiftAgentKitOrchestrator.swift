@@ -28,6 +28,8 @@ public struct OrchestratorConfig: Sendable {
     public let additionalParameters: JSON?
     /// Maximum LLM invocations (including tool follow-ups) for a single `updateConversation`; `nil` means unlimited.
     public let maxAgenticStepsPerUpdate: Int?
+    /// Controls when assistant messages are published/committed.
+    public let assistantPersistenceMode: AssistantPersistenceMode
     /// When true, tool batches classified as parallel-safe may run concurrently.
     public let parallelToolDispatchEnabled: Bool
     /// Optional custom policy evaluator for selecting serial vs parallel mode for each tool batch.
@@ -54,6 +56,7 @@ public struct OrchestratorConfig: Sendable {
         topP: Double? = nil,
         additionalParameters: JSON? = nil,
         maxAgenticStepsPerUpdate: Int? = nil,
+        assistantPersistenceMode: AssistantPersistenceMode = .immediate,
         parallelToolDispatchEnabled: Bool = false,
         toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)? = nil,
         pendingToolTimeout: TimeInterval? = nil,
@@ -73,6 +76,7 @@ public struct OrchestratorConfig: Sendable {
         self.topP = topP
         self.additionalParameters = additionalParameters
         self.maxAgenticStepsPerUpdate = maxAgenticStepsPerUpdate
+        self.assistantPersistenceMode = assistantPersistenceMode
         self.parallelToolDispatchEnabled = parallelToolDispatchEnabled
         self.toolDispatchPolicyEvaluator = toolDispatchPolicyEvaluator
         self.pendingToolTimeout = pendingToolTimeout
@@ -104,8 +108,11 @@ public actor SwiftAgentKitOrchestrator {
     private var pendingCompletionStreamContinuation: AsyncStream<PendingToolCompletion>.Continuation?
     private var currentPendingCompletionStream: AsyncStream<PendingToolCompletion>?
     private var pendingHandlesByID: [String: PendingToolHandle] = [:]
+    private var pendingHandleRunByID: [String: AgenticLoopID] = [:]
     private var completedPendingHandleIDs: Set<String> = []
     private var pendingTimeoutTasks: [String: Task<Void, Never>] = [:]
+    private var activeRuns: [AgenticLoopID: ActiveRunState] = [:]
+    private var lastRunOutcomeByID: [AgenticLoopID: UpdateConversationOutcome] = [:]
     
     /// All available tools from MCP and A2A managers
     public var allAvailableTools: [ToolDefinition] {
@@ -296,14 +303,41 @@ public actor SwiftAgentKitOrchestrator {
     /// - Parameter messages: Array of messages representing the conversation thread
     /// - Parameter availableTools: Array of available tools that can be used during conversation processing
     public func updateConversation(_ messages: [Message], availableTools: [ToolDefinition] = []) async throws {
-        try await updateConversation(messages, availableTools: availableTools, options: .default)
+        _ = try await updateConversation(messages, availableTools: availableTools, options: .default)
     }
 
     /// Process a conversation with per-invocation options layered on ``OrchestratorConfig``.
     ///
     /// Each inner LLM call uses a fresh ``LLMRequestConfig`` built from the orchestrator config merged with ``OrchestratorInvocationOptions``
     /// (additional parameters and metadata apply to every step in this `updateConversation` tree).
-    public func updateConversation(_ messages: [Message], availableTools: [ToolDefinition], options: OrchestratorInvocationOptions) async throws {
+    @discardableResult
+    public func updateConversation(_ messages: [Message], availableTools: [ToolDefinition], options: OrchestratorInvocationOptions) async throws -> UpdateConversationOutcome {
+        let outcome = await updateConversationWithOutcome(messages, availableTools: availableTools, options: options)
+        switch outcome.terminalState {
+        case .completed:
+            return outcome
+        case .cancelled:
+            throw CancellationError()
+        case .failed:
+            switch outcome.terminalReason {
+            case .boundedStop(let limit):
+                throw OrchestratorError.agenticStepLimitReached(limit: limit)
+            case .failure(let message):
+                throw OrchestratorError.processingError(message ?? "Conversation update failed")
+            case .externalCancellation:
+                throw CancellationError()
+            case .naturalStop:
+                throw OrchestratorError.processingError("Unexpected failed state with naturalStop")
+            }
+        }
+    }
+
+    /// Non-throwing terminal outcome API for deterministic run result reporting.
+    public func updateConversationWithOutcome(
+        _ messages: [Message],
+        availableTools: [ToolDefinition] = [],
+        options: OrchestratorInvocationOptions = .default
+    ) async -> UpdateConversationOutcome {
         logger.info(
             "Processing conversation",
             metadata: SwiftAgentKitLogging.metadata(
@@ -322,7 +356,58 @@ public actor SwiftAgentKitOrchestrator {
             )
         }
         let context = makeInvocationContext(options: options)
-        try await updateConversationWithAgenticLoop(messages, availableTools: availableTools, iteration: 1, agenticLoopId: nil, context: context)
+        let runID = AgenticLoopID.orchestratorSession(UUID())
+        activeRuns[runID] = ActiveRunState(assistantPersistenceMode: context.assistantPersistenceMode)
+        do {
+            try await updateConversationWithAgenticLoop(
+                messages,
+                availableTools: availableTools,
+                iteration: 1,
+                agenticLoopId: runID,
+                context: context
+            )
+            let cancellationRequested = activeRuns[runID]?.cancellationRequested ?? false
+            if cancellationRequested {
+                let outcome = await finalizeRunOutcome(
+                    runID: runID,
+                    terminalState: .cancelled,
+                    terminalReason: .externalCancellation,
+                    commitAssistantMessages: false
+                )
+                return outcome
+            }
+            return await finalizeRunOutcome(
+                runID: runID,
+                terminalState: .completed,
+                terminalReason: .naturalStop,
+                commitAssistantMessages: true
+            )
+        } catch {
+            if error is CancellationError || (activeRuns[runID]?.cancellationRequested ?? false) {
+                return await finalizeRunOutcome(
+                    runID: runID,
+                    terminalState: .cancelled,
+                    terminalReason: .externalCancellation,
+                    commitAssistantMessages: false
+                )
+            }
+            if let orchestratorError = error as? OrchestratorError {
+                if case .agenticStepLimitReached(let limit) = orchestratorError {
+                    return await finalizeRunOutcome(
+                        runID: runID,
+                        terminalState: .failed,
+                        terminalReason: .boundedStop(limit: limit),
+                        commitAssistantMessages: false
+                    )
+                }
+            }
+            return await finalizeRunOutcome(
+                runID: runID,
+                terminalState: .failed,
+                terminalReason: .failure(error.localizedDescription),
+                commitAssistantMessages: false
+            )
+        }
     }
 
     private func makeInvocationContext(options: OrchestratorInvocationOptions) -> OrchestratorInvocationContext {
@@ -332,6 +417,7 @@ public actor SwiftAgentKitOrchestrator {
             merged = mergeJSONObjectParameters(merged, metaJSON)
         }
         let policy = options.toolInvocationPolicy ?? config.toolInvocationPolicy
+        let assistantMode = options.assistantPersistenceMode ?? config.assistantPersistenceMode
         let parallelEnabled = options.parallelToolDispatchEnabled ?? config.parallelToolDispatchEnabled
         let safetyMetadata = options.toolParallelSafetyMetadata ?? [:]
         let maxSteps = options.maxAgenticStepsPerUpdate ?? config.maxAgenticStepsPerUpdate
@@ -342,6 +428,7 @@ public actor SwiftAgentKitOrchestrator {
         return OrchestratorInvocationContext(
             mergedAdditionalParameters: merged,
             toolInvocationPolicy: policy,
+            assistantPersistenceMode: assistantMode,
             parallelToolDispatchEnabled: parallelEnabled,
             toolParallelSafetyMetadata: safetyMetadata,
             maxAgenticStepsPerUpdate: maxSteps,
@@ -360,9 +447,13 @@ public actor SwiftAgentKitOrchestrator {
         context: OrchestratorInvocationContext
     ) async throws {
         let loopId = agenticLoopId ?? AgenticLoopID.orchestratorSession(UUID())
-        let isRootEntry = agenticLoopId == nil
+        let isRootEntry = iteration == 1
         if isRootEntry {
             agenticLoopStateHub.publish(loopId, .started)
+        }
+        if isRunCancellationRequested(loopId) || Task.isCancelled {
+            agenticLoopStateHub.publish(loopId, .cancelled)
+            throw CancellationError()
         }
         if let max = context.maxAgenticStepsPerUpdate, iteration > max {
             agenticLoopStateHub.publish(loopId, .maxIterationsReached)
@@ -403,9 +494,13 @@ public actor SwiftAgentKitOrchestrator {
             let toolCallsWithIds = response.hasToolCalls ? ensureToolCallsHaveIds(response.toolCalls) : response.toolCalls
             let responseMessage = Message(id: UUID(), role: .assistant, content: response.content, toolCalls: toolCallsWithIds)
             updatedMessages.append(responseMessage)
-            publishMessage(responseMessage)
+            publishMessage(responseMessage, runID: loopId)
 
             if response.hasToolCalls {
+                if isRunCancellationRequested(loopId) || Task.isCancelled {
+                    agenticLoopStateHub.publish(loopId, .cancelled)
+                    throw CancellationError()
+                }
                 transitionLLMState(to: .idle(.ready))
                 agenticLoopStateHub.publish(loopId, .waitingForToolExecution)
                 agenticLoopStateHub.publish(loopId, .executingTools)
@@ -415,7 +510,7 @@ public actor SwiftAgentKitOrchestrator {
                         ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
                     )
                 )
-                let toolExecution = await executeToolCalls(toolCallsWithIds, context: context)
+                let toolExecution = await executeToolCalls(toolCallsWithIds, context: context, runID: loopId)
                 let toolResponses = toolExecution.responses
 
                 guard !toolResponses.isEmpty || toolExecution.hasPending else {
@@ -451,9 +546,13 @@ public actor SwiftAgentKitOrchestrator {
                 )
                 let toolResponseMessages = toolResponses.map { messageFromToolResponse($0) }
                 updatedMessages.append(contentsOf: toolResponseMessages)
-                toolResponseMessages.forEach { publishMessage($0) }
+                toolResponseMessages.forEach { publishMessage($0, runID: loopId) }
 
                 agenticLoopStateHub.publish(loopId, .betweenIterations)
+                if isRunCancellationRequested(loopId) || Task.isCancelled {
+                    agenticLoopStateHub.publish(loopId, .cancelled)
+                    throw CancellationError()
+                }
                 try await LLMQueuePriority.$current.withValue(.continuation) {
                     try await updateConversationWithAgenticLoop(updatedMessages, availableTools: availableTools, iteration: iteration + 1, agenticLoopId: loopId, context: context)
                 }
@@ -463,6 +562,11 @@ public actor SwiftAgentKitOrchestrator {
                 transitionLLMState(to: .idle(.ready))
             }
         } catch {
+            if error is CancellationError {
+                agenticLoopStateHub.publish(loopId, .cancelled)
+                transitionLLMState(to: .idle(.ready))
+                throw error
+            }
             agenticLoopStateHub.publish(loopId, .failed(error.localizedDescription))
             transitionLLMState(to: .failed(error.localizedDescription))
             transitionLLMState(to: .idle(.ready))
@@ -551,6 +655,9 @@ public actor SwiftAgentKitOrchestrator {
         let stream = llm.stream(messages, config: config)
         var finalResponse: LLMResponse?
         for try await result in stream {
+            if Task.isCancelled {
+                throw CancellationError()
+            }
             switch result {
             case .stream(let response):
                 transitionLLMState(to: .generating(.responding))
@@ -562,6 +669,9 @@ public actor SwiftAgentKitOrchestrator {
             case .complete(let response):
                 finalResponse = response
             }
+        }
+        if Task.isCancelled {
+            throw CancellationError()
         }
         guard let response = finalResponse else {
             throw LLMError.invalidResponse("Streaming ended without a complete response")
@@ -592,10 +702,65 @@ public actor SwiftAgentKitOrchestrator {
         await onPendingCompletion(completion)
     }
 
+    /// Cancels an active run and in-flight pending handles bound to it.
+    public func cancelRun(runID: AgenticLoopID, conversationID: String? = nil) async -> CancelOutcome {
+        guard var run = activeRuns[runID] else {
+            return CancelOutcome(runID: runID, cancelledToolHandles: [], terminalState: .cancelled)
+        }
+        run.cancellationRequested = true
+        activeRuns[runID] = run
+
+        var cancelledHandles: [PendingToolHandle] = []
+        for handleID in run.pendingHandleIDs {
+            if let handle = pendingHandlesByID[handleID] {
+                cancelledHandles.append(handle)
+            }
+            await cancelPendingTool(handleID: handleID, reason: "Run cancelled")
+        }
+        return CancelOutcome(
+            runID: runID,
+            cancelledToolHandles: cancelledHandles,
+            terminalState: .cancelled
+        )
+    }
+
+    /// Snapshot active runs for orphan/restart recovery.
+    public func recoverableActiveRunsSnapshot() -> [RecoverableActiveRunMetadata] {
+        activeRuns.map { runID, run in
+            RecoverableActiveRunMetadata(
+                runID: runID,
+                pendingHandleIDs: Array(run.pendingHandleIDs).sorted(),
+                cancellationRequested: run.cancellationRequested
+            )
+        }
+    }
+
+    public func lastRunOutcome(for runID: AgenticLoopID) -> UpdateConversationOutcome? {
+        lastRunOutcomeByID[runID]
+    }
+
+    /// Marks a run as abandoned for host-level recovery workflows.
+    public func markRunAbandoned(_ runID: AgenticLoopID) {
+        guard var run = activeRuns[runID] else { return }
+        run.cancellationRequested = true
+        activeRuns[runID] = run
+        agenticLoopStateHub.publish(runID, .cancelled)
+    }
+
     /// Cancels a pending handle if it is still active.
     public func cancelPendingTool(handleID: String, reason: String? = nil) async {
         guard let handle = pendingHandlesByID.removeValue(forKey: handleID) else {
             return
+        }
+        if let runID = pendingHandleRunByID.removeValue(forKey: handleID) {
+            if var run = activeRuns[runID] {
+                run.pendingHandleIDs.remove(handleID)
+                if run.pendingHandleIDs.isEmpty, run.terminalOutcome != nil {
+                    activeRuns[runID] = nil
+                } else {
+                    activeRuns[runID] = run
+                }
+            }
         }
         pendingTimeoutTasks[handleID]?.cancel()
         pendingTimeoutTasks.removeValue(forKey: handleID)
@@ -639,8 +804,13 @@ public actor SwiftAgentKitOrchestrator {
     /// Internal stream continuation for publishing ``PartialFragment`` values
     private var partialFragmentsStreamContinuation: AsyncStream<PartialFragment>.Continuation?
     
-    /// Publish a message to the stream
-    private func publishMessage(_ message: Message) {
+    /// Publish a message to the stream (assistant can be staged per run policy).
+    private func publishMessage(_ message: Message, runID: AgenticLoopID?) {
+        if message.role == .assistant, let runID, var run = activeRuns[runID], run.assistantPersistenceMode == .stagedCommit {
+            run.stagedAssistantMessages.append(message)
+            activeRuns[runID] = run
+            return
+        }
         logger.debug(
             "Publishing message",
             metadata: metadataForMessage(message)
@@ -778,7 +948,11 @@ public actor SwiftAgentKitOrchestrator {
     }
     
     /// Execute tool calls using available managers.
-    private func executeToolCalls(_ toolCalls: [ToolCall], context: OrchestratorInvocationContext) async -> ToolExecutionBatchResult {
+    private func executeToolCalls(
+        _ toolCalls: [ToolCall],
+        context: OrchestratorInvocationContext,
+        runID: AgenticLoopID
+    ) async -> ToolExecutionBatchResult {
         let dispatchDecision = await decideDispatchPolicy(for: toolCalls, context: context)
         logger.info(
             "Dispatch policy selected",
@@ -789,16 +963,20 @@ public actor SwiftAgentKitOrchestrator {
         )
 
         if dispatchDecision.mode == .parallel {
-            return await executeToolCallsInParallel(toolCalls, dispatchMode: .parallel)
+            return await executeToolCallsInParallel(toolCalls, dispatchMode: .parallel, runID: runID)
         }
-        return await executeToolCallsSerially(toolCalls, dispatchMode: .serial)
+        return await executeToolCallsSerially(toolCalls, dispatchMode: .serial, runID: runID)
     }
 
-    private func executeToolCallsSerially(_ toolCalls: [ToolCall], dispatchMode: ToolDispatchMode) async -> ToolExecutionBatchResult {
+    private func executeToolCallsSerially(
+        _ toolCalls: [ToolCall],
+        dispatchMode: ToolDispatchMode,
+        runID: AgenticLoopID
+    ) async -> ToolExecutionBatchResult {
         var aggregated: [LLMResponse] = []
         var pendingCount = 0
         for toolCall in toolCalls {
-            let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode)
+            let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID)
             aggregated.append(contentsOf: outcome.responses)
             if outcome.pendingAccepted {
                 pendingCount += 1
@@ -807,11 +985,15 @@ public actor SwiftAgentKitOrchestrator {
         return ToolExecutionBatchResult(responses: aggregated, pendingCount: pendingCount)
     }
 
-    private func executeToolCallsInParallel(_ toolCalls: [ToolCall], dispatchMode: ToolDispatchMode) async -> ToolExecutionBatchResult {
+    private func executeToolCallsInParallel(
+        _ toolCalls: [ToolCall],
+        dispatchMode: ToolDispatchMode,
+        runID: AgenticLoopID
+    ) async -> ToolExecutionBatchResult {
         let indexed = await withTaskGroup(of: (Int, SingleToolExecutionOutcome).self) { group in
             for (index, toolCall) in toolCalls.enumerated() {
                 group.addTask { [self] in
-                    let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode)
+                    let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID)
                     return (index, outcome)
                 }
             }
@@ -828,7 +1010,14 @@ public actor SwiftAgentKitOrchestrator {
         return ToolExecutionBatchResult(responses: responses, pendingCount: pendingCount)
     }
 
-    private func executeSingleToolCall(_ toolCall: ToolCall, dispatchMode: ToolDispatchMode) async -> SingleToolExecutionOutcome {
+    private func executeSingleToolCall(
+        _ toolCall: ToolCall,
+        dispatchMode: ToolDispatchMode,
+        runID: AgenticLoopID
+    ) async -> SingleToolExecutionOutcome {
+        if isRunCancellationRequested(runID) || Task.isCancelled {
+            return SingleToolExecutionOutcome(responses: [], pendingAccepted: false)
+        }
         logger.info(
             "Executing tool call",
             metadata: metadataForToolCall(toolCall, provider: "orchestrator")
@@ -899,7 +1088,7 @@ public actor SwiftAgentKitOrchestrator {
                     let response = llmResponseFromToolResult(result, toolCallId: toolCall.id)
                     callResponses.append(response)
                 case .pending(let handle):
-                    registerPendingHandle(handle, toolName: toolCall.name, dispatchMode: dispatchMode)
+                    registerPendingHandle(handle, toolName: toolCall.name, dispatchMode: dispatchMode, runID: runID)
                     return SingleToolExecutionOutcome(responses: [], pendingAccepted: true)
                 }
             } catch {
@@ -950,6 +1139,7 @@ public actor SwiftAgentKitOrchestrator {
 private struct OrchestratorInvocationContext: Sendable {
     let mergedAdditionalParameters: JSON?
     let toolInvocationPolicy: ToolInvocationPolicy
+    let assistantPersistenceMode: AssistantPersistenceMode
     let parallelToolDispatchEnabled: Bool
     let toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]
     let maxAgenticStepsPerUpdate: Int?
@@ -970,6 +1160,15 @@ private struct SingleToolExecutionOutcome: Sendable {
     let pendingAccepted: Bool
 }
 
+private struct ActiveRunState: Sendable {
+    var assistantPersistenceMode: AssistantPersistenceMode = .immediate
+    var cancellationRequested: Bool = false
+    var stagedAssistantMessages: [Message] = []
+    var assistantCommitted: Bool = false
+    var pendingHandleIDs: Set<String> = []
+    var terminalOutcome: UpdateConversationOutcome? = nil
+}
+
 extension SwiftAgentKitOrchestrator: PendingToolCompletionSink {
     public func onPendingCompletion(_ completion: PendingToolCompletion) async {
         if completedPendingHandleIDs.contains(completion.handleID) {
@@ -981,8 +1180,28 @@ extension SwiftAgentKitOrchestrator: PendingToolCompletionSink {
         }
         completedPendingHandleIDs.insert(completion.handleID)
         pendingHandlesByID.removeValue(forKey: completion.handleID)
+        let runID = pendingHandleRunByID.removeValue(forKey: completion.handleID)
         pendingTimeoutTasks[completion.handleID]?.cancel()
         pendingTimeoutTasks.removeValue(forKey: completion.handleID)
+        if let runID, var run = activeRuns[runID] {
+            run.pendingHandleIDs.remove(completion.handleID)
+            if run.cancellationRequested {
+                activeRuns[runID] = run
+                logger.info(
+                    "Ignoring pending completion for cancelled run",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("runID", .string(String(describing: runID))),
+                        ("handleID", .string(completion.handleID))
+                    )
+                )
+                return
+            }
+            if run.pendingHandleIDs.isEmpty, run.terminalOutcome != nil {
+                activeRuns[runID] = nil
+            } else {
+                activeRuns[runID] = run
+            }
+        }
         pendingCompletionStreamContinuation?.yield(completion)
         publishToolLifecycle(
             toolCallID: completion.toolCallID,
@@ -1014,9 +1233,15 @@ private extension SwiftAgentKitOrchestrator {
     func registerPendingHandle(
         _ handle: PendingToolHandle,
         toolName: String,
-        dispatchMode: ToolDispatchMode
+        dispatchMode: ToolDispatchMode,
+        runID: AgenticLoopID
     ) {
         pendingHandlesByID[handle.handleID] = handle
+        pendingHandleRunByID[handle.handleID] = runID
+        if var run = activeRuns[runID] {
+            run.pendingHandleIDs.insert(handle.handleID)
+            activeRuns[runID] = run
+        }
         pendingTimeoutTasks[handle.handleID]?.cancel()
 
         if let timeout = config.pendingToolTimeout, timeout > 0 {
@@ -1039,6 +1264,57 @@ private extension SwiftAgentKitOrchestrator {
             state: .pending,
             dispatchMode: dispatchMode
         )
+    }
+
+    func isRunCancellationRequested(_ runID: AgenticLoopID) -> Bool {
+        activeRuns[runID]?.cancellationRequested ?? false
+    }
+
+    @discardableResult
+    func finalizeRunOutcome(
+        runID: AgenticLoopID,
+        terminalState: OrchestratorTerminalState,
+        terminalReason: OrchestratorTerminalReason,
+        commitAssistantMessages: Bool
+    ) async -> UpdateConversationOutcome {
+        var run = activeRuns[runID] ?? ActiveRunState()
+        if terminalState == .cancelled {
+            for handleID in run.pendingHandleIDs {
+                await cancelPendingTool(handleID: handleID, reason: "Run cancelled")
+            }
+        }
+        let shouldCommitAssistant = commitAssistantMessages
+            && terminalState == .completed
+            && !run.cancellationRequested
+
+        if shouldCommitAssistant {
+            for message in run.stagedAssistantMessages {
+                logger.debug(
+                    "Publishing staged assistant message",
+                    metadata: metadataForMessage(message)
+                )
+                messageStreamContinuation?.yield(message)
+            }
+            run.assistantCommitted = !run.stagedAssistantMessages.isEmpty
+        } else {
+            run.stagedAssistantMessages.removeAll()
+            run.assistantCommitted = false
+        }
+
+        let outcome = UpdateConversationOutcome(
+            runID: runID,
+            terminalState: terminalState,
+            terminalReason: terminalReason,
+            assistantCommitted: run.assistantCommitted
+        )
+        run.terminalOutcome = outcome
+        lastRunOutcomeByID[runID] = outcome
+        if run.pendingHandleIDs.isEmpty {
+            activeRuns[runID] = nil
+        } else {
+            activeRuns[runID] = run
+        }
+        return outcome
     }
 }
 
