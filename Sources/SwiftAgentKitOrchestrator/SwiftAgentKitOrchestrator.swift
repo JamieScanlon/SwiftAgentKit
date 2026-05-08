@@ -137,6 +137,23 @@ public actor SwiftAgentKitOrchestrator {
             return allTools
         }
     }
+
+    /// Canonical tool descriptors with normalized schema + execution metadata.
+    public var allRegisteredTools: [RegisteredToolDescriptor] {
+        get async {
+            var allDescriptors: [RegisteredToolDescriptor] = []
+            if let mcpManager = mcpManager, config.mcpEnabled {
+                allDescriptors.append(contentsOf: await mcpManager.registeredToolDescriptors())
+            }
+            if let a2aManager = a2aManager, config.a2aEnabled {
+                allDescriptors.append(contentsOf: await a2aManager.registeredToolDescriptors())
+            }
+            if let toolManager = toolManager {
+                allDescriptors.append(contentsOf: await toolManager.allRegisteredToolsAsync())
+            }
+            return allDescriptors
+        }
+    }
     
     /// Stream of message updates from the orchestrator
     public var messageStream: AsyncStream<Message> {

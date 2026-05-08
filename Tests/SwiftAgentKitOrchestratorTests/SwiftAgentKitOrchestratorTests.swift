@@ -1444,6 +1444,33 @@ struct PendingMockToolProvider: ToolProvider {
         #expect(tools.contains { $0.name == toolName })
         #expect(tools.first { $0.name == toolName }?.type == .function)
     }
+
+    @Test("allRegisteredTools exposes canonical descriptors")
+    func testAllRegisteredToolsExposesCanonicalDescriptors() async throws {
+        let llm = MockLLM(model: "registered", logger: Logger(label: "registered-llm"))
+        let def = ToolDefinition(
+            name: "canonical_tool",
+            description: "Canonical",
+            parameters: [.init(name: "q", description: "query", type: "string", required: true)],
+            type: .function
+        )
+        let toolManager = ToolManager()
+            .registerReadOnlyTool(
+                definition: def,
+                source: .local,
+                parallelHint: .parallelizable,
+                policyTags: [.sensitive]
+            )
+        let orchestrator = SwiftAgentKitOrchestrator(llm: llm, toolManager: toolManager)
+        let descriptors = await orchestrator.allRegisteredTools
+        let descriptor = descriptors.first { $0.definition.name == "canonical_tool" }
+        #expect(descriptor != nil)
+        #expect(descriptor?.source == .local)
+        #expect(descriptor?.effectClass == .readOnly)
+        #expect(descriptor?.parallelHint == .parallelizable)
+        #expect(descriptor?.policyTags.contains(.sensitive) == true)
+        #expect(descriptor?.normalizedSchemaFingerprint.isEmpty == false)
+    }
     
     @Test("ToolManager executes function tool calls and result is sent to LLM")
     func testToolManagerExecutesFunctionToolCalls() async throws {

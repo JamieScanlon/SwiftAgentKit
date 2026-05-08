@@ -57,7 +57,7 @@ public struct ToolDefinition: Sendable, Codable {
         self.type = type
     }
     
-    public enum ToolType: String, Codable, Sendable {
+    public enum ToolType: String, Codable, Sendable, Equatable {
         case a2aAgent = "a2a_agent"
         case mcpTool = "mcp_tool"
         case function = "function"
@@ -94,49 +94,256 @@ public struct ToolDefinition: Sendable, Codable {
 /// Simple tool manager that coordinates multiple providers
 public struct ToolManager: Sendable {
     public let providers: [ToolProvider]
+    public let registeredTools: [RegisteredToolDescriptor]
     private let logger: Logger
+    private let schemaNormalizer: ToolSchemaNormalizer
     
-    public init(providers: [ToolProvider] = [], logger: Logger? = nil) {
+    public init(
+        providers: [ToolProvider] = [],
+        registeredTools: [RegisteredToolDescriptor] = [],
+        logger: Logger? = nil,
+        schemaNormalizer: ToolSchemaNormalizer = ToolSchemaNormalizer()
+    ) {
         self.providers = providers
+        self.registeredTools = registeredTools
+        self.schemaNormalizer = schemaNormalizer
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .core("ToolManager"),
             metadata: SwiftAgentKitLogging.metadata(
-                ("providerCount", .stringConvertible(providers.count))
+                ("providerCount", .stringConvertible(providers.count)),
+                ("registeredToolCount", .stringConvertible(registeredTools.count))
             )
         )
     }
     
     public init(providers: [ToolProvider]) {
-        self.init(providers: providers, logger: nil)
+        self.init(providers: providers, registeredTools: [], logger: nil)
     }
     
     public func allToolsAsync() async -> [ToolDefinition] {
+        let descriptors = await allRegisteredToolsAsync()
         var chosenToolsByName: [String: ToolDefinition] = [:]
         var chosenProviderByToolName: [String: String] = [:]
         var chosenIsLocalByToolName: [String: Bool] = [:]
-        for provider in providers {
-            let providerTools = await provider.availableTools()
-            let providerIsLocal = provider is LocalFunctionToolProvider
-            for tool in providerTools {
-                if chosenToolsByName[tool.name] != nil {
-                    let existingIsLocal = chosenIsLocalByToolName[tool.name] ?? false
-                    let incomingIsLocal = providerIsLocal
-                    if incomingIsLocal && !existingIsLocal {
-                        logCollision(toolName: tool.name, winnerProvider: provider.name, overshadowedProvider: chosenProviderByToolName[tool.name] ?? "unknown")
-                        chosenToolsByName[tool.name] = tool
-                        chosenProviderByToolName[tool.name] = provider.name
-                        chosenIsLocalByToolName[tool.name] = true
-                    } else {
-                        logCollision(toolName: tool.name, winnerProvider: chosenProviderByToolName[tool.name] ?? "unknown", overshadowedProvider: provider.name)
-                    }
-                } else {
+        for descriptor in descriptors {
+            let tool = descriptor.definition
+            let source = descriptor.source
+            let providerIsLocal = source == .local
+            if chosenToolsByName[tool.name] != nil {
+                let existingIsLocal = chosenIsLocalByToolName[tool.name] ?? false
+                let incomingIsLocal = providerIsLocal
+                if incomingIsLocal && !existingIsLocal {
+                    logCollision(
+                        toolName: tool.name,
+                        winnerProvider: source.rawValue,
+                        overshadowedProvider: chosenProviderByToolName[tool.name] ?? "unknown"
+                    )
                     chosenToolsByName[tool.name] = tool
-                    chosenProviderByToolName[tool.name] = provider.name
-                    chosenIsLocalByToolName[tool.name] = providerIsLocal
+                    chosenProviderByToolName[tool.name] = source.rawValue
+                    chosenIsLocalByToolName[tool.name] = true
+                } else {
+                    logCollision(
+                        toolName: tool.name,
+                        winnerProvider: chosenProviderByToolName[tool.name] ?? "unknown",
+                        overshadowedProvider: source.rawValue
+                    )
                 }
+            } else {
+                chosenToolsByName[tool.name] = tool
+                chosenProviderByToolName[tool.name] = source.rawValue
+                chosenIsLocalByToolName[tool.name] = providerIsLocal
             }
         }
         return Array(chosenToolsByName.values)
+    }
+
+    /// Canonical registration rows including normalized schema and execution hints.
+    public func allRegisteredToolsAsync() async -> [RegisteredToolDescriptor] {
+        var collected: [RegisteredToolDescriptor] = registeredTools
+        for provider in providers {
+            let providerTools = await provider.availableTools()
+            for tool in providerTools {
+                let source = await provider.registrationSource(for: tool)
+                let effect = await provider.effectClass(for: tool)
+                let parallelHint = await provider.executionParallelHint(for: tool)
+                let tags = await provider.policyTags(for: tool)
+                let rawSchema = await provider.rawSchema(for: tool) ?? tool.inferredSchemaJSON
+                let normalized = schemaNormalizer.normalize(rawSchema: rawSchema, source: source)
+                collected.append(
+                    RegisteredToolDescriptor(
+                        definition: tool,
+                        source: source,
+                        effectClass: effect,
+                        parallelHint: parallelHint,
+                        policyTags: tags,
+                        normalizedSchema: normalized
+                    )
+                )
+            }
+        }
+        return resolveDescriptorCollisions(collected)
+    }
+
+    public func register(_ descriptor: RegisteredToolDescriptor) -> ToolManager {
+        ToolManager(
+            providers: providers,
+            registeredTools: registeredTools + [descriptor],
+            logger: logger,
+            schemaNormalizer: schemaNormalizer
+        )
+    }
+
+    public func registerTool(
+        definition: ToolDefinition,
+        source: ToolRegistrationSource,
+        effectClass: ToolEffectClass = .unknown,
+        parallelHint: ToolExecutionParallelHint = .unknown,
+        policyTags: [ToolPolicyTag] = [],
+        rawSchema: JSON? = nil,
+        targetProviderCapabilities: ToolSchemaTargetProviderCapabilities = .providerSafe
+    ) -> ToolManager {
+        let schema = rawSchema ?? definition.inferredSchemaJSON
+        let normalized = schemaNormalizer.normalize(
+            rawSchema: schema,
+            source: source,
+            targetProviderCapabilities: targetProviderCapabilities
+        )
+        return register(RegisteredToolDescriptor(
+            definition: definition,
+            source: source,
+            effectClass: effectClass,
+            parallelHint: parallelHint,
+            policyTags: policyTags,
+            normalizedSchema: normalized
+        ))
+    }
+
+    public func registerLocalTool(
+        definition: ToolDefinition,
+        effectClass: ToolEffectClass = .unknown,
+        parallelHint: ToolExecutionParallelHint = .unknown,
+        policyTags: [ToolPolicyTag] = [],
+        rawSchema: JSON? = nil
+    ) -> ToolManager {
+        registerTool(
+            definition: definition,
+            source: .local,
+            effectClass: effectClass,
+            parallelHint: parallelHint,
+            policyTags: policyTags,
+            rawSchema: rawSchema
+        )
+    }
+
+    public func registerMCPTool(
+        definition: ToolDefinition,
+        effectClass: ToolEffectClass = .unknown,
+        parallelHint: ToolExecutionParallelHint = .unknown,
+        policyTags: [ToolPolicyTag] = [],
+        rawSchema: JSON? = nil
+    ) -> ToolManager {
+        registerTool(
+            definition: definition,
+            source: .mcp,
+            effectClass: effectClass,
+            parallelHint: parallelHint,
+            policyTags: policyTags,
+            rawSchema: rawSchema
+        )
+    }
+
+    public func registerA2ATool(
+        definition: ToolDefinition,
+        effectClass: ToolEffectClass = .unknown,
+        parallelHint: ToolExecutionParallelHint = .serialOnly,
+        policyTags: [ToolPolicyTag] = [],
+        rawSchema: JSON? = nil
+    ) -> ToolManager {
+        registerTool(
+            definition: definition,
+            source: .a2a,
+            effectClass: effectClass,
+            parallelHint: parallelHint,
+            policyTags: policyTags,
+            rawSchema: rawSchema
+        )
+    }
+
+    public func registerReadOnlyTool(
+        definition: ToolDefinition,
+        source: ToolRegistrationSource = .local,
+        parallelHint: ToolExecutionParallelHint = .parallelizable,
+        policyTags: [ToolPolicyTag] = [],
+        rawSchema: JSON? = nil
+    ) -> ToolManager {
+        registerTool(
+            definition: definition,
+            source: source,
+            effectClass: .readOnly,
+            parallelHint: parallelHint,
+            policyTags: policyTags,
+            rawSchema: rawSchema
+        )
+    }
+
+    public func registerMutatingTool(
+        definition: ToolDefinition,
+        source: ToolRegistrationSource = .local,
+        policyTags: [ToolPolicyTag] = [],
+        rawSchema: JSON? = nil
+    ) -> ToolManager {
+        registerTool(
+            definition: definition,
+            source: source,
+            effectClass: .mutating,
+            parallelHint: .serialOnly,
+            policyTags: policyTags,
+            rawSchema: rawSchema
+        )
+    }
+
+    public func registerDelegatedTool(
+        definition: ToolDefinition,
+        source: ToolRegistrationSource = .a2a,
+        effectClass: ToolEffectClass = .unknown,
+        policyTags: [ToolPolicyTag] = [],
+        rawSchema: JSON? = nil
+    ) -> ToolManager {
+        registerTool(
+            definition: definition,
+            source: source,
+            effectClass: effectClass,
+            parallelHint: .serialOnly,
+            policyTags: policyTags,
+            rawSchema: rawSchema
+        )
+    }
+
+    private func resolveDescriptorCollisions(_ descriptors: [RegisteredToolDescriptor]) -> [RegisteredToolDescriptor] {
+        var chosen: [String: RegisteredToolDescriptor] = [:]
+        for descriptor in descriptors {
+            if let existing = chosen[descriptor.definition.name] {
+                let incomingIsLocal = descriptor.source == .local
+                let existingIsLocal = existing.source == .local
+                if incomingIsLocal && !existingIsLocal {
+                    logCollision(
+                        toolName: descriptor.definition.name,
+                        winnerProvider: descriptor.source.rawValue,
+                        overshadowedProvider: existing.source.rawValue
+                    )
+                    chosen[descriptor.definition.name] = descriptor
+                } else {
+                    logCollision(
+                        toolName: descriptor.definition.name,
+                        winnerProvider: existing.source.rawValue,
+                        overshadowedProvider: descriptor.source.rawValue
+                    )
+                }
+            } else {
+                chosen[descriptor.definition.name] = descriptor
+            }
+        }
+        return Array(chosen.values)
     }
     
     /// Dispatches to providers that list `toolCall.name`, in ``prioritizedProviders(for:)`` order (local function providers first).
@@ -214,7 +421,12 @@ public struct ToolManager: Sendable {
     }
     
     public func addProvider(_ provider: ToolProvider) -> ToolManager {
-        ToolManager(providers: providers + [provider], logger: logger)
+        ToolManager(
+            providers: providers + [provider],
+            registeredTools: registeredTools,
+            logger: logger,
+            schemaNormalizer: schemaNormalizer
+        )
     }
     
     private func prioritizedProviders(for toolName: String) async -> [ToolProvider] {

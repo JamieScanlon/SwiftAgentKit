@@ -65,6 +65,7 @@ public actor MCPManager {
         return nil
     }
     public var toolCallsJson: [[String: Any]] = []
+    public private(set) var ingestionDiagnostics: [ToolIngestionDiagnostic] = []
     public private(set) var clients: [MCPClient] = []
 
     /// When the manager was initialized from a config file that set ``MCPConfig/toolCallTimeout``, that value is stored here. Otherwise `nil` (call sites fall back to the orchestrator’s default tool-call timeout).
@@ -154,6 +155,47 @@ public actor MCPManager {
             allTools.append(contentsOf: await client.tools)
         }
         return allTools
+    }
+
+    /// Canonical typed registration rows for MCP-ingested tools.
+    public func registeredToolDescriptors(
+        targetProviderCapabilities: ToolSchemaTargetProviderCapabilities = .providerSafe
+    ) async -> [RegisteredToolDescriptor] {
+        var descriptors: [RegisteredToolDescriptor] = []
+        var diagnostics: [ToolIngestionDiagnostic] = []
+        let normalizer = ToolSchemaNormalizer()
+        for client in clients {
+            let tools = await client.tools
+            for tool in tools {
+                let schema = tool.inferredSchemaJSON
+                let normalized = normalizer.normalize(
+                    rawSchema: schema,
+                    source: .mcp,
+                    targetProviderCapabilities: targetProviderCapabilities
+                )
+                descriptors.append(
+                    RegisteredToolDescriptor(
+                        definition: tool,
+                        source: .mcp,
+                        effectClass: .unknown,
+                        parallelHint: .unknown,
+                        policyTags: [],
+                        normalizedSchema: normalized
+                    )
+                )
+                if normalized.report.didFallback {
+                    diagnostics.append(
+                        ToolIngestionDiagnostic(
+                            toolName: tool.name,
+                            source: .mcp,
+                            message: "Schema normalization applied fallback policy."
+                        )
+                    )
+                }
+            }
+        }
+        ingestionDiagnostics = diagnostics
+        return descriptors
     }
     
     // MARK: - Private

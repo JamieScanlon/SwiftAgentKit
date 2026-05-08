@@ -244,6 +244,23 @@ struct A2AManagerTests {
         // - parameters: includes "instructions" parameter
         // - type: .a2aAgent
     }
+
+    @Test("registeredToolDescriptors returns canonical typed descriptors for A2A tools")
+    func testRegisteredToolDescriptorsForA2A() async throws {
+        let manager = A2AManager()
+        let card = createMockAgentCard(name: "DescriptorAgent")
+        let client = MockA2AStreamClient(agentCard: card, events: [])
+        try await manager.initialize(clients: [client])
+
+        let descriptors = await manager.registeredToolDescriptors()
+        #expect(descriptors.count == 1)
+        let descriptor = try #require(descriptors.first)
+        #expect(descriptor.definition.name == "DescriptorAgent")
+        #expect(descriptor.source == .a2a)
+        #expect(descriptor.parallelHint == .serialOnly)
+        #expect(descriptor.schemaSummary.requiredCount == 1)
+        #expect(!descriptor.normalizedSchemaFingerprint.isEmpty)
+    }
     
     // MARK: - Integration Tests with Mock Responses
     

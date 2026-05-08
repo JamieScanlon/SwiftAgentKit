@@ -43,6 +43,7 @@ public actor A2AManager {
     public var state: State = .notReady
     public var toolCallsJsonString: String?
     public var toolCallsJson: [[String: Any]] = []
+    public private(set) var ingestionDiagnostics: [ToolIngestionDiagnostic] = []
     /// When the manager was initialized from a config file that set ``A2AConfig/toolCallTimeout``, that value is stored here. Otherwise `nil` (call sites fall back to the orchestrator’s default tool-call timeout).
     public private(set) var toolCallTimeout: TimeInterval? = nil
     
@@ -347,6 +348,57 @@ public actor A2AManager {
             }
         }
         return allTools
+    }
+
+    /// Canonical typed registration rows for A2A-ingested tools.
+    public func registeredToolDescriptors(
+        targetProviderCapabilities: ToolSchemaTargetProviderCapabilities = .providerSafe
+    ) async -> [RegisteredToolDescriptor] {
+        let normalizer = ToolSchemaNormalizer()
+        var descriptors: [RegisteredToolDescriptor] = []
+        var diagnostics: [ToolIngestionDiagnostic] = []
+        for client in clients {
+            guard let agentCard = await client.agentCard else { continue }
+            let definition = ToolDefinition(
+                name: agentCard.name,
+                description: agentCard.description,
+                parameters: [
+                    .init(
+                        name: "instructions",
+                        description: "Issue a task for this agent to complete on your behalf.",
+                        type: "string",
+                        required: true
+                    )
+                ],
+                type: .a2aAgent
+            )
+            let normalized = normalizer.normalize(
+                rawSchema: definition.inferredSchemaJSON,
+                source: .a2a,
+                targetProviderCapabilities: targetProviderCapabilities
+            )
+            descriptors.append(
+                RegisteredToolDescriptor(
+                    definition: definition,
+                    source: .a2a,
+                    effectClass: .unknown,
+                    parallelHint: .serialOnly,
+                    policyTags: [],
+                    normalizedSchema: normalized
+                )
+            )
+            if normalized.report.didFallback {
+                diagnostics.append(
+                    ToolIngestionDiagnostic(
+                        toolName: definition.name,
+                        source: .a2a,
+                        message: "Schema normalization applied fallback policy."
+                    )
+                )
+            }
+        }
+        ingestionDiagnostics = diagnostics
+        return descriptors
     }
 
     /// Placeholder cancellation seam for pending handle integration.

@@ -262,4 +262,72 @@ import EasyJSON
         #expect(result.success == false)
         #expect(result.error == "Tool 'bar' not found in any provider")
     }
+
+    @Test("ToolManager registerReadOnlyTool creates canonical descriptor with metadata")
+    func testToolManagerRegisterReadOnlyToolDescriptor() async throws {
+        let definition = ToolDefinition(
+            name: "list_projects",
+            description: "List projects",
+            parameters: [
+                .init(name: "limit", description: "Max rows", type: "integer", required: false)
+            ],
+            type: .function
+        )
+        let manager = ToolManager()
+            .registerReadOnlyTool(
+                definition: definition,
+                source: .local,
+                parallelHint: .parallelizable,
+                policyTags: [.requiresApproval]
+            )
+        let descriptors = await manager.allRegisteredToolsAsync()
+        #expect(descriptors.count == 1)
+        let descriptor = try #require(descriptors.first)
+        #expect(descriptor.definition.name == "list_projects")
+        #expect(descriptor.source == .local)
+        #expect(descriptor.effectClass == .readOnly)
+        #expect(descriptor.parallelHint == .parallelizable)
+        #expect(descriptor.policyTags.contains(.requiresApproval))
+        #expect(!descriptor.normalizedSchemaFingerprint.isEmpty)
+        #expect(descriptor.schemaSummary.topLevelType == "object")
+    }
+
+    @Test("ToolSchemaNormalizer fingerprint is deterministic across key order")
+    func testToolSchemaNormalizerDeterministicFingerprint() throws {
+        let normalizer = ToolSchemaNormalizer()
+        let schemaA: JSON = .object([
+            "type": .string("object"),
+            "required": .array([.string("b"), .string("a")]),
+            "properties": .object([
+                "a": .object(["type": .string("string")]),
+                "b": .object(["type": .array([.string("string"), .string("null")])])
+            ])
+        ])
+        let schemaB: JSON = .object([
+            "properties": .object([
+                "b": .object(["type": .array([.string("null"), .string("string")])]),
+                "a": .object(["type": .string("string")])
+            ]),
+            "required": .array([.string("a"), .string("b")]),
+            "type": .string("object")
+        ])
+        let normalizedA = normalizer.normalize(rawSchema: schemaA, source: .local)
+        let normalizedB = normalizer.normalize(rawSchema: schemaB, source: .local)
+        #expect(normalizedA.fingerprint == normalizedB.fingerprint)
+        #expect(normalizedA.summary.requiredCount == 2)
+        #expect(normalizedA.report.warnings.contains(where: { $0.contains("nullable") }))
+    }
+
+    @Test("allToolsAsync includes canonical registered descriptors")
+    func testAllToolsIncludesRegisteredDescriptors() async throws {
+        let def = ToolDefinition(
+            name: "registered_tool",
+            description: "Registered",
+            parameters: [],
+            type: .function
+        )
+        let manager = ToolManager().registerLocalTool(definition: def)
+        let tools = await manager.allToolsAsync()
+        #expect(tools.contains(where: { $0.name == "registered_tool" }))
+    }
 }

@@ -203,6 +203,16 @@ struct MCPManagerRemoteTests {
         let toolCallsJsonString = await manager.toolCallsJsonString
         #expect(toolCallsJsonString == "[]")
     }
+
+    @Test("registeredToolDescriptors returns empty list and no diagnostics when no MCP clients")
+    func testRegisteredToolDescriptorsEmpty() async throws {
+        let manager = MCPManager()
+        try await manager.initialize(clients: [])
+        let descriptors = await manager.registeredToolDescriptors()
+        let diagnostics = await manager.ingestionDiagnostics
+        #expect(descriptors.isEmpty)
+        #expect(diagnostics.isEmpty)
+    }
     
     // MARK: - Tool Management Tests
     
