@@ -45,6 +45,25 @@ public struct A2AToolProvider: ToolProvider {
     }
     
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        let outcome = try await executeToolOutcome(toolCall)
+        switch outcome {
+        case .completed(let result):
+            return result
+        case .pending(let handle):
+            return ToolResult(
+                success: true,
+                content: "Accepted by delegate and running asynchronously (handle: \(handle.handleID)).",
+                metadata: .object([
+                    "source": .string("a2a_agent"),
+                    "pendingHandleID": .string(handle.handleID),
+                    "status": .string("pending")
+                ]),
+                toolCallId: toolCall.id
+            )
+        }
+    }
+
+    public func executeToolOutcome(_ toolCall: ToolCall) async throws -> ToolExecutionOutcome {
         for client in clients {
             // Check if this client has the requested agent
             guard let agentCard = await client.agentCard,
@@ -73,23 +92,41 @@ public struct A2AToolProvider: ToolProvider {
                     let content = message.parts.compactMap { part in
                         if case .text(let text) = part { return text } else { return nil }
                     }.joined(separator: " ")
-                    return ToolResult(
+                    return .completed(ToolResult(
                         success: true,
                         content: content,
                         metadata: .object(["source": .string("a2a_agent")]),
                         toolCallId: toolCall.id
-                    )
+                    ))
                 case .task(let task):
-                    if let message = task.status.message {
+                    if task.status.state.isTerminal {
+                        if let message = task.status.message {
+                            let content = message.parts.compactMap { part in
+                                if case .text(let text) = part { return text } else { return nil }
+                            }.joined(separator: " ")
+                            return .completed(ToolResult(
+                                success: true,
+                                content: content,
+                                metadata: .object(["source": .string("a2a_agent")]),
+                                toolCallId: toolCall.id
+                            ))
+                        }
+                    } else if let toolCallID = toolCall.id {
+                        return .pending(PendingToolHandle(
+                            handleID: task.id,
+                            toolCallID: toolCallID,
+                            provider: name
+                        ))
+                    } else if let message = task.status.message {
                         let content = message.parts.compactMap { part in
                             if case .text(let text) = part { return text } else { return nil }
                         }.joined(separator: " ")
-                        return ToolResult(
+                        return .completed(ToolResult(
                             success: true,
                             content: content,
                             metadata: .object(["source": .string("a2a_agent")]),
                             toolCallId: toolCall.id
-                        )
+                        ))
                     }
                 default:
                     continue
@@ -107,11 +144,22 @@ public struct A2AToolProvider: ToolProvider {
             }
         }
         
-        return ToolResult(
+        return .completed(ToolResult(
             success: false,
             content: "",
             toolCallId: toolCall.id,
             error: "A2A agent not found or failed"
-        )
+        ))
     }
 } 
+
+private extension TaskState {
+    var isTerminal: Bool {
+        switch self {
+        case .completed, .canceled, .failed, .rejected:
+            return true
+        default:
+            return false
+        }
+    }
+}

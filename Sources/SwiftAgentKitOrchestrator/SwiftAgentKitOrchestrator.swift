@@ -28,6 +28,12 @@ public struct OrchestratorConfig: Sendable {
     public let additionalParameters: JSON?
     /// Maximum LLM invocations (including tool follow-ups) for a single `updateConversation`; `nil` means unlimited.
     public let maxAgenticStepsPerUpdate: Int?
+    /// When true, tool batches classified as parallel-safe may run concurrently.
+    public let parallelToolDispatchEnabled: Bool
+    /// Optional custom policy evaluator for selecting serial vs parallel mode for each tool batch.
+    public let toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)?
+    /// Optional timeout for pending tool handles. `nil` disables automatic timeout cancellation.
+    public let pendingToolTimeout: TimeInterval?
     /// How tool calls are chosen when tools are passed to the orchestrator (forwarded in ``LLMRequestConfig``).
     public let toolInvocationPolicy: ToolInvocationPolicy
     /// When true and tools are non-empty, reject assistant turns with no tool calls and retry with a correction message (see correction fields).
@@ -48,6 +54,9 @@ public struct OrchestratorConfig: Sendable {
         topP: Double? = nil,
         additionalParameters: JSON? = nil,
         maxAgenticStepsPerUpdate: Int? = nil,
+        parallelToolDispatchEnabled: Bool = false,
+        toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)? = nil,
+        pendingToolTimeout: TimeInterval? = nil,
         toolInvocationPolicy: ToolInvocationPolicy = .automatic,
         rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: Bool = false,
         maxCorrectionRetries: Int = 0,
@@ -64,6 +73,9 @@ public struct OrchestratorConfig: Sendable {
         self.topP = topP
         self.additionalParameters = additionalParameters
         self.maxAgenticStepsPerUpdate = maxAgenticStepsPerUpdate
+        self.parallelToolDispatchEnabled = parallelToolDispatchEnabled
+        self.toolDispatchPolicyEvaluator = toolDispatchPolicyEvaluator
+        self.pendingToolTimeout = pendingToolTimeout
         self.toolInvocationPolicy = toolInvocationPolicy
         self.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable = rejectAssistantTurnWithNoToolCallsWhenToolsAvailable
         self.maxCorrectionRetries = maxCorrectionRetries
@@ -88,6 +100,12 @@ public actor SwiftAgentKitOrchestrator {
 
     private let agenticLoopStateHub: AgenticLoopStateHub
     private let orchestrationObservation: OrchestrationObservationCoordinator
+    private let toolLifecycleEventHub: ToolLifecycleEventHub
+    private var pendingCompletionStreamContinuation: AsyncStream<PendingToolCompletion>.Continuation?
+    private var currentPendingCompletionStream: AsyncStream<PendingToolCompletion>?
+    private var pendingHandlesByID: [String: PendingToolHandle] = [:]
+    private var completedPendingHandleIDs: Set<String> = []
+    private var pendingTimeoutTasks: [String: Task<Void, Never>] = [:]
     
     /// All available tools from MCP and A2A managers
     public var allAvailableTools: [ToolDefinition] {
@@ -158,6 +176,25 @@ public actor SwiftAgentKitOrchestrator {
     /// Agentic tool-loop state for this orchestrator (multi-call session per top-level `updateConversation`).
     public var agenticLoopUpdates: AsyncStream<(AgenticLoopID, AgenticLoopState)> {
         agenticLoopStateHub.makeStream()
+    }
+
+    /// Lifecycle events for individual tool calls.
+    public var toolLifecycleEvents: AsyncStream<ToolLifecycleEvent> {
+        toolLifecycleEventHub.makeStream()
+    }
+
+    /// Stream of delayed pending-tool completions.
+    public var pendingToolCompletions: AsyncStream<PendingToolCompletion> {
+        get async {
+            if let stream = currentPendingCompletionStream {
+                return stream
+            }
+            let stream = AsyncStream<PendingToolCompletion> { continuation in
+                self.pendingCompletionStreamContinuation = continuation
+            }
+            currentPendingCompletionStream = stream
+            return stream
+        }
     }
 
     /// Latest published agentic loop state for the given id, if any.
@@ -252,6 +289,7 @@ public actor SwiftAgentKitOrchestrator {
             llm: llm,
             agenticLoopStateHub: agenticHub
         )
+        self.toolLifecycleEventHub = ToolLifecycleEventHub()
     }
     
     /// Process a conversation thread and publish message updates to the message stream
@@ -294,6 +332,8 @@ public actor SwiftAgentKitOrchestrator {
             merged = mergeJSONObjectParameters(merged, metaJSON)
         }
         let policy = options.toolInvocationPolicy ?? config.toolInvocationPolicy
+        let parallelEnabled = options.parallelToolDispatchEnabled ?? config.parallelToolDispatchEnabled
+        let safetyMetadata = options.toolParallelSafetyMetadata ?? [:]
         let maxSteps = options.maxAgenticStepsPerUpdate ?? config.maxAgenticStepsPerUpdate
         let reject = options.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable ?? config.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable
         let maxCorr = options.maxCorrectionRetries ?? config.maxCorrectionRetries
@@ -302,6 +342,8 @@ public actor SwiftAgentKitOrchestrator {
         return OrchestratorInvocationContext(
             mergedAdditionalParameters: merged,
             toolInvocationPolicy: policy,
+            parallelToolDispatchEnabled: parallelEnabled,
+            toolParallelSafetyMetadata: safetyMetadata,
             maxAgenticStepsPerUpdate: maxSteps,
             rejectProseWithoutTools: reject,
             maxCorrectionRetries: maxCorr,
@@ -373,9 +415,10 @@ public actor SwiftAgentKitOrchestrator {
                         ("toolCallCount", .stringConvertible(toolCallsWithIds.count))
                     )
                 )
-                let toolResponses = await executeToolCalls(toolCallsWithIds)
+                let toolExecution = await executeToolCalls(toolCallsWithIds, context: context)
+                let toolResponses = toolExecution.responses
 
-                guard !toolResponses.isEmpty else {
+                guard !toolResponses.isEmpty || toolExecution.hasPending else {
                     logger.warning(
                         "No tool responses after model requested tool calls; ending agentic loop",
                         metadata: SwiftAgentKitLogging.metadata(
@@ -385,6 +428,18 @@ public actor SwiftAgentKitOrchestrator {
                     )
                     transitionLLMState(to: .idle(.ready))
                     agenticLoopStateHub.publish(loopId, .failed(Self.noToolResponsesAgenticFailureMessage))
+                    return
+                }
+
+                if toolResponses.isEmpty && toolExecution.hasPending {
+                    logger.info(
+                        "Tool batch accepted as pending; waiting for asynchronous completion callbacks",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("pendingCount", .stringConvertible(toolExecution.pendingCount))
+                        )
+                    )
+                    agenticLoopStateHub.publish(loopId, .completed)
+                    transitionLLMState(to: .idle(.ready))
                     return
                 }
 
@@ -526,6 +581,42 @@ public actor SwiftAgentKitOrchestrator {
         partialFragmentsStreamContinuation?.finish()
         partialFragmentsStreamContinuation = nil
         currentPartialFragmentsStream = nil
+        pendingCompletionStreamContinuation?.finish()
+        pendingCompletionStreamContinuation = nil
+        currentPendingCompletionStream = nil
+    }
+
+    /// Accepts an externally produced completion for a pending handle.
+    /// Duplicate completions for the same handle are ignored.
+    public func submitPendingCompletion(_ completion: PendingToolCompletion) async {
+        await onPendingCompletion(completion)
+    }
+
+    /// Cancels a pending handle if it is still active.
+    public func cancelPendingTool(handleID: String, reason: String? = nil) async {
+        guard let handle = pendingHandlesByID.removeValue(forKey: handleID) else {
+            return
+        }
+        pendingTimeoutTasks[handleID]?.cancel()
+        pendingTimeoutTasks.removeValue(forKey: handleID)
+        completedPendingHandleIDs.insert(handleID)
+
+        let cancelledByManager = await a2aManager?.cancelPendingHandle(handleID) ?? false
+        let cancellationReason = reason ?? (cancelledByManager ? "Cancelled by host" : "Cancelled")
+        publishToolLifecycle(
+            toolCallID: handle.toolCallID,
+            toolName: nil,
+            state: .cancelled,
+            dispatchMode: nil
+        )
+        logger.info(
+            "Pending tool cancelled",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("handleID", .string(handleID)),
+                ("toolCallID", .string(handle.toolCallID)),
+                ("reason", .string(cancellationReason))
+            )
+        )
     }
     
     // MARK: - Private
@@ -686,170 +777,166 @@ public actor SwiftAgentKitOrchestrator {
         )
     }
     
-    /// Execute tool calls using available managers
-    /// - Parameter toolCalls: Array of tool calls to execute
-    /// - Returns: Array of tool response messages to send back to the LLM
-    private func executeToolCalls(_ toolCalls: [ToolCall]) async -> [LLMResponse] {
-        var aggregatedResponses: [LLMResponse] = []
-        for toolCall in toolCalls {
-            logger.info(
-                "Executing tool call",
-                metadata: metadataForToolCall(toolCall, provider: "orchestrator")
+    /// Execute tool calls using available managers.
+    private func executeToolCalls(_ toolCalls: [ToolCall], context: OrchestratorInvocationContext) async -> ToolExecutionBatchResult {
+        let dispatchDecision = await decideDispatchPolicy(for: toolCalls, context: context)
+        logger.info(
+            "Dispatch policy selected",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("mode", .string("\(dispatchDecision.mode)")),
+                ("reason", .string(dispatchDecision.reason ?? ""))
             )
-            var callResponses: [LLMResponse] = []
-            var abortedWithError: LLMResponse?
-            
-            // Try MCP manager first
-            if let mcpManager = mcpManager, config.mcpEnabled {
-                logger.debug(
-                    "Dispatching MCP tool call",
-                    metadata: metadataForToolCall(toolCall, provider: "mcp")
-                )
-                do {
-                    let mcpResponses = try await mcpManager.toolCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
-                    if let mcpResponses = mcpResponses {
-                        if mcpResponses.isEmpty {
-                            logger.debug(
-                                "MCP tool call returned no responses",
-                                metadata: metadataForToolCall(toolCall, provider: "mcp")
-                            )
-                        } else {
-                            logger.debug(
-                                "MCP tool call responses received",
-                                metadata: metadataForResponses(mcpResponses, provider: "mcp")
-                            )
-                            let responsesWithId = mcpResponses.map { response in
-                                LLMResponse(
-                                    content: response.content,
-                                    toolCalls: response.toolCalls,
-                                    metadata: response.metadata,
-                                    isComplete: response.isComplete,
-                                    toolCallId: toolCall.id
-                                )
-                            }
-                            callResponses.append(contentsOf: responsesWithId)
-                        }
-                    } else {
-                        logger.debug(
-                            "MCP tool call returned nil",
-                            metadata: metadataForToolCall(toolCall, provider: "mcp")
-                        )
-                    }
-                } catch {
-                    logger.error(
-                        "MCP tool call failed",
-                        metadata: SwiftAgentKitLogging.metadata(
-                            ("toolName", .string(toolCall.name)),
-                            ("error", .string(String(describing: error)))
-                        )
-                    )
-                    abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
-                }
-            }
-            if let err = abortedWithError {
-                aggregatedResponses.append(err)
-                continue
-            }
-            
-            // Try A2A manager
-            if let a2aManager = a2aManager, config.a2aEnabled {
-                logger.debug(
-                    "Dispatching A2A agent call",
-                    metadata: metadataForToolCall(toolCall, provider: "a2a")
-                )
-                do {
-                    let a2aResponses = try await a2aManager.agentCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
-                    if let a2aResponses = a2aResponses {
-                        if a2aResponses.isEmpty {
-                            logger.debug(
-                                "A2A agent call returned no responses",
-                                metadata: metadataForToolCall(toolCall, provider: "a2a")
-                            )
-                        } else {
-                            logger.debug(
-                                "A2A agent call responses received",
-                                metadata: metadataForResponses(a2aResponses, provider: "a2a")
-                            )
-                            let responsesWithId = a2aResponses.map { response in
-                                LLMResponse(
-                                    content: response.content,
-                                    toolCalls: response.toolCalls,
-                                    metadata: response.metadata,
-                                    isComplete: response.isComplete,
-                                    toolCallId: toolCall.id
-                                )
-                            }
-                            callResponses.append(contentsOf: responsesWithId)
-                        }
-                    } else {
-                        logger.debug(
-                            "A2A agent call returned nil",
-                            metadata: metadataForToolCall(toolCall, provider: "a2a")
-                        )
-                    }
-                } catch {
-                    logger.error(
-                        "A2A agent call failed",
-                        metadata: SwiftAgentKitLogging.metadata(
-                            ("toolName", .string(toolCall.name)),
-                            ("error", .string(String(describing: error)))
-                        )
-                    )
-                    abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
-                }
-            }
-            if let err = abortedWithError {
-                aggregatedResponses.append(err)
-                continue
-            }
-            
-            // Try generic ToolManager if MCP and A2A didn't handle the tool
-            if callResponses.isEmpty, let toolManager = toolManager {
-                logger.debug(
-                    "Dispatching to ToolManager",
-                    metadata: metadataForToolCall(toolCall, provider: "toolManager")
-                )
-                do {
-                    let result = try await withToolCallTimeout(config.toolCallTimeout, toolName: toolCall.name) {
-                        try await toolManager.executeTool(toolCall)
-                    }
-                    let response = llmResponseFromToolResult(result, toolCallId: toolCall.id)
-                    if result.success {
-                        logger.debug(
-                            "ToolManager executed tool successfully",
-                            metadata: metadataForToolCall(toolCall, provider: "toolManager")
-                        )
-                    } else {
-                        logger.warning(
-                            "ToolManager reported tool execution failure",
-                            metadata: SwiftAgentKitLogging.metadata(
-                                ("toolName", .string(toolCall.name)),
-                                ("error", .string(result.error ?? "unknown"))
-                            )
-                        )
-                    }
-                    callResponses.append(response)
-                } catch {
-                    logger.error(
-                        "ToolManager tool execution failed",
-                        metadata: SwiftAgentKitLogging.metadata(
-                            ("toolName", .string(toolCall.name)),
-                            ("error", .string(String(describing: error)))
-                        )
-                    )
-                    callResponses.append(llmResponseFromToolExecutionError(error, toolCallId: toolCall.id))
-                }
-            }
-            
-            var successMetadata = metadataForToolCall(toolCall, provider: "orchestrator")
-            successMetadata["responseCount"] = .stringConvertible(callResponses.count)
-            logger.info(
-                "Tool call finished",
-                metadata: successMetadata
-            )
-            aggregatedResponses.append(contentsOf: callResponses)
+        )
+
+        if dispatchDecision.mode == .parallel {
+            return await executeToolCallsInParallel(toolCalls, dispatchMode: .parallel)
         }
-        return aggregatedResponses
+        return await executeToolCallsSerially(toolCalls, dispatchMode: .serial)
+    }
+
+    private func executeToolCallsSerially(_ toolCalls: [ToolCall], dispatchMode: ToolDispatchMode) async -> ToolExecutionBatchResult {
+        var aggregated: [LLMResponse] = []
+        var pendingCount = 0
+        for toolCall in toolCalls {
+            let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode)
+            aggregated.append(contentsOf: outcome.responses)
+            if outcome.pendingAccepted {
+                pendingCount += 1
+            }
+        }
+        return ToolExecutionBatchResult(responses: aggregated, pendingCount: pendingCount)
+    }
+
+    private func executeToolCallsInParallel(_ toolCalls: [ToolCall], dispatchMode: ToolDispatchMode) async -> ToolExecutionBatchResult {
+        let indexed = await withTaskGroup(of: (Int, SingleToolExecutionOutcome).self) { group in
+            for (index, toolCall) in toolCalls.enumerated() {
+                group.addTask { [self] in
+                    let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode)
+                    return (index, outcome)
+                }
+            }
+            var collected: [(Int, SingleToolExecutionOutcome)] = []
+            for await item in group {
+                collected.append(item)
+            }
+            return collected
+        }
+
+        let sorted = indexed.sorted { $0.0 < $1.0 }.map(\.1)
+        let responses = sorted.flatMap(\.responses)
+        let pendingCount = sorted.filter(\.pendingAccepted).count
+        return ToolExecutionBatchResult(responses: responses, pendingCount: pendingCount)
+    }
+
+    private func executeSingleToolCall(_ toolCall: ToolCall, dispatchMode: ToolDispatchMode) async -> SingleToolExecutionOutcome {
+        logger.info(
+            "Executing tool call",
+            metadata: metadataForToolCall(toolCall, provider: "orchestrator")
+        )
+        let callID = toolCall.id ?? "unknown"
+        publishToolLifecycle(toolCallID: callID, toolName: toolCall.name, state: .started, dispatchMode: dispatchMode)
+        var callResponses: [LLMResponse] = []
+        var abortedWithError: LLMResponse?
+
+        // Try MCP manager first
+        if let mcpManager = mcpManager, config.mcpEnabled {
+            do {
+                let mcpResponses = try await mcpManager.toolCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
+                if let mcpResponses {
+                    let responsesWithID = mcpResponses.map { response in
+                        LLMResponse(
+                            content: response.content,
+                            toolCalls: response.toolCalls,
+                            metadata: response.metadata,
+                            isComplete: response.isComplete,
+                            toolCallId: toolCall.id
+                        )
+                    }
+                    callResponses.append(contentsOf: responsesWithID)
+                }
+            } catch {
+                abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
+            }
+        }
+        if let err = abortedWithError {
+            publishToolLifecycle(toolCallID: callID, toolName: toolCall.name, state: .failed(err.content), dispatchMode: dispatchMode)
+            return SingleToolExecutionOutcome(responses: [err], pendingAccepted: false)
+        }
+
+        // Try A2A manager
+        if let a2aManager = a2aManager, config.a2aEnabled {
+            do {
+                let a2aResponses = try await a2aManager.agentCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
+                if let a2aResponses {
+                    let responsesWithID = a2aResponses.map { response in
+                        LLMResponse(
+                            content: response.content,
+                            toolCalls: response.toolCalls,
+                            metadata: response.metadata,
+                            isComplete: response.isComplete,
+                            toolCallId: toolCall.id
+                        )
+                    }
+                    callResponses.append(contentsOf: responsesWithID)
+                }
+            } catch {
+                abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
+            }
+        }
+        if let err = abortedWithError {
+            publishToolLifecycle(toolCallID: callID, toolName: toolCall.name, state: .failed(err.content), dispatchMode: dispatchMode)
+            return SingleToolExecutionOutcome(responses: [err], pendingAccepted: false)
+        }
+
+        // Try generic ToolManager if MCP and A2A didn't handle the tool
+        if callResponses.isEmpty, let toolManager = toolManager {
+            do {
+                let outcome = try await withToolCallTimeout(config.toolCallTimeout, toolName: toolCall.name) {
+                    try await toolManager.executeToolOutcome(toolCall)
+                }
+                switch outcome {
+                case .completed(let result):
+                    let response = llmResponseFromToolResult(result, toolCallId: toolCall.id)
+                    callResponses.append(response)
+                case .pending(let handle):
+                    registerPendingHandle(handle, toolName: toolCall.name, dispatchMode: dispatchMode)
+                    return SingleToolExecutionOutcome(responses: [], pendingAccepted: true)
+                }
+            } catch {
+                let response = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
+                publishToolLifecycle(toolCallID: callID, toolName: toolCall.name, state: .failed(response.content), dispatchMode: dispatchMode)
+                return SingleToolExecutionOutcome(responses: [response], pendingAccepted: false)
+            }
+        }
+
+        publishToolLifecycle(toolCallID: callID, toolName: toolCall.name, state: .completed, dispatchMode: dispatchMode)
+        return SingleToolExecutionOutcome(responses: callResponses, pendingAccepted: false)
+    }
+
+    private func decideDispatchPolicy(
+        for toolCalls: [ToolCall],
+        context: OrchestratorInvocationContext
+    ) async -> ToolDispatchPolicyDecision {
+        let metadata = await collectParallelSafetyMetadata(
+            for: toolCalls,
+            explicit: context.toolParallelSafetyMetadata
+        )
+        let evaluator = config.toolDispatchPolicyEvaluator ??
+            DefaultToolDispatchPolicyEvaluator(orchestratorParallelModeEnabled: context.parallelToolDispatchEnabled)
+        return evaluator.decide(toolCalls: toolCalls, metadata: metadata)
+    }
+
+    private func collectParallelSafetyMetadata(
+        for toolCalls: [ToolCall],
+        explicit: [ToolCallID: ToolParallelSafety]
+    ) async -> [ToolCallID: ToolParallelSafety] {
+        var metadata = explicit
+        guard let toolManager else { return metadata }
+        for toolCall in toolCalls {
+            guard let id = toolCall.id, metadata[id] == nil else { continue }
+            metadata[id] = await toolManager.parallelSafety(for: toolCall)
+        }
+        return metadata
     }
 
     /// Shuts down MCP local subprocesses and A2A boot processes. Call from normal app termination; it does not run when the process receives `SIGKILL`.
@@ -863,11 +950,96 @@ public actor SwiftAgentKitOrchestrator {
 private struct OrchestratorInvocationContext: Sendable {
     let mergedAdditionalParameters: JSON?
     let toolInvocationPolicy: ToolInvocationPolicy
+    let parallelToolDispatchEnabled: Bool
+    let toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]
     let maxAgenticStepsPerUpdate: Int?
     let rejectProseWithoutTools: Bool
     let maxCorrectionRetries: Int
     let correctionMessage: String
     let correctionRole: MessageRole
+}
+
+private struct ToolExecutionBatchResult: Sendable {
+    let responses: [LLMResponse]
+    let pendingCount: Int
+    var hasPending: Bool { pendingCount > 0 }
+}
+
+private struct SingleToolExecutionOutcome: Sendable {
+    let responses: [LLMResponse]
+    let pendingAccepted: Bool
+}
+
+extension SwiftAgentKitOrchestrator: PendingToolCompletionSink {
+    public func onPendingCompletion(_ completion: PendingToolCompletion) async {
+        if completedPendingHandleIDs.contains(completion.handleID) {
+            logger.debug(
+                "Ignoring duplicate pending completion",
+                metadata: SwiftAgentKitLogging.metadata(("handleID", .string(completion.handleID)))
+            )
+            return
+        }
+        completedPendingHandleIDs.insert(completion.handleID)
+        pendingHandlesByID.removeValue(forKey: completion.handleID)
+        pendingTimeoutTasks[completion.handleID]?.cancel()
+        pendingTimeoutTasks.removeValue(forKey: completion.handleID)
+        pendingCompletionStreamContinuation?.yield(completion)
+        publishToolLifecycle(
+            toolCallID: completion.toolCallID,
+            toolName: nil,
+            state: completion.result.success ? .completed : .failed(completion.result.error),
+            dispatchMode: nil
+        )
+    }
+}
+
+private extension SwiftAgentKitOrchestrator {
+    func publishToolLifecycle(
+        toolCallID: String,
+        toolName: String?,
+        state: ToolLifecycleState,
+        dispatchMode: ToolDispatchMode?
+    ) {
+        toolLifecycleEventHub.publish(
+            ToolLifecycleEvent(
+                toolCallID: toolCallID,
+                toolName: toolName,
+                state: state,
+                timestamp: Date(),
+                dispatchMode: dispatchMode
+            )
+        )
+    }
+
+    func registerPendingHandle(
+        _ handle: PendingToolHandle,
+        toolName: String,
+        dispatchMode: ToolDispatchMode
+    ) {
+        pendingHandlesByID[handle.handleID] = handle
+        pendingTimeoutTasks[handle.handleID]?.cancel()
+
+        if let timeout = config.pendingToolTimeout, timeout > 0 {
+            pendingTimeoutTasks[handle.handleID] = Task { [weak self] in
+                do {
+                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                } catch {
+                    return
+                }
+                await self?.cancelPendingTool(
+                    handleID: handle.handleID,
+                    reason: "Pending tool timed out after \(Int(timeout)) seconds"
+                )
+            }
+        }
+
+        publishToolLifecycle(
+            toolCallID: handle.toolCallID,
+            toolName: toolName,
+            state: .pending,
+            dispatchMode: dispatchMode
+        )
+    }
 }
 
 // MARK: - Logging helpers

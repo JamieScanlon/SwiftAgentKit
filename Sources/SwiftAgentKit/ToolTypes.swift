@@ -3,7 +3,7 @@ import EasyJSON
 import Logging
 
 /// Result of a tool execution
-public struct ToolResult: Sendable {
+public struct ToolResult: Sendable, Equatable, Codable {
     public let success: Bool
     public let content: String
     public let metadata: JSON
@@ -16,6 +16,14 @@ public struct ToolResult: Sendable {
         self.metadata = metadata
         self.toolCallId = toolCallId
         self.error = error
+    }
+
+    public static func == (lhs: ToolResult, rhs: ToolResult) -> Bool {
+        lhs.success == rhs.success
+            && lhs.content == rhs.content
+            && lhs.toolCallId == rhs.toolCallId
+            && lhs.error == rhs.error
+            && String(describing: lhs.metadata) == String(describing: rhs.metadata)
     }
 }
 
@@ -135,6 +143,22 @@ public struct ToolManager: Sendable {
     /// One matching provider: returns its result (including `success: false`) or rethrows. Several: tries in order until `success: true`;
     /// on repeated failure returns the **last** `ToolResult` with `success: false`. Throws from a candidate are skipped so the next provider may run.
     public func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        let outcome = try await executeToolOutcome(toolCall)
+        switch outcome {
+        case .completed(let result):
+            return result
+        case .pending(let handle):
+            return ToolResult(
+                success: true,
+                content: "Tool execution accepted and pending (handle: \(handle.handleID)).",
+                metadata: .object(["pendingHandleID": .string(handle.handleID), "status": .string("pending")]),
+                toolCallId: toolCall.id
+            )
+        }
+    }
+
+    /// Dispatches to providers and allows providers to return `.pending`.
+    public func executeToolOutcome(_ toolCall: ToolCall) async throws -> ToolExecutionOutcome {
         let prioritized = await prioritizedProviders(for: toolCall.name)
         var candidates: [ToolProvider] = []
         candidates.reserveCapacity(prioritized.count)
@@ -145,32 +169,48 @@ public struct ToolManager: Sendable {
         }
         
         if candidates.count == 1 {
-            return try await candidates[0].executeTool(toolCall)
+            return try await candidates[0].executeToolOutcome(toolCall)
         }
         
         var lastHandledFailure: ToolResult?
         for provider in candidates {
             do {
-                let result = try await provider.executeTool(toolCall)
-                if result.success {
-                    return result
+                let outcome = try await provider.executeToolOutcome(toolCall)
+                switch outcome {
+                case .pending:
+                    return outcome
+                case .completed(let result):
+                    if result.success {
+                        return outcome
+                    }
+                    lastHandledFailure = result
                 }
-                lastHandledFailure = result
             } catch {
                 continue
             }
         }
         
         if let lastHandledFailure {
-            return lastHandledFailure
+            return .completed(lastHandledFailure)
         }
         
-        return ToolResult(
+        return .completed(ToolResult(
             success: false,
             content: "",
             toolCallId: toolCall.id,
             error: "Tool '\(toolCall.name)' not found in any provider"
-        )
+        ))
+    }
+
+    /// Returns best-effort parallel safety metadata for a tool call.
+    public func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        let prioritized = await prioritizedProviders(for: toolCall.name)
+        for provider in prioritized {
+            let available = await provider.availableTools()
+            guard available.contains(where: { $0.name == toolCall.name }) else { continue }
+            return await provider.parallelSafety(for: toolCall)
+        }
+        return .unknown
     }
     
     public func addProvider(_ provider: ToolProvider) -> ToolManager {

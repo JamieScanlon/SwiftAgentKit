@@ -352,6 +352,70 @@ struct MockFunctionToolProvider: ToolProvider {
     }
 }
 
+actor ToolExecutionOrderRecorder {
+    private(set) var startedToolNames: [String] = []
+    func append(_ name: String) {
+        startedToolNames.append(name)
+    }
+}
+
+actor ToolLifecycleCollector {
+    private(set) var events: [ToolLifecycleEvent] = []
+    func append(_ event: ToolLifecycleEvent) {
+        events.append(event)
+    }
+    func snapshot() -> [ToolLifecycleEvent] { events }
+}
+
+struct RecordingPolicyToolProvider: ToolProvider {
+    let toolNames: [String]
+    let recorder: ToolExecutionOrderRecorder
+    let safety: ToolParallelSafety
+
+    var name: String { "RecordingPolicyToolProvider" }
+
+    func availableTools() async -> [ToolDefinition] {
+        toolNames.map {
+            ToolDefinition(
+                name: $0,
+                description: "test tool \($0)",
+                parameters: [],
+                type: .function
+            )
+        }
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        await recorder.append(toolCall.name)
+        return ToolResult(success: true, content: "ok-\(toolCall.name)", toolCallId: toolCall.id)
+    }
+
+    func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        safety
+    }
+}
+
+struct PendingMockToolProvider: ToolProvider {
+    var name: String { "PendingMockToolProvider" }
+    let toolName: String
+
+    func availableTools() async -> [ToolDefinition] {
+        [ToolDefinition(name: toolName, description: "pending tool", parameters: [], type: .function)]
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        ToolResult(success: true, content: "pending", toolCallId: toolCall.id)
+    }
+
+    func executeToolOutcome(_ toolCall: ToolCall) async throws -> ToolExecutionOutcome {
+        .pending(PendingToolHandle(
+            handleID: "handle-\(toolCall.id ?? UUID().uuidString)",
+            toolCallID: toolCall.id ?? "unknown",
+            provider: name
+        ))
+    }
+}
+
 
 @Suite struct SwiftAgentKitOrchestratorTests {
     
@@ -1718,6 +1782,321 @@ struct MockFunctionToolProvider: ToolProvider {
             )
         }
         #expect(correctionMock.sendInvocationCount >= 2)
+    }
+
+    @Test("Tool dispatch policy defaults to serial when metadata missing")
+    func testToolDispatchPolicyDefaultsToSerialWhenMetadataMissing() async throws {
+        let call1 = ToolCall(name: "t1", arguments: .object([:]), id: "c1")
+        let call2 = ToolCall(name: "t2", arguments: .object([:]), id: "c2")
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "policy-serial"),
+            toolCallsToReturn: [call1, call2]
+        )
+        let recorder = ToolExecutionOrderRecorder()
+        let provider = RecordingPolicyToolProvider(toolNames: ["t1", "t2"], recorder: recorder, safety: .unknown)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false, parallelToolDispatchEnabled: true),
+            toolManager: ToolManager(providers: [provider])
+        )
+
+        let lifecycleStream = await orchestrator.toolLifecycleEvents
+        actor LifecycleCollector {
+            var events: [ToolLifecycleEvent] = []
+            func append(_ event: ToolLifecycleEvent) { events.append(event) }
+            func snapshot() -> [ToolLifecycleEvent] { events }
+        }
+        let collector = LifecycleCollector()
+        let collectTask = Task {
+            for await event in lifecycleStream {
+                await collector.append(event)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "run tools")],
+                availableTools: []
+            )
+        }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        let started = await collector.snapshot().filter { $0.state == .started }
+        #expect(started.count == 2)
+        #expect(started.allSatisfy { $0.dispatchMode == .serial })
+        let order = await recorder.startedToolNames
+        #expect(order == ["t1", "t2"])
+    }
+
+    @Test("Tool dispatch policy runs parallel when all calls are parallel-safe")
+    func testToolDispatchPolicyParallelWhenAllSafe() async throws {
+        let call1 = ToolCall(name: "p1", arguments: .object([:]), id: "pc1")
+        let call2 = ToolCall(name: "p2", arguments: .object([:]), id: "pc2")
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "policy-parallel"),
+            toolCallsToReturn: [call1, call2]
+        )
+        let provider = RecordingPolicyToolProvider(toolNames: ["p1", "p2"], recorder: ToolExecutionOrderRecorder(), safety: .parallelSafe)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false, parallelToolDispatchEnabled: true),
+            toolManager: ToolManager(providers: [provider])
+        )
+
+        let lifecycleStream = await orchestrator.toolLifecycleEvents
+        actor LifecycleCollector {
+            var events: [ToolLifecycleEvent] = []
+            func append(_ event: ToolLifecycleEvent) { events.append(event) }
+            func snapshot() -> [ToolLifecycleEvent] { events }
+        }
+        let collector = LifecycleCollector()
+        let collectTask = Task {
+            for await event in lifecycleStream {
+                await collector.append(event)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "run parallel tools")],
+                availableTools: [],
+                options: OrchestratorInvocationOptions(
+                    toolParallelSafetyMetadata: [
+                        "pc1": .parallelSafe,
+                        "pc2": .parallelSafe
+                    ]
+                )
+            )
+        }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        let started = await collector.snapshot().filter { $0.state == .started }
+        #expect(started.count == 2)
+        #expect(started.allSatisfy { $0.dispatchMode == .parallel })
+    }
+
+    @Test("Pending completion stream is idempotent for duplicate submissions")
+    func testPendingCompletionIdempotent() async throws {
+        let toolCall = ToolCall(name: "pending_tool", arguments: .object([:]), id: "pending_call_1")
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "pending-llm"),
+            toolCallsToReturn: [toolCall]
+        )
+        let provider = PendingMockToolProvider(toolName: "pending_tool")
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false),
+            toolManager: ToolManager(providers: [provider])
+        )
+
+        let pendingStream = await orchestrator.pendingToolCompletions
+        actor PendingCollector {
+            var completions: [PendingToolCompletion] = []
+            func append(_ completion: PendingToolCompletion) { completions.append(completion) }
+            func snapshot() -> [PendingToolCompletion] { completions }
+        }
+        let collector = PendingCollector()
+        let collectTask = Task {
+            for await completion in pendingStream {
+                await collector.append(completion)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "start pending tool")],
+                availableTools: []
+            )
+        }
+
+        let completion = PendingToolCompletion(
+            handleID: "handle-pending_call_1",
+            toolCallID: "pending_call_1",
+            result: ToolResult(success: true, content: "done", toolCallId: "pending_call_1")
+        )
+        await orchestrator.submitPendingCompletion(completion)
+        await orchestrator.submitPendingCompletion(completion)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        let completions = await collector.snapshot()
+        #expect(completions.count == 1)
+        #expect(completions[0].toolCallID == "pending_call_1")
+    }
+
+    @Test("Tool dispatch policy uses serial when any call is mutating")
+    func testToolDispatchPolicyMutatingForcesSerial() async throws {
+        let call1 = ToolCall(name: "m1", arguments: .object([:]), id: "mc1")
+        let call2 = ToolCall(name: "m2", arguments: .object([:]), id: "mc2")
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "policy-mutating"),
+            toolCallsToReturn: [call1, call2]
+        )
+        let provider = RecordingPolicyToolProvider(toolNames: ["m1", "m2"], recorder: ToolExecutionOrderRecorder(), safety: .parallelSafe)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false, parallelToolDispatchEnabled: true),
+            toolManager: ToolManager(providers: [provider])
+        )
+
+        let lifecycleStream = await orchestrator.toolLifecycleEvents
+        let collector = ToolLifecycleCollector()
+        let collectTask = Task {
+            for await event in lifecycleStream {
+                await collector.append(event)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "run mutating tools")],
+                availableTools: [],
+                options: OrchestratorInvocationOptions(
+                    toolParallelSafetyMetadata: [
+                        "mc1": .parallelSafe,
+                        "mc2": .mutating
+                    ]
+                )
+            )
+        }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        let started = await collector.snapshot().filter { $0.state == .started }
+        #expect(started.count == 2)
+        #expect(started.allSatisfy { $0.dispatchMode == .serial })
+    }
+
+    @Test("Tool dispatch policy remains serial when parallel mode disabled")
+    func testToolDispatchPolicyParallelSafeButParallelDisabled() async throws {
+        let call1 = ToolCall(name: "d1", arguments: .object([:]), id: "dc1")
+        let call2 = ToolCall(name: "d2", arguments: .object([:]), id: "dc2")
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "policy-disabled"),
+            toolCallsToReturn: [call1, call2]
+        )
+        let provider = RecordingPolicyToolProvider(toolNames: ["d1", "d2"], recorder: ToolExecutionOrderRecorder(), safety: .parallelSafe)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false, parallelToolDispatchEnabled: false),
+            toolManager: ToolManager(providers: [provider])
+        )
+
+        let lifecycleStream = await orchestrator.toolLifecycleEvents
+        let collector = ToolLifecycleCollector()
+        let collectTask = Task {
+            for await event in lifecycleStream {
+                await collector.append(event)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "run tools with parallel disabled")],
+                availableTools: [],
+                options: OrchestratorInvocationOptions(
+                    toolParallelSafetyMetadata: [
+                        "dc1": .parallelSafe,
+                        "dc2": .parallelSafe
+                    ]
+                )
+            )
+        }
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        let started = await collector.snapshot().filter { $0.state == .started }
+        #expect(started.count == 2)
+        #expect(started.allSatisfy { $0.dispatchMode == .serial })
+    }
+
+    @Test("Pending completion publishes lifecycle completion for same toolCallID")
+    func testPendingCompletionPublishesLifecycleCompletion() async throws {
+        let toolCall = ToolCall(name: "pending_lifecycle_tool", arguments: .object([:]), id: "pending_lifecycle_call")
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "pending-lifecycle"),
+            toolCallsToReturn: [toolCall]
+        )
+        let provider = PendingMockToolProvider(toolName: "pending_lifecycle_tool")
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false),
+            toolManager: ToolManager(providers: [provider])
+        )
+
+        let lifecycleStream = await orchestrator.toolLifecycleEvents
+        let collector = ToolLifecycleCollector()
+        let collectTask = Task {
+            for await event in lifecycleStream {
+                await collector.append(event)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "start pending lifecycle tool")],
+                availableTools: []
+            )
+        }
+
+        let completion = PendingToolCompletion(
+            handleID: "handle-pending_lifecycle_call",
+            toolCallID: "pending_lifecycle_call",
+            result: ToolResult(success: true, content: "done", toolCallId: "pending_lifecycle_call")
+        )
+        await orchestrator.submitPendingCompletion(completion)
+        try? await Task.sleep(nanoseconds: 30_000_000)
+
+        let events = await collector.snapshot().filter { $0.toolCallID == "pending_lifecycle_call" }
+        #expect(events.contains(where: { $0.state == .started }))
+        #expect(events.contains(where: { $0.state == .pending }))
+        #expect(events.contains(where: { $0.state == .completed }))
+    }
+
+    @Test("Pending handle timeout cancels and emits terminal cancelled lifecycle state")
+    func testPendingHandleTimeoutCancelsAndPublishesCancelled() async throws {
+        let toolCall = ToolCall(name: "pending_timeout_tool", arguments: .object([:]), id: "pending_timeout_call")
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "pending-timeout"),
+            toolCallsToReturn: [toolCall]
+        )
+        let provider = PendingMockToolProvider(toolName: "pending_timeout_tool")
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false, pendingToolTimeout: 0.02),
+            toolManager: ToolManager(providers: [provider])
+        )
+
+        let lifecycleStream = await orchestrator.toolLifecycleEvents
+        let collector = ToolLifecycleCollector()
+        let collectTask = Task {
+            for await event in lifecycleStream {
+                await collector.append(event)
+            }
+        }
+        defer { collectTask.cancel() }
+
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "start pending timeout tool")],
+                availableTools: []
+            )
+        }
+        try? await Task.sleep(nanoseconds: 80_000_000)
+
+        let events = await collector.snapshot().filter { $0.toolCallID == "pending_timeout_call" }
+        #expect(events.contains(where: { $0.state == .pending }))
+        #expect(events.contains(where: { $0.state == .cancelled }))
     }
 }
 

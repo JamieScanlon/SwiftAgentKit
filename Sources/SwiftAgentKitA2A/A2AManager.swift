@@ -348,6 +348,16 @@ public actor A2AManager {
         }
         return allTools
     }
+
+    /// Placeholder cancellation seam for pending handle integration.
+    /// Current streaming implementation does not retain resumable handle tasks internally.
+    public func cancelPendingHandle(_ handleID: String) async -> Bool {
+        logger.debug(
+            "Pending handle cancellation requested",
+            metadata: SwiftAgentKitLogging.metadata(("handleID", .string(handleID)))
+        )
+        return false
+    }
     
     // MARK: - Private
     
