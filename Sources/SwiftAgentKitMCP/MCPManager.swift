@@ -126,7 +126,7 @@ public actor MCPManager {
                 var returnResponses: [LLMResponse] = []
                 for content in contents {
                     switch content {
-                    case .text(let text):
+                    case .text(let text, _, _):
                         returnResponses.append(LLMResponse.complete(content: text))
                     default:
                         continue

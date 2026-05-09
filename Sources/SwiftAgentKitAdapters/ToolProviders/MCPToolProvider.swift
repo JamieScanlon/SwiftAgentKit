@@ -52,7 +52,7 @@ public struct MCPToolProvider: ToolProvider {
                 if let contents = try await client.callTool(toolCall.name, arguments: arguments) {
                     // Extract text content
                     let textContent = contents.compactMap { content in
-                        if case .text(let text) = content { return text } else { return nil }
+                        if case .text(let text, _, _) = content { return text } else { return nil }
                     }.joined(separator: "\n")
                     
                     // Extract resource content (file:// URIs)

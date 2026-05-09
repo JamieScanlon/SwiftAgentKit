@@ -264,7 +264,7 @@ public actor MCPServer {
                         switch type {
                         case "text":
                             if let text = part["text"] as? String {
-                                contentParts.append(.text(text))
+                                contentParts.append(.text(text: text, annotations: nil, _meta: nil))
                             }
                         case "resource":
                             if let resource = part["resource"] as? [String: Any],
@@ -280,7 +280,7 @@ public actor MCPServer {
                                 let metadata: MCP.Metadata? = (part["metadata"] as? [String: String]).map { dict in
                                     MCP.Metadata(additionalFields: dict.mapValues { MCP.Value.string($0) })
                                 }
-                                contentParts.append(.image(data: data, mimeType: mimeType, metadata: metadata))
+                                contentParts.append(.image(data: data, mimeType: mimeType, annotations: nil, _meta: metadata))
                             }
                         default:
                             break
@@ -292,9 +292,9 @@ public actor MCPServer {
                 }
             }
             // Fallback to plain text if not valid JSON or parsing fails
-            return [.text(message)]
+            return [.text(text: message, annotations: nil, _meta: nil)]
         case .error(let code, let message):
-            return [.text("Error [\(code)]: \(message)")]
+            return [.text(text: "Error [\(code)]: \(message)", annotations: nil, _meta: nil)]
         }
     }
     

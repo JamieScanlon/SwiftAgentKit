@@ -69,7 +69,7 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == "Simple text message")
         } else {
             Issue.record("Expected text content, got \(content[0])")
@@ -84,7 +84,7 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == "Error [INTERNAL_ERROR]: Something went wrong")
         } else {
             Issue.record("Expected text content, got \(content[0])")
@@ -107,7 +107,7 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == "Generated 1 image(s)")
         } else {
             Issue.record("Expected text content, got \(content[0])")
@@ -194,11 +194,11 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .image(let data, let mimeType, let metadata) = content[0] {
+        if case .image(let data, let mimeType, _, let _meta) = content[0] {
             #expect(data == base64Data)
             #expect(mimeType == "image/png")
-            #expect(metadata?["width"]?.stringValue == "512")
-            #expect(metadata?["height"]?.stringValue == "512")
+            #expect(_meta?["width"]?.stringValue == "512")
+            #expect(_meta?["height"]?.stringValue == "512")
         } else {
             Issue.record("Expected image content, got \(content[0])")
         }
@@ -222,10 +222,10 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .image(let data, let mimeType, let metadata) = content[0] {
+        if case .image(let data, let mimeType, _, let _meta) = content[0] {
             #expect(data == base64Data)
             #expect(mimeType == "image/jpeg")
-            #expect(metadata == nil)
+            #expect(_meta == nil)
         } else {
             Issue.record("Expected image content, got \(content[0])")
         }
@@ -257,7 +257,7 @@ import MCP
         #expect(content.count == 2)
         
         // First content should be text
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == "Generated 1 image(s)")
         } else {
             Issue.record("Expected text content at index 0, got \(content[0])")
@@ -309,7 +309,7 @@ import MCP
         #expect(content.count == 3)
         
         // Verify text
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == "Processing complete")
         } else {
             Issue.record("Expected text content at index 0")
@@ -325,10 +325,10 @@ import MCP
         }
         
         // Verify image
-        if case .image(let data, let mimeType, let metadata) = content[2] {
+        if case .image(let data, let mimeType, _, let _meta) = content[2] {
             #expect(data == base64Data)
             #expect(mimeType == "image/png")
-            #expect(metadata?["width"]?.stringValue == "256")
+            #expect(_meta?["width"]?.stringValue == "256")
         } else {
             Issue.record("Expected image content at index 2")
         }
@@ -343,7 +343,7 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == invalidJSON)
         } else {
             Issue.record("Expected text content fallback, got \(content[0])")
@@ -360,7 +360,7 @@ import MCP
         
         // Empty array should fallback to plain text
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == emptyArray)
         } else {
             Issue.record("Expected text content fallback, got \(content[0])")
@@ -383,7 +383,7 @@ import MCP
         
         // Should fallback to plain text since no valid content parts were parsed
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == jsonString)
         } else {
             Issue.record("Expected text content fallback, got \(content[0])")
@@ -407,7 +407,7 @@ import MCP
         
         // Should fallback to plain text since unknown type is ignored
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == jsonString)
         } else {
             Issue.record("Expected text content fallback, got \(content[0])")
@@ -433,7 +433,7 @@ import MCP
         
         // Should fallback to plain text since resource is missing required fields
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == jsonString)
         } else {
             Issue.record("Expected text content fallback, got \(content[0])")
@@ -457,7 +457,7 @@ import MCP
         
         // Should fallback to plain text since image is missing required mimeType
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == jsonString)
         } else {
             Issue.record("Expected text content fallback, got \(content[0])")
@@ -480,7 +480,7 @@ import MCP
         
         // Should fallback to plain text since text field is missing
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == jsonString)
         } else {
             Issue.record("Expected text content fallback, got \(content[0])")
@@ -514,14 +514,14 @@ import MCP
         #expect(content.count == 2)
         
         // First should be text
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == "Valid text")
         } else {
             Issue.record("Expected text content at index 0")
         }
         
         // Second should be image (resource was invalid and skipped)
-        if case .image(let data, let mimeType, _) = content[1] {
+        if case .image(let data, let mimeType, _, _) = content[1] {
             #expect(data == "base64data")
             #expect(mimeType == "image/png")
         } else {
@@ -544,7 +544,7 @@ import MCP
         
         // Should fallback to plain text since it's not an array
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == jsonString)
         } else {
             Issue.record("Expected text content fallback, got \(content[0])")
@@ -559,7 +559,7 @@ import MCP
         let content = await server.convertToMCPContent(result)
         
         #expect(content.count == 1)
-        if case .text(let text) = content[0] {
+        if case .text(let text, _, _) = content[0] {
             #expect(text == "")
         } else {
             Issue.record("Expected text content, got \(content[0])")

@@ -462,7 +462,7 @@ public actor MCPClient {
         // Handle tool content
         for item in content {
             switch item {
-            case .text(let text):
+            case .text(let text, _, _):
                 logger.info(
                     "Generated text content",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -470,9 +470,9 @@ public actor MCPClient {
                         ("characters", .stringConvertible(text.count))
                     )
                 )
-            case .image(_, let mimeType, let metadata):
-                if let width = metadata?["width"]?.intValue ?? metadata?["width"]?.stringValue.flatMap(Int.init),
-                   let height = metadata?["height"]?.intValue ?? metadata?["height"]?.stringValue.flatMap(Int.init) {
+            case .image(_, let mimeType, _, let _meta):
+                if let width = _meta?["width"]?.intValue ?? _meta?["width"]?.stringValue.flatMap(Int.init),
+                   let height = _meta?["height"]?.intValue ?? _meta?["height"]?.stringValue.flatMap(Int.init) {
                     logger.info(
                         "Generated image content",
                         metadata: SwiftAgentKitLogging.metadata(
@@ -484,7 +484,7 @@ public actor MCPClient {
                     )
                     // Save or display the image data
                 }
-            case .audio(_, let mimeType):
+            case .audio(_, let mimeType, _, _):
                 logger.info(
                     "Received audio content",
                     metadata: SwiftAgentKitLogging.metadata(
@@ -583,8 +583,40 @@ public actor MCPClient {
         guard let client = client else {
             throw MCPClientError.notConnected
         }
-        let (_, messages) = try await client.getPrompt(name: name, arguments: arguments)
+        let stringArguments = try Self.promptArgumentsAsStrings(arguments)
+        let (_, messages) = try await client.getPrompt(name: name, arguments: stringArguments)
         return messages
+    }
+
+    /// Converts MCP ``Value`` arguments to strings for ``Client/getPrompt``, which expects `[String: String]`.
+    private nonisolated static func promptArgumentsAsStrings(_ arguments: [String: Value]?) throws -> [String: String]? {
+        guard let arguments else { return nil }
+        var result: [String: String] = [:]
+        result.reserveCapacity(arguments.count)
+        for (key, value) in arguments {
+            result[key] = try promptArgumentString(value)
+        }
+        return result
+    }
+
+    private nonisolated static func promptArgumentString(_ value: Value) throws -> String {
+        switch value {
+        case .string(let s):
+            return s
+        case .bool(let b):
+            return b ? "true" : "false"
+        case .int(let i):
+            return String(i)
+        case .double(let d):
+            return String(d)
+        case .null:
+            return ""
+        case .data:
+            return value.description
+        case .array, .object:
+            let encoded = try JSONEncoder().encode(value)
+            return String(decoding: encoded, as: UTF8.self)
+        }
     }
 
     /// Releases the MCP session and clears cached tools. Local stdio servers are torn down by ``MCPManager/shutdown()`` via subprocess termination.
