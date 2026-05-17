@@ -25,11 +25,6 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - Text-based tool calls")
     func testProcessResponseForToolCallsTextBased() async throws {
-        // Create a mock adapter that implements ToolAwareAdapter
-        let mockAdapter = MockToolAwareAdapter()
-        let toolManager = ToolManager()
-        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
-        
         // Process the response
         let (processedParts, toolCalls) = await ToolCall.processResponseForToolCalls([.text(text: "Here is the answer: search_tool(query=\"test\")")], availableTools: ["search_tool"])
         
@@ -49,11 +44,6 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - Data-based tool calls")
     func testProcessResponseForToolCallsDataBased() async throws {
-        // Create a mock adapter that implements ToolAwareAdapter
-        let mockAdapter = MockToolAwareAdapter()
-        let toolManager = ToolManager()
-        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
-        
         // Create tool call data in the format used by OpenAI adapter
         let toolCallDict: [String: Any] = [
             "id": "call_123",
@@ -90,11 +80,6 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - Mixed content types")
     func testProcessResponseForToolCallsMixedContent() async throws {
-        // Create a mock adapter that implements ToolAwareAdapter
-        let mockAdapter = MockToolAwareAdapter()
-        let toolManager = ToolManager()
-        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
-        
         // Create tool call data
         let toolCallDict: [String: Any] = [
             "id": "call_456",
@@ -138,18 +123,6 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - No tool calls")
     func testProcessResponseForToolCallsNoToolCalls() async throws {
-        // Create a mock adapter that implements ToolAwareAdapter
-        let mockAdapter = MockToolAwareAdapter()
-        let toolManager = ToolManager()
-        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
-        
-        // Create a message with no tool calls
-        let message = A2AMessage(
-            role: "assistant",
-            parts: [.text(text: "This is a regular response without any tool calls.")],
-            messageId: "test-message"
-        )
-        
         // Process the response
         let (processedParts, toolCalls) = await ToolCall.processResponseForToolCalls([.text(text: "This is a regular response without any tool calls.")], availableTools: [])
         
@@ -167,11 +140,6 @@ struct ToolAwareAdapterTests {
     
     @Test("processResponseForToolCalls - Invalid data")
     func testProcessResponseForToolCallsInvalidData() async throws {
-        // Create a mock adapter that implements ToolAwareAdapter
-        let mockAdapter = MockToolAwareAdapter()
-        let toolManager = ToolManager()
-        let _ = ToolProxyAdapter(baseAdapter: mockAdapter, toolManager: toolManager)
-        
         // Create invalid data
         let invalidData = "This is not JSON".data(using: .utf8)!
         
