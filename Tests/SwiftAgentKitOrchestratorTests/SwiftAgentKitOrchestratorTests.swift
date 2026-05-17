@@ -447,6 +447,34 @@ struct PendingMockToolProvider: ToolProvider {
     }
 }
 
+struct RoutingSafetyToolProvider: ToolProvider {
+    var name: String { "RoutingSafetyToolProvider" }
+    let safetiesByToolName: [String: ToolParallelSafety]
+
+    func availableTools() async -> [ToolDefinition] {
+        safetiesByToolName.keys.sorted().map {
+            ToolDefinition(name: $0, description: "tool \($0)", parameters: [], type: .function)
+        }
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        ToolResult(success: true, content: "ok-\(toolCall.name)", toolCallId: toolCall.id)
+    }
+
+    func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        safetiesByToolName[toolCall.name] ?? .unknown
+    }
+}
+
+struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
+    let decisionByToolName: [String: ToolPreDispatchPolicyDecision]
+
+    func decide(_ context: ToolPreDispatchPolicyContext) async -> ToolPreDispatchPolicyDecision {
+        decisionByToolName[context.request.toolName]
+            ?? ToolPreDispatchPolicyDecision(decision: .allow)
+    }
+}
+
 
 @Suite struct SwiftAgentKitOrchestratorTests {
     
@@ -2284,6 +2312,112 @@ struct PendingMockToolProvider: ToolProvider {
         try? await Task.sleep(nanoseconds: 20_000_000)
         let completions = await pendingCollector.snapshot()
         #expect(completions.isEmpty)
+    }
+
+    @Test("invokeTool executes tool directly and returns completed outcome")
+    func testInvokeToolDirectCompletedOutcome() async throws {
+        let llm = MockLLM(model: "direct", logger: Logger(label: "direct"))
+        let provider = MockFunctionToolProvider(toolName: "get_now", resultContent: "2026-05-16T00:00:00Z")
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false, mcpEnabled: false, a2aEnabled: false),
+            toolManager: ToolManager(providers: [provider])
+        )
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: "get_now",
+                argumentsPayload: .object([:]),
+                source: .command,
+                callerProvenance: "unit-test"
+            )
+        )
+        switch outcome {
+        case .completed(let result, let metadata):
+            #expect(result.success == true)
+            #expect(result.content == "2026-05-16T00:00:00Z")
+            #expect(metadata.source == .command)
+            #expect(metadata.callerProvenance == "unit-test")
+        default:
+            Issue.record("Expected completed outcome")
+        }
+    }
+
+    @Test("invokeTool returns denied outcome when pre-dispatch policy denies")
+    func testInvokeToolPolicyDeny() async throws {
+        let llm = MockLLM(model: "deny", logger: Logger(label: "deny"))
+        let provider = MockFunctionToolProvider(toolName: "dangerous_tool", resultContent: "should-not-run")
+        let policy = StaticPreDispatchPolicyEvaluator(
+            decisionByToolName: [
+                "dangerous_tool": ToolPreDispatchPolicyDecision(
+                    decision: .deny,
+                    reasonCode: "POLICY_DENY",
+                    reasonText: "blocked by policy"
+                )
+            ]
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                mcpEnabled: false,
+                a2aEnabled: false,
+                preDispatchPolicyEvaluator: policy
+            ),
+            toolManager: ToolManager(providers: [provider])
+        )
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: "dangerous_tool",
+                source: .direct,
+                callerProvenance: "policy-test"
+            )
+        )
+        switch outcome {
+        case .denied(let metadata):
+            #expect(metadata.policyDecision?.decision == .deny)
+            #expect(metadata.policyDecision?.reasonCode == "POLICY_DENY")
+        default:
+            Issue.record("Expected denied outcome")
+        }
+    }
+
+    @Test("invokeTools mixedDeterministic planner returns staged diagnostics")
+    func testInvokeToolsMixedDeterministicPlannerDiagnostics() async throws {
+        let llm = MockLLM(model: "planner", logger: Logger(label: "planner"))
+        let provider = RoutingSafetyToolProvider(
+            safetiesByToolName: [
+                "read_a": .parallelSafe,
+                "mutate_b": .mutating,
+                "read_c": .parallelSafe
+            ]
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                mcpEnabled: false,
+                a2aEnabled: false,
+                parallelToolDispatchEnabled: true,
+                dispatchPlannerMode: .mixedDeterministic
+            ),
+            toolManager: ToolManager(providers: [provider])
+        )
+        let outcome = await orchestrator.invokeTools(
+            ToolBatchInvocationRequest(
+                requests: [
+                    ToolInvocationRequest(toolName: "read_a"),
+                    ToolInvocationRequest(toolName: "mutate_b"),
+                    ToolInvocationRequest(toolName: "read_c")
+                ],
+                plannerMode: .mixedDeterministic
+            )
+        )
+        #expect(outcome.outcomes.count == 3)
+        #expect(outcome.diagnostics.plannerMode == ToolDispatchPlannerMode.mixedDeterministic)
+        #expect(outcome.diagnostics.stages.count == 3)
+        #expect(outcome.diagnostics.stages[0].mode == ToolDispatchMode.parallel)
+        #expect(outcome.diagnostics.stages[1].mode == ToolDispatchMode.serial)
+        #expect(outcome.diagnostics.stages[2].mode == ToolDispatchMode.parallel)
     }
 }
 

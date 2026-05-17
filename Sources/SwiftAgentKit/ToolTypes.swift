@@ -2,6 +2,11 @@ import Foundation
 import EasyJSON
 import Logging
 
+public enum ToolDescriptorValidationMode: String, Sendable, Codable, Equatable {
+    case warning
+    case strict
+}
+
 /// Result of a tool execution
 public struct ToolResult: Sendable, Equatable, Codable {
     public let success: Bool
@@ -95,17 +100,20 @@ public struct ToolDefinition: Sendable, Codable {
 public struct ToolManager: Sendable {
     public let providers: [ToolProvider]
     public let registeredTools: [RegisteredToolDescriptor]
+    public let descriptorValidationMode: ToolDescriptorValidationMode
     private let logger: Logger
     private let schemaNormalizer: ToolSchemaNormalizer
     
     public init(
         providers: [ToolProvider] = [],
         registeredTools: [RegisteredToolDescriptor] = [],
+        descriptorValidationMode: ToolDescriptorValidationMode = .warning,
         logger: Logger? = nil,
         schemaNormalizer: ToolSchemaNormalizer = ToolSchemaNormalizer()
     ) {
         self.providers = providers
         self.registeredTools = registeredTools
+        self.descriptorValidationMode = descriptorValidationMode
         self.schemaNormalizer = schemaNormalizer
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .core("ToolManager"),
@@ -115,9 +123,24 @@ public struct ToolManager: Sendable {
             )
         )
     }
+
+    public init(
+        providers: [ToolProvider],
+        registeredTools: [RegisteredToolDescriptor],
+        logger: Logger?,
+        schemaNormalizer: ToolSchemaNormalizer
+    ) {
+        self.init(
+            providers: providers,
+            registeredTools: registeredTools,
+            descriptorValidationMode: .warning,
+            logger: logger,
+            schemaNormalizer: schemaNormalizer
+        )
+    }
     
     public init(providers: [ToolProvider]) {
-        self.init(providers: providers, registeredTools: [], logger: nil)
+        self.init(providers: providers, registeredTools: [], descriptorValidationMode: .warning, logger: nil)
     }
     
     public func allToolsAsync() async -> [ToolDefinition] {
@@ -181,13 +204,18 @@ public struct ToolManager: Sendable {
                 )
             }
         }
-        return resolveDescriptorCollisions(collected)
+        return resolveDescriptorCollisions(validateDescriptors(collected))
     }
 
     public func register(_ descriptor: RegisteredToolDescriptor) -> ToolManager {
-        ToolManager(
+        let validated = validateDescriptors([descriptor])
+        guard !validated.isEmpty else {
+            return self
+        }
+        return ToolManager(
             providers: providers,
-            registeredTools: registeredTools + [descriptor],
+            registeredTools: registeredTools + validated,
+            descriptorValidationMode: descriptorValidationMode,
             logger: logger,
             schemaNormalizer: schemaNormalizer
         )
@@ -196,8 +224,8 @@ public struct ToolManager: Sendable {
     public func registerTool(
         definition: ToolDefinition,
         source: ToolRegistrationSource,
-        effectClass: ToolEffectClass = .unknown,
-        parallelHint: ToolExecutionParallelHint = .unknown,
+        effectClass: ToolEffectClass,
+        parallelHint: ToolExecutionParallelHint,
         policyTags: [ToolPolicyTag] = [],
         rawSchema: JSON? = nil,
         targetProviderCapabilities: ToolSchemaTargetProviderCapabilities = .providerSafe
@@ -220,8 +248,8 @@ public struct ToolManager: Sendable {
 
     public func registerLocalTool(
         definition: ToolDefinition,
-        effectClass: ToolEffectClass = .unknown,
-        parallelHint: ToolExecutionParallelHint = .unknown,
+        effectClass: ToolEffectClass = .readOnly,
+        parallelHint: ToolExecutionParallelHint = .parallelizable,
         policyTags: [ToolPolicyTag] = [],
         rawSchema: JSON? = nil
     ) -> ToolManager {
@@ -237,8 +265,8 @@ public struct ToolManager: Sendable {
 
     public func registerMCPTool(
         definition: ToolDefinition,
-        effectClass: ToolEffectClass = .unknown,
-        parallelHint: ToolExecutionParallelHint = .unknown,
+        effectClass: ToolEffectClass = .readOnly,
+        parallelHint: ToolExecutionParallelHint = .parallelizable,
         policyTags: [ToolPolicyTag] = [],
         rawSchema: JSON? = nil
     ) -> ToolManager {
@@ -254,7 +282,7 @@ public struct ToolManager: Sendable {
 
     public func registerA2ATool(
         definition: ToolDefinition,
-        effectClass: ToolEffectClass = .unknown,
+        effectClass: ToolEffectClass = .readOnly,
         parallelHint: ToolExecutionParallelHint = .serialOnly,
         policyTags: [ToolPolicyTag] = [],
         rawSchema: JSON? = nil
@@ -305,7 +333,7 @@ public struct ToolManager: Sendable {
     public func registerDelegatedTool(
         definition: ToolDefinition,
         source: ToolRegistrationSource = .a2a,
-        effectClass: ToolEffectClass = .unknown,
+        effectClass: ToolEffectClass = .mutating,
         policyTags: [ToolPolicyTag] = [],
         rawSchema: JSON? = nil
     ) -> ToolManager {
@@ -424,6 +452,7 @@ public struct ToolManager: Sendable {
         ToolManager(
             providers: providers + [provider],
             registeredTools: registeredTools,
+            descriptorValidationMode: descriptorValidationMode,
             logger: logger,
             schemaNormalizer: schemaNormalizer
         )
@@ -473,6 +502,41 @@ public struct ToolManager: Sendable {
                 ("overshadowedProvider", .string(overshadowedProvider))
             )
         )
+    }
+
+    private func validateDescriptors(_ descriptors: [RegisteredToolDescriptor]) -> [RegisteredToolDescriptor] {
+        var accepted: [RegisteredToolDescriptor] = []
+        accepted.reserveCapacity(descriptors.count)
+        for descriptor in descriptors {
+            let validation = descriptor.validateCompleteness()
+            if validation.isValid {
+                accepted.append(descriptor)
+                continue
+            }
+            let issueText = validation.issues.map { "\($0.field): \($0.message)" }.joined(separator: "; ")
+            switch descriptorValidationMode {
+            case .warning:
+                logger.warning(
+                    "Descriptor validation warning",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("toolName", .string(descriptor.definition.name)),
+                        ("source", .string(descriptor.source.rawValue)),
+                        ("issues", .string(issueText))
+                    )
+                )
+                accepted.append(descriptor)
+            case .strict:
+                logger.error(
+                    "Descriptor validation error; tool descriptor rejected",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("toolName", .string(descriptor.definition.name)),
+                        ("source", .string(descriptor.source.rawValue)),
+                        ("issues", .string(issueText))
+                    )
+                )
+            }
+        }
+        return accepted
     }
 } 
 

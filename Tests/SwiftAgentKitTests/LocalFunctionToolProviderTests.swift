@@ -330,4 +330,43 @@ import EasyJSON
         let tools = await manager.allToolsAsync()
         #expect(tools.contains(where: { $0.name == "registered_tool" }))
     }
+
+    @Test("strict descriptor validation rejects incomplete descriptor metadata")
+    func testStrictDescriptorValidationRejectsIncompleteDescriptor() async throws {
+        let def = ToolDefinition(
+            name: "incomplete_descriptor_tool",
+            description: "Incomplete metadata tool",
+            parameters: [],
+            type: .function
+        )
+        let manager = ToolManager(descriptorValidationMode: .strict).registerTool(
+            definition: def,
+            source: .local,
+            effectClass: .unknown,
+            parallelHint: .unknown,
+            policyTags: []
+        )
+        let descriptors = await manager.allRegisteredToolsAsync()
+        #expect(descriptors.isEmpty)
+    }
+
+    @Test("warning descriptor validation allows incomplete descriptor metadata")
+    func testWarningDescriptorValidationAllowsIncompleteDescriptor() async throws {
+        let def = ToolDefinition(
+            name: "warning_descriptor_tool",
+            description: "Warning metadata tool",
+            parameters: [],
+            type: .function
+        )
+        let manager = ToolManager(descriptorValidationMode: .warning).registerTool(
+            definition: def,
+            source: .local,
+            effectClass: .unknown,
+            parallelHint: .unknown,
+            policyTags: []
+        )
+        let descriptors = await manager.allRegisteredToolsAsync()
+        #expect(descriptors.count == 1)
+        #expect(descriptors.first?.definition.name == "warning_descriptor_tool")
+    }
 }

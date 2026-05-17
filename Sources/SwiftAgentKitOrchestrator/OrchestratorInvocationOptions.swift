@@ -13,8 +13,10 @@ public struct OrchestratorInvocationOptions: Sendable {
     public var toolInvocationPolicy: ToolInvocationPolicy?
     public var assistantPersistenceMode: AssistantPersistenceMode?
     public var parallelToolDispatchEnabled: Bool?
+    public var dispatchPlannerMode: ToolDispatchPlannerMode?
     /// Optional per-call safety metadata keyed by toolCallID.
     public var toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]?
+    public var preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)?
     public var maxAgenticStepsPerUpdate: Int?
     public var rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: Bool?
     public var maxCorrectionRetries: Int?
@@ -29,7 +31,9 @@ public struct OrchestratorInvocationOptions: Sendable {
         toolInvocationPolicy: ToolInvocationPolicy? = nil,
         assistantPersistenceMode: AssistantPersistenceMode? = nil,
         parallelToolDispatchEnabled: Bool? = nil,
+        dispatchPlannerMode: ToolDispatchPlannerMode? = nil,
         toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]? = nil,
+        preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)? = nil,
         maxAgenticStepsPerUpdate: Int? = nil,
         rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: Bool? = nil,
         maxCorrectionRetries: Int? = nil,
@@ -41,7 +45,9 @@ public struct OrchestratorInvocationOptions: Sendable {
         self.toolInvocationPolicy = toolInvocationPolicy
         self.assistantPersistenceMode = assistantPersistenceMode
         self.parallelToolDispatchEnabled = parallelToolDispatchEnabled
+        self.dispatchPlannerMode = dispatchPlannerMode
         self.toolParallelSafetyMetadata = toolParallelSafetyMetadata
+        self.preDispatchPolicyEvaluator = preDispatchPolicyEvaluator
         self.maxAgenticStepsPerUpdate = maxAgenticStepsPerUpdate
         self.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable = rejectAssistantTurnWithNoToolCallsWhenToolsAvailable
         self.maxCorrectionRetries = maxCorrectionRetries

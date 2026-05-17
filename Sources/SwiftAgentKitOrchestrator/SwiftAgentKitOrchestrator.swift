@@ -34,6 +34,10 @@ public struct OrchestratorConfig: Sendable {
     public let parallelToolDispatchEnabled: Bool
     /// Optional custom policy evaluator for selecting serial vs parallel mode for each tool batch.
     public let toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)?
+    /// Optional explicit planner mode for tool batches (`nil` keeps legacy evaluator behavior).
+    public let dispatchPlannerMode: ToolDispatchPlannerMode?
+    /// Optional structured pre-dispatch policy hook invoked before every tool execution.
+    public let preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)?
     /// Optional timeout for pending tool handles. `nil` disables automatic timeout cancellation.
     public let pendingToolTimeout: TimeInterval?
     /// How tool calls are chosen when tools are passed to the orchestrator (forwarded in ``LLMRequestConfig``).
@@ -59,6 +63,8 @@ public struct OrchestratorConfig: Sendable {
         assistantPersistenceMode: AssistantPersistenceMode = .immediate,
         parallelToolDispatchEnabled: Bool = false,
         toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)? = nil,
+        dispatchPlannerMode: ToolDispatchPlannerMode? = nil,
+        preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)? = nil,
         pendingToolTimeout: TimeInterval? = nil,
         toolInvocationPolicy: ToolInvocationPolicy = .automatic,
         rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: Bool = false,
@@ -79,6 +85,8 @@ public struct OrchestratorConfig: Sendable {
         self.assistantPersistenceMode = assistantPersistenceMode
         self.parallelToolDispatchEnabled = parallelToolDispatchEnabled
         self.toolDispatchPolicyEvaluator = toolDispatchPolicyEvaluator
+        self.dispatchPlannerMode = dispatchPlannerMode
+        self.preDispatchPolicyEvaluator = preDispatchPolicyEvaluator
         self.pendingToolTimeout = pendingToolTimeout
         self.toolInvocationPolicy = toolInvocationPolicy
         self.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable = rejectAssistantTurnWithNoToolCallsWhenToolsAvailable
@@ -427,6 +435,97 @@ public actor SwiftAgentKitOrchestrator {
         }
     }
 
+    /// Directly invoke a single tool without an LLM roundtrip.
+    public func invokeTool(_ request: ToolInvocationRequest) async -> ToolInvocationOutcome {
+        let batchRequest = ToolBatchInvocationRequest(
+            requests: [normalizeInvocationRequest(request)],
+            plannerMode: config.dispatchPlannerMode,
+            defaultTimeoutSeconds: config.toolCallTimeout,
+            conversationID: request.conversationID,
+            runID: request.runID,
+            source: request.source
+        )
+        let outcome = await invokeTools(batchRequest)
+        return outcome.outcomes.first ?? .denied(
+            metadata: ToolInvocationMetadata(
+                conversationID: request.conversationID,
+                runID: request.runID,
+                source: request.source,
+                callerProvenance: request.callerProvenance,
+                policyDecision: nil,
+                dispatchMode: nil,
+                dispatchPlan: outcome.diagnostics
+            )
+        )
+    }
+
+    /// Directly invoke one or more tools with deterministic planning and policy enforcement.
+    public func invokeTools(_ request: ToolBatchInvocationRequest) async -> ToolBatchInvocationOutcome {
+        let normalizedRequests = request.requests.map(normalizeInvocationRequest(_:))
+        let plannerMode = request.plannerMode ?? config.dispatchPlannerMode ?? .serial
+        let dispatchPlan = await makeDispatchPlan(
+            requests: normalizedRequests,
+            plannerMode: plannerMode,
+            explicitSafety: [:],
+            parallelEnabledHint: config.parallelToolDispatchEnabled
+        )
+        let invocationRunID = request.runID ?? "direct-\(UUID().uuidString)"
+        var outcomesByCallID: [String: ToolInvocationOutcome] = [:]
+        for stage in dispatchPlan.stages {
+            let stageRequests = normalizedRequests.filter { stage.toolCallIDs.contains($0.toolCallID) }
+            if stage.mode == .parallel {
+                let parallelResults = await withTaskGroup(of: (String, ToolInvocationOutcome).self) { group in
+                    for stageRequest in stageRequests {
+                        group.addTask { [self] in
+                            let outcome = await executeInvocationRequest(
+                                stageRequest,
+                                dispatchMode: .parallel,
+                                runID: .orchestratorSession(UUID()),
+                                invocationRunID: invocationRunID,
+                                source: request.source,
+                                conversationID: request.conversationID,
+                                batchDiagnostics: dispatchPlan.diagnostics
+                            )
+                            return (stageRequest.toolCallID, outcome)
+                        }
+                    }
+                    var collected: [(String, ToolInvocationOutcome)] = []
+                    for await value in group {
+                        collected.append(value)
+                    }
+                    return collected
+                }
+                parallelResults.forEach { outcomesByCallID[$0.0] = $0.1 }
+            } else {
+                for stageRequest in stageRequests {
+                    outcomesByCallID[stageRequest.toolCallID] = await executeInvocationRequest(
+                        stageRequest,
+                        dispatchMode: .serial,
+                        runID: .orchestratorSession(UUID()),
+                        invocationRunID: invocationRunID,
+                        source: request.source,
+                        conversationID: request.conversationID,
+                        batchDiagnostics: dispatchPlan.diagnostics
+                    )
+                }
+            }
+        }
+        let ordered = normalizedRequests.map { request in
+            outcomesByCallID[request.toolCallID] ?? .denied(
+                metadata: ToolInvocationMetadata(
+                    conversationID: request.conversationID ?? request.conversationID,
+                    runID: invocationRunID,
+                    source: request.source,
+                    callerProvenance: request.callerProvenance,
+                    policyDecision: nil,
+                    dispatchMode: nil,
+                    dispatchPlan: dispatchPlan.diagnostics
+                )
+            )
+        }
+        return ToolBatchInvocationOutcome(outcomes: ordered, diagnostics: dispatchPlan.diagnostics)
+    }
+
     private func makeInvocationContext(options: OrchestratorInvocationOptions) -> OrchestratorInvocationContext {
         var merged = mergeJSONObjectParameters(config.additionalParameters, options.additionalParameters)
         if let meta = options.systemPromptMetadata, !meta.isEmpty {
@@ -436,7 +535,9 @@ public actor SwiftAgentKitOrchestrator {
         let policy = options.toolInvocationPolicy ?? config.toolInvocationPolicy
         let assistantMode = options.assistantPersistenceMode ?? config.assistantPersistenceMode
         let parallelEnabled = options.parallelToolDispatchEnabled ?? config.parallelToolDispatchEnabled
+        let plannerMode = options.dispatchPlannerMode ?? config.dispatchPlannerMode
         let safetyMetadata = options.toolParallelSafetyMetadata ?? [:]
+        let preDispatchPolicy = options.preDispatchPolicyEvaluator ?? config.preDispatchPolicyEvaluator
         let maxSteps = options.maxAgenticStepsPerUpdate ?? config.maxAgenticStepsPerUpdate
         let reject = options.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable ?? config.rejectAssistantTurnWithNoToolCallsWhenToolsAvailable
         let maxCorr = options.maxCorrectionRetries ?? config.maxCorrectionRetries
@@ -447,7 +548,9 @@ public actor SwiftAgentKitOrchestrator {
             toolInvocationPolicy: policy,
             assistantPersistenceMode: assistantMode,
             parallelToolDispatchEnabled: parallelEnabled,
+            dispatchPlannerMode: plannerMode,
             toolParallelSafetyMetadata: safetyMetadata,
+            preDispatchPolicyEvaluator: preDispatchPolicy,
             maxAgenticStepsPerUpdate: maxSteps,
             rejectProseWithoutTools: reject,
             maxCorrectionRetries: maxCorr,
@@ -970,30 +1073,52 @@ public actor SwiftAgentKitOrchestrator {
         context: OrchestratorInvocationContext,
         runID: AgenticLoopID
     ) async -> ToolExecutionBatchResult {
-        let dispatchDecision = await decideDispatchPolicy(for: toolCalls, context: context)
+        guard let plannerMode = context.dispatchPlannerMode else {
+            let dispatchDecision = await decideDispatchPolicy(for: toolCalls, context: context)
+            if dispatchDecision.mode == .parallel {
+                return await executeToolCallsInParallel(toolCalls, dispatchMode: .parallel, runID: runID, context: context)
+            }
+            return await executeToolCallsSerially(toolCalls, dispatchMode: .serial, runID: runID, context: context)
+        }
+        let plan = await makeDispatchPlan(
+            toolCalls: toolCalls,
+            plannerMode: plannerMode,
+            explicitSafety: context.toolParallelSafetyMetadata,
+            parallelEnabledHint: context.parallelToolDispatchEnabled
+        )
         logger.info(
-            "Dispatch policy selected",
+            "Dispatch plan selected",
             metadata: SwiftAgentKitLogging.metadata(
-                ("mode", .string("\(dispatchDecision.mode)")),
-                ("reason", .string(dispatchDecision.reason ?? ""))
+                ("plannerMode", .string(plan.diagnostics.plannerMode.rawValue)),
+                ("reason", .string(plan.diagnostics.reason))
             )
         )
-
-        if dispatchDecision.mode == .parallel {
-            return await executeToolCallsInParallel(toolCalls, dispatchMode: .parallel, runID: runID)
+        var aggregated: [LLMResponse] = []
+        var pendingCount = 0
+        for stage in plan.stages {
+            let stageCalls = toolCalls.filter { stage.toolCallIDs.contains($0.id ?? "") }
+            let batch: ToolExecutionBatchResult
+            if stage.mode == .parallel {
+                batch = await executeToolCallsInParallel(stageCalls, dispatchMode: .parallel, runID: runID, context: context)
+            } else {
+                batch = await executeToolCallsSerially(stageCalls, dispatchMode: .serial, runID: runID, context: context)
+            }
+            aggregated.append(contentsOf: batch.responses)
+            pendingCount += batch.pendingCount
         }
-        return await executeToolCallsSerially(toolCalls, dispatchMode: .serial, runID: runID)
+        return ToolExecutionBatchResult(responses: aggregated, pendingCount: pendingCount)
     }
 
     private func executeToolCallsSerially(
         _ toolCalls: [ToolCall],
         dispatchMode: ToolDispatchMode,
-        runID: AgenticLoopID
+        runID: AgenticLoopID,
+        context: OrchestratorInvocationContext
     ) async -> ToolExecutionBatchResult {
         var aggregated: [LLMResponse] = []
         var pendingCount = 0
         for toolCall in toolCalls {
-            let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID)
+            let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID, context: context)
             aggregated.append(contentsOf: outcome.responses)
             if outcome.pendingAccepted {
                 pendingCount += 1
@@ -1005,12 +1130,13 @@ public actor SwiftAgentKitOrchestrator {
     private func executeToolCallsInParallel(
         _ toolCalls: [ToolCall],
         dispatchMode: ToolDispatchMode,
-        runID: AgenticLoopID
+        runID: AgenticLoopID,
+        context: OrchestratorInvocationContext
     ) async -> ToolExecutionBatchResult {
         let indexed = await withTaskGroup(of: (Int, SingleToolExecutionOutcome).self) { group in
             for (index, toolCall) in toolCalls.enumerated() {
                 group.addTask { [self] in
-                    let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID)
+                    let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID, context: context)
                     return (index, outcome)
                 }
             }
@@ -1030,7 +1156,8 @@ public actor SwiftAgentKitOrchestrator {
     private func executeSingleToolCall(
         _ toolCall: ToolCall,
         dispatchMode: ToolDispatchMode,
-        runID: AgenticLoopID
+        runID: AgenticLoopID,
+        context: OrchestratorInvocationContext
     ) async -> SingleToolExecutionOutcome {
         if isRunCancellationRequested(runID) || Task.isCancelled {
             return SingleToolExecutionOutcome(responses: [], pendingAccepted: false)
@@ -1040,6 +1167,15 @@ public actor SwiftAgentKitOrchestrator {
             metadata: metadataForToolCall(toolCall, provider: "orchestrator")
         )
         let callID = toolCall.id ?? "unknown"
+        if let policyOutcome = await evaluatePreDispatchPolicy(
+            for: toolCall,
+            context: context,
+            runID: String(describing: runID),
+            source: .model,
+            dispatchMode: dispatchMode
+        ) {
+            return policyOutcome
+        }
         publishToolLifecycle(toolCallID: callID, toolName: toolCall.name, state: .started, dispatchMode: dispatchMode)
         var callResponses: [LLMResponse] = []
         var abortedWithError: LLMResponse?
@@ -1145,6 +1281,260 @@ public actor SwiftAgentKitOrchestrator {
         return metadata
     }
 
+    private func normalizeInvocationRequest(_ request: ToolInvocationRequest) -> ToolInvocationRequest {
+        var normalizedArgs = request.argumentsPayload
+        if request.argumentMode == .raw, let envelope = request.rawEnvelope {
+            normalizedArgs = .object([
+                "envelopeVersion": .string(envelope.envelopeVersion),
+                "rawText": .string(envelope.rawText),
+                "commandToken": envelope.commandToken.map(JSON.string) ?? .string(""),
+                "commandName": envelope.commandName.map(JSON.string) ?? .string(""),
+                "argsText": envelope.argsText.map(JSON.string) ?? .string(""),
+                "parsedTokens": .array((envelope.parsedTokens ?? []).map(JSON.string))
+            ])
+        }
+        return ToolInvocationRequest(
+            toolName: request.toolName,
+            argumentsPayload: normalizedArgs,
+            toolCallID: request.toolCallID,
+            argumentMode: request.argumentMode,
+            rawEnvelope: request.rawEnvelope,
+            conversationID: request.conversationID,
+            runID: request.runID,
+            source: request.source,
+            callerProvenance: request.callerProvenance,
+            policyContext: request.policyContext,
+            timeoutSeconds: request.timeoutSeconds
+        )
+    }
+
+    private func makeDispatchPlan(
+        requests: [ToolInvocationRequest],
+        plannerMode: ToolDispatchPlannerMode,
+        explicitSafety: [ToolCallID: ToolParallelSafety],
+        parallelEnabledHint: Bool
+    ) async -> (stages: [ToolDispatchPlanStage], diagnostics: ToolDispatchPlanDiagnostics) {
+        let toolCalls = requests.map {
+            ToolCall(name: $0.toolName, arguments: $0.argumentsPayload, id: $0.toolCallID)
+        }
+        let plan = await makeDispatchPlan(
+            toolCalls: toolCalls,
+            plannerMode: plannerMode,
+            explicitSafety: explicitSafety,
+            parallelEnabledHint: parallelEnabledHint
+        )
+        return (plan.stages, plan.diagnostics)
+    }
+
+    private func makeDispatchPlan(
+        toolCalls: [ToolCall],
+        plannerMode: ToolDispatchPlannerMode,
+        explicitSafety: [ToolCallID: ToolParallelSafety],
+        parallelEnabledHint: Bool
+    ) async -> (stages: [ToolDispatchPlanStage], diagnostics: ToolDispatchPlanDiagnostics) {
+        let metadata = await collectParallelSafetyMetadata(for: toolCalls, explicit: explicitSafety)
+        switch plannerMode {
+        case .serial:
+            let ids = toolCalls.compactMap(\.id)
+            let stages = ids.map { ToolDispatchPlanStage(mode: .serial, toolCallIDs: [$0]) }
+            return (
+                stages,
+                ToolDispatchPlanDiagnostics(plannerMode: .serial, reason: "Explicit serial planner mode", stages: stages)
+            )
+        case .allParallel:
+            let ids = toolCalls.compactMap(\.id)
+            let mode: ToolDispatchMode = parallelEnabledHint ? .parallel : .serial
+            let stages = ids.isEmpty ? [] : [ToolDispatchPlanStage(mode: mode, toolCallIDs: ids)]
+            let reason = parallelEnabledHint ? "Explicit allParallel planner mode" : "Parallel disabled; downgraded to serial stage"
+            return (
+                stages,
+                ToolDispatchPlanDiagnostics(plannerMode: .allParallel, reason: reason, stages: stages)
+            )
+        case .mixedDeterministic:
+            var stages: [ToolDispatchPlanStage] = []
+            var currentParallel: [String] = []
+            func flushParallel() {
+                guard !currentParallel.isEmpty else { return }
+                stages.append(ToolDispatchPlanStage(mode: .parallel, toolCallIDs: currentParallel))
+                currentParallel.removeAll(keepingCapacity: true)
+            }
+            for call in toolCalls {
+                guard let id = call.id else { continue }
+                let safety = metadata[id] ?? .unknown
+                if parallelEnabledHint && safety == .parallelSafe {
+                    currentParallel.append(id)
+                } else {
+                    flushParallel()
+                    stages.append(ToolDispatchPlanStage(mode: .serial, toolCallIDs: [id]))
+                }
+            }
+            flushParallel()
+            return (
+                stages,
+                ToolDispatchPlanDiagnostics(
+                    plannerMode: .mixedDeterministic,
+                    reason: "Parallel-safe calls grouped; mutating/unknown calls serialized in input order",
+                    stages: stages
+                )
+            )
+        }
+    }
+
+    private func executeInvocationRequest(
+        _ request: ToolInvocationRequest,
+        dispatchMode: ToolDispatchMode,
+        runID: AgenticLoopID,
+        invocationRunID: String,
+        source: ToolInvocationSource,
+        conversationID: String?,
+        batchDiagnostics: ToolDispatchPlanDiagnostics
+    ) async -> ToolInvocationOutcome {
+        let context = makeInvocationContext(options: .default)
+        let call = ToolCall(name: request.toolName, arguments: request.argumentsPayload, id: request.toolCallID)
+        if let preDispatch = await evaluatePreDispatchPolicyForRequest(
+            request,
+            dispatchMode: dispatchMode,
+            context: context,
+            invocationRunID: invocationRunID,
+            source: source
+        ) {
+            return preDispatch
+        }
+
+        publishToolLifecycle(
+            eventName: .toolCallStarted,
+            toolCallID: request.toolCallID,
+            toolName: request.toolName,
+            state: .started,
+            dispatchMode: dispatchMode,
+            conversationID: conversationID ?? request.conversationID,
+            runID: invocationRunID,
+            source: source.rawValue
+        )
+        let timeout = request.timeoutSeconds ?? config.toolCallTimeout
+        do {
+            if let mcpManager = mcpManager, config.mcpEnabled,
+               let responses = try await mcpManager.toolCall(call, orchestratorDefaultTimeout: timeout),
+               let first = responses.first {
+                let result = ToolResult(success: true, content: first.content, metadata: .object([:]), toolCallId: request.toolCallID)
+                let meta = ToolInvocationMetadata(
+                    conversationID: conversationID ?? request.conversationID,
+                    runID: invocationRunID,
+                    source: source,
+                    callerProvenance: request.callerProvenance,
+                    policyDecision: nil,
+                    dispatchMode: dispatchMode,
+                    dispatchPlan: batchDiagnostics
+                )
+                publishToolLifecycle(eventName: .toolCallCompleted, toolCallID: request.toolCallID, toolName: request.toolName, state: .completed, dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
+                return .completed(result: result, metadata: meta)
+            }
+            if let a2aManager = a2aManager, config.a2aEnabled,
+               let responses = try await a2aManager.agentCall(call, orchestratorDefaultTimeout: timeout),
+               let first = responses.first {
+                let result = ToolResult(success: true, content: first.content, metadata: .object([:]), toolCallId: request.toolCallID)
+                let meta = ToolInvocationMetadata(conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source, callerProvenance: request.callerProvenance, policyDecision: nil, dispatchMode: dispatchMode, dispatchPlan: batchDiagnostics)
+                publishToolLifecycle(eventName: .toolCallCompleted, toolCallID: request.toolCallID, toolName: request.toolName, state: .completed, dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
+                return .completed(result: result, metadata: meta)
+            }
+            if let toolManager {
+                let outcome = try await withToolCallTimeout(timeout, toolName: request.toolName) {
+                    try await toolManager.executeToolOutcome(call)
+                }
+                let meta = ToolInvocationMetadata(conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source, callerProvenance: request.callerProvenance, policyDecision: nil, dispatchMode: dispatchMode, dispatchPlan: batchDiagnostics)
+                switch outcome {
+                case .completed(let result):
+                    publishToolLifecycle(eventName: .toolCallCompleted, toolCallID: request.toolCallID, toolName: request.toolName, state: .completed, dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
+                    return .completed(result: result, metadata: meta)
+                case .pending(let handle):
+                    registerPendingHandle(handle, toolName: request.toolName, dispatchMode: dispatchMode, runID: runID)
+                    return .pending(handle: handle, metadata: meta)
+                }
+            }
+            let fallback = ToolResult(success: false, content: "", metadata: .object([:]), toolCallId: request.toolCallID, error: "No provider handled tool '\(request.toolName)'")
+            let meta = ToolInvocationMetadata(conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source, callerProvenance: request.callerProvenance, policyDecision: nil, dispatchMode: dispatchMode, dispatchPlan: batchDiagnostics)
+            publishToolLifecycle(eventName: .toolCallFailed, toolCallID: request.toolCallID, toolName: request.toolName, state: .failed(fallback.error), dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
+            return .completed(result: fallback, metadata: meta)
+        } catch {
+            let failed = ToolResult(success: false, content: "", metadata: .object([:]), toolCallId: request.toolCallID, error: String(describing: error))
+            let meta = ToolInvocationMetadata(conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source, callerProvenance: request.callerProvenance, policyDecision: nil, dispatchMode: dispatchMode, dispatchPlan: batchDiagnostics)
+            publishToolLifecycle(eventName: .toolCallFailed, toolCallID: request.toolCallID, toolName: request.toolName, state: .failed(failed.error), dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
+            return .completed(result: failed, metadata: meta)
+        }
+    }
+
+    private func evaluatePreDispatchPolicyForRequest(
+        _ request: ToolInvocationRequest,
+        dispatchMode: ToolDispatchMode,
+        context: OrchestratorInvocationContext,
+        invocationRunID: String,
+        source: ToolInvocationSource
+    ) async -> ToolInvocationOutcome? {
+        guard let evaluator = context.preDispatchPolicyEvaluator else { return nil }
+        let descriptor = await findDescriptor(for: request.toolName)
+        let decision = await evaluator.decide(.init(request: request, descriptor: descriptor))
+        let meta = ToolInvocationMetadata(
+            conversationID: request.conversationID,
+            runID: invocationRunID,
+            source: source,
+            callerProvenance: request.callerProvenance,
+            policyDecision: decision,
+            dispatchMode: dispatchMode,
+            dispatchPlan: nil
+        )
+        switch decision.decision {
+        case .allow:
+            return nil
+        case .deny:
+            publishToolLifecycle(eventName: .toolCallFailed, toolCallID: request.toolCallID, toolName: request.toolName, state: .failed(decision.reasonText), dispatchMode: dispatchMode, conversationID: request.conversationID, runID: invocationRunID, source: source.rawValue, reasonCode: decision.reasonCode, reasonText: decision.reasonText, policyDecision: decision.decision.rawValue)
+            return .denied(metadata: meta)
+        case .requireApproval:
+            publishToolLifecycle(eventName: .toolApprovalRequired, toolCallID: request.toolCallID, toolName: request.toolName, state: .pending, dispatchMode: dispatchMode, conversationID: request.conversationID, runID: invocationRunID, source: source.rawValue, reasonCode: decision.reasonCode, reasonText: decision.reasonText, policyDecision: decision.decision.rawValue)
+            return .approvalRequired(metadata: meta)
+        case .elevated:
+            publishToolLifecycle(eventName: .toolElevatedExecuted, toolCallID: request.toolCallID, toolName: request.toolName, state: .started, dispatchMode: dispatchMode, conversationID: request.conversationID, runID: invocationRunID, source: source.rawValue, reasonCode: decision.reasonCode, reasonText: decision.reasonText, policyDecision: decision.decision.rawValue)
+            return nil
+        }
+    }
+
+    private func evaluatePreDispatchPolicy(
+        for toolCall: ToolCall,
+        context: OrchestratorInvocationContext,
+        runID: String,
+        source: ToolInvocationSource,
+        dispatchMode: ToolDispatchMode
+    ) async -> SingleToolExecutionOutcome? {
+        guard let evaluator = context.preDispatchPolicyEvaluator else { return nil }
+        let request = ToolInvocationRequest(
+            toolName: toolCall.name,
+            argumentsPayload: toolCall.arguments,
+            toolCallID: toolCall.id,
+            source: source
+        )
+        let descriptor = await findDescriptor(for: toolCall.name)
+        let decision = await evaluator.decide(.init(request: request, descriptor: descriptor))
+        switch decision.decision {
+        case .allow:
+            return nil
+        case .deny:
+            publishToolLifecycle(eventName: .toolCallFailed, toolCallID: toolCall.id ?? "unknown", toolName: toolCall.name, state: .failed(decision.reasonText), dispatchMode: dispatchMode, runID: runID, source: source.rawValue, reasonCode: decision.reasonCode, reasonText: decision.reasonText, policyDecision: decision.decision.rawValue)
+            let response = LLMResponse.complete(content: "Tool denied by policy: \(decision.reasonText ?? "denied")", toolCallId: toolCall.id)
+            return SingleToolExecutionOutcome(responses: [response], pendingAccepted: false)
+        case .requireApproval:
+            publishToolLifecycle(eventName: .toolApprovalRequired, toolCallID: toolCall.id ?? "unknown", toolName: toolCall.name, state: .pending, dispatchMode: dispatchMode, runID: runID, source: source.rawValue, reasonCode: decision.reasonCode, reasonText: decision.reasonText, policyDecision: decision.decision.rawValue)
+            let response = LLMResponse.complete(content: "Tool requires approval before execution.", toolCallId: toolCall.id)
+            return SingleToolExecutionOutcome(responses: [response], pendingAccepted: false)
+        case .elevated:
+            publishToolLifecycle(eventName: .toolElevatedExecuted, toolCallID: toolCall.id ?? "unknown", toolName: toolCall.name, state: .started, dispatchMode: dispatchMode, runID: runID, source: source.rawValue, reasonCode: decision.reasonCode, reasonText: decision.reasonText, policyDecision: decision.decision.rawValue)
+            return nil
+        }
+    }
+
+    private func findDescriptor(for toolName: String) async -> RegisteredToolDescriptor? {
+        let descriptors = await allRegisteredTools
+        return descriptors.first { $0.definition.name == toolName }
+    }
+
     /// Shuts down MCP local subprocesses and A2A boot processes. Call from normal app termination; it does not run when the process receives `SIGKILL`.
     public func shutdown() async {
         await mcpManager?.shutdown()
@@ -1158,7 +1548,9 @@ private struct OrchestratorInvocationContext: Sendable {
     let toolInvocationPolicy: ToolInvocationPolicy
     let assistantPersistenceMode: AssistantPersistenceMode
     let parallelToolDispatchEnabled: Bool
+    let dispatchPlannerMode: ToolDispatchPlannerMode?
     let toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]
+    let preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)?
     let maxAgenticStepsPerUpdate: Int?
     let rejectProseWithoutTools: Bool
     let maxCorrectionRetries: Int
@@ -1231,18 +1623,49 @@ extension SwiftAgentKitOrchestrator: PendingToolCompletionSink {
 
 private extension SwiftAgentKitOrchestrator {
     func publishToolLifecycle(
+        eventName: ToolLifecycleEventName? = nil,
         toolCallID: String,
         toolName: String?,
         state: ToolLifecycleState,
-        dispatchMode: ToolDispatchMode?
+        dispatchMode: ToolDispatchMode?,
+        conversationID: String? = nil,
+        runID: String? = nil,
+        source: String? = nil,
+        reasonCode: String? = nil,
+        reasonText: String? = nil,
+        policyDecision: String? = nil
     ) {
+        let resolvedEventName: ToolLifecycleEventName
+        if let eventName {
+            resolvedEventName = eventName
+        } else {
+            switch state {
+            case .started:
+                resolvedEventName = .toolCallStarted
+            case .pending:
+                resolvedEventName = .toolApprovalRequired
+            case .completed:
+                resolvedEventName = .toolCallCompleted
+            case .failed:
+                resolvedEventName = .toolCallFailed
+            case .cancelled:
+                resolvedEventName = .toolCallFailed
+            }
+        }
         toolLifecycleEventHub.publish(
             ToolLifecycleEvent(
+                eventName: resolvedEventName,
                 toolCallID: toolCallID,
                 toolName: toolName,
                 state: state,
                 timestamp: Date(),
-                dispatchMode: dispatchMode
+                dispatchMode: dispatchMode,
+                conversationID: conversationID,
+                runID: runID,
+                source: source,
+                reasonCode: reasonCode,
+                reasonText: reasonText,
+                policyDecision: policyDecision
             )
         )
     }

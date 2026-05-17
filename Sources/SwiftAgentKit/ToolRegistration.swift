@@ -120,6 +120,75 @@ public struct RegisteredToolDescriptor: Sendable, Codable {
     }
 }
 
+public struct ToolDescriptorValidationIssue: Sendable, Equatable, Codable {
+    public let field: String
+    public let message: String
+
+    public init(field: String, message: String) {
+        self.field = field
+        self.message = message
+    }
+}
+
+public struct ToolDescriptorValidationResult: Sendable, Equatable, Codable {
+    public let isValid: Bool
+    public let issues: [ToolDescriptorValidationIssue]
+
+    public init(isValid: Bool, issues: [ToolDescriptorValidationIssue]) {
+        self.isValid = isValid
+        self.issues = issues
+    }
+}
+
+public extension RegisteredToolDescriptor {
+    func validateCompleteness() -> ToolDescriptorValidationResult {
+        var issues: [ToolDescriptorValidationIssue] = []
+        if effectClass == .unknown {
+            issues.append(.init(field: "effectClass", message: "effectClass must be explicitly set (readOnly|mutating)."))
+        }
+        if parallelHint == .unknown {
+            issues.append(.init(field: "parallelHint", message: "parallelHint must be explicitly set (parallelizable|serialOnly)."))
+        }
+        if normalizedSchema.fingerprint.isEmpty {
+            issues.append(.init(field: "normalizedSchema.fingerprint", message: "normalized schema fingerprint is required."))
+        }
+        return ToolDescriptorValidationResult(isValid: issues.isEmpty, issues: issues)
+    }
+
+    static func readOnly(
+        definition: ToolDefinition,
+        source: ToolRegistrationSource = .local,
+        parallelHint: ToolExecutionParallelHint = .parallelizable,
+        policyTags: [ToolPolicyTag] = [],
+        normalizedSchema: NormalizedToolSchema
+    ) -> RegisteredToolDescriptor {
+        RegisteredToolDescriptor(
+            definition: definition,
+            source: source,
+            effectClass: .readOnly,
+            parallelHint: parallelHint,
+            policyTags: policyTags,
+            normalizedSchema: normalizedSchema
+        )
+    }
+
+    static func mutating(
+        definition: ToolDefinition,
+        source: ToolRegistrationSource = .local,
+        policyTags: [ToolPolicyTag] = [],
+        normalizedSchema: NormalizedToolSchema
+    ) -> RegisteredToolDescriptor {
+        RegisteredToolDescriptor(
+            definition: definition,
+            source: source,
+            effectClass: .mutating,
+            parallelHint: .serialOnly,
+            policyTags: policyTags,
+            normalizedSchema: normalizedSchema
+        )
+    }
+}
+
 extension RegisteredToolDescriptor: Equatable {
     public static func == (lhs: RegisteredToolDescriptor, rhs: RegisteredToolDescriptor) -> Bool {
         lhs.definition.name == rhs.definition.name

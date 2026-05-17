@@ -55,12 +55,56 @@ public enum ToolLifecycleState: Sendable, Equatable, Codable {
     case cancelled
 }
 
+public enum ToolLifecycleEventName: String, Sendable, Equatable, Codable {
+    case toolCallStarted = "tool.callStarted"
+    case toolCallCompleted = "tool.callCompleted"
+    case toolCallFailed = "tool.callFailed"
+    case toolApprovalRequired = "tool.approvalRequired"
+    case toolApprovalResolved = "tool.approvalResolved"
+    case toolElevatedExecuted = "tool.elevatedExecuted"
+}
+
 public struct ToolLifecycleEvent: Sendable, Equatable, Codable {
+    public let eventName: ToolLifecycleEventName
     public let toolCallID: String
     public let toolName: String?
     public let state: ToolLifecycleState
     public let timestamp: Date
     public let dispatchMode: ToolDispatchMode?
+    public let conversationID: String?
+    public let runID: String?
+    public let source: String?
+    public let reasonCode: String?
+    public let reasonText: String?
+    public let policyDecision: String?
+
+    public init(
+        eventName: ToolLifecycleEventName,
+        toolCallID: String,
+        toolName: String?,
+        state: ToolLifecycleState,
+        timestamp: Date = Date(),
+        dispatchMode: ToolDispatchMode? = nil,
+        conversationID: String? = nil,
+        runID: String? = nil,
+        source: String? = nil,
+        reasonCode: String? = nil,
+        reasonText: String? = nil,
+        policyDecision: String? = nil
+    ) {
+        self.eventName = eventName
+        self.toolCallID = toolCallID
+        self.toolName = toolName
+        self.state = state
+        self.timestamp = timestamp
+        self.dispatchMode = dispatchMode
+        self.conversationID = conversationID
+        self.runID = runID
+        self.source = source
+        self.reasonCode = reasonCode
+        self.reasonText = reasonText
+        self.policyDecision = policyDecision
+    }
 
     public init(
         toolCallID: String,
@@ -69,11 +113,27 @@ public struct ToolLifecycleEvent: Sendable, Equatable, Codable {
         timestamp: Date = Date(),
         dispatchMode: ToolDispatchMode? = nil
     ) {
-        self.toolCallID = toolCallID
-        self.toolName = toolName
-        self.state = state
-        self.timestamp = timestamp
-        self.dispatchMode = dispatchMode
+        let derivedEventName: ToolLifecycleEventName
+        switch state {
+        case .started:
+            derivedEventName = .toolCallStarted
+        case .pending:
+            derivedEventName = .toolApprovalRequired
+        case .completed:
+            derivedEventName = .toolCallCompleted
+        case .failed:
+            derivedEventName = .toolCallFailed
+        case .cancelled:
+            derivedEventName = .toolCallFailed
+        }
+        self.init(
+            eventName: derivedEventName,
+            toolCallID: toolCallID,
+            toolName: toolName,
+            state: state,
+            timestamp: timestamp,
+            dispatchMode: dispatchMode
+        )
     }
 }
 
