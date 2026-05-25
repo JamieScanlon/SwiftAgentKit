@@ -25,6 +25,10 @@ public protocol ToolProvider: Sendable {
 }
 
 public extension ToolProvider {
+    private func descriptorHint(for toolName: String) -> ToolDescriptorHints? {
+        (self as? any ToolDescriptorHinting)?.descriptorHintsByToolName[toolName]
+    }
+
     func executeToolOutcome(_ toolCall: ToolCall) async throws -> ToolExecutionOutcome {
         .completed(try await executeTool(toolCall))
     }
@@ -34,7 +38,20 @@ public extension ToolProvider {
     }
 
     func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
-        .unknown
+        if let hint = descriptorHint(for: toolCall.name) {
+            if let parallelSafety = hint.parallelSafety {
+                return parallelSafety
+            }
+            switch hint.parallelHint {
+            case .parallelizable:
+                return .parallelSafe
+            case .serialOnly:
+                return .mutating
+            case .unknown:
+                return .unknown
+            }
+        }
+        return .unknown
     }
 
     func registrationSource(for definition: ToolDefinition) async -> ToolRegistrationSource {
@@ -46,15 +63,24 @@ public extension ToolProvider {
     }
 
     func effectClass(for definition: ToolDefinition) async -> ToolEffectClass {
-        .unknown
+        if let hint = descriptorHint(for: definition.name) {
+            return hint.effectClass
+        }
+        return .unknown
     }
 
     func executionParallelHint(for definition: ToolDefinition) async -> ToolExecutionParallelHint {
-        .unknown
+        if let hint = descriptorHint(for: definition.name) {
+            return hint.parallelHint
+        }
+        return .unknown
     }
 
     func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag] {
-        []
+        if let hint = descriptorHint(for: definition.name) {
+            return hint.policyTags
+        }
+        return []
     }
 
     func rawSchema(for definition: ToolDefinition) async -> JSON? {

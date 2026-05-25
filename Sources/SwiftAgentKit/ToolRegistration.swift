@@ -33,6 +33,29 @@ public struct ToolPolicyTag: RawRepresentable, Hashable, Sendable, Codable {
     public static let elevated = ToolPolicyTag(rawValue: "elevated")
 }
 
+public struct ToolDescriptorHints: Sendable, Equatable, Codable {
+    public let effectClass: ToolEffectClass
+    public let parallelHint: ToolExecutionParallelHint
+    public let policyTags: [ToolPolicyTag]
+    public let parallelSafety: ToolParallelSafety?
+
+    public init(
+        effectClass: ToolEffectClass,
+        parallelHint: ToolExecutionParallelHint,
+        policyTags: [ToolPolicyTag] = [],
+        parallelSafety: ToolParallelSafety? = nil
+    ) {
+        self.effectClass = effectClass
+        self.parallelHint = parallelHint
+        self.policyTags = policyTags
+        self.parallelSafety = parallelSafety
+    }
+}
+
+public protocol ToolDescriptorHinting: Sendable {
+    var descriptorHintsByToolName: [String: ToolDescriptorHints] { get }
+}
+
 public struct ToolSchemaSummary: Sendable, Equatable, Codable {
     public let topLevelType: String
     public let requiredCount: Int

@@ -257,6 +257,7 @@ struct A2AManagerTests {
         let descriptor = try #require(descriptors.first)
         #expect(descriptor.definition.name == "DescriptorAgent")
         #expect(descriptor.source == .a2a)
+        #expect(descriptor.effectClass == .mutating)
         #expect(descriptor.parallelHint == .serialOnly)
         #expect(descriptor.schemaSummary.requiredCount == 1)
         #expect(!descriptor.normalizedSchemaFingerprint.isEmpty)

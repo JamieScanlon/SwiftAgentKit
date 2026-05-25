@@ -2,6 +2,24 @@ import Foundation
 import EasyJSON
 import Logging
 
+private struct DescriptorValidationWarningFingerprint: Hashable {
+    let toolName: String
+    let source: ToolRegistrationSource
+    let issues: [String]
+}
+
+private enum DescriptorValidationWarningDeduper {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var seenFingerprints: Set<DescriptorValidationWarningFingerprint> = []
+
+    static func shouldLog(_ fingerprint: DescriptorValidationWarningFingerprint) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        let inserted = seenFingerprints.insert(fingerprint).inserted
+        return inserted
+    }
+}
+
 public enum ToolDescriptorValidationMode: String, Sendable, Codable, Equatable {
     case warning
     case strict
@@ -516,14 +534,24 @@ public struct ToolManager: Sendable {
             let issueText = validation.issues.map { "\($0.field): \($0.message)" }.joined(separator: "; ")
             switch descriptorValidationMode {
             case .warning:
-                logger.warning(
-                    "Descriptor validation warning",
-                    metadata: SwiftAgentKitLogging.metadata(
-                        ("toolName", .string(descriptor.definition.name)),
-                        ("source", .string(descriptor.source.rawValue)),
-                        ("issues", .string(issueText))
-                    )
+                let normalizedIssues = validation.issues
+                    .map { "\($0.field): \($0.message)" }
+                    .sorted()
+                let fingerprint = DescriptorValidationWarningFingerprint(
+                    toolName: descriptor.definition.name,
+                    source: descriptor.source,
+                    issues: normalizedIssues
                 )
+                if DescriptorValidationWarningDeduper.shouldLog(fingerprint) {
+                    logger.warning(
+                        "Descriptor validation warning",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("toolName", .string(descriptor.definition.name)),
+                            ("source", .string(descriptor.source.rawValue)),
+                            ("issues", .string(issueText))
+                        )
+                    )
+                }
                 accepted.append(descriptor)
             case .strict:
                 logger.error(

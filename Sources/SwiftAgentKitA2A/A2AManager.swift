@@ -381,7 +381,7 @@ public actor A2AManager {
                 RegisteredToolDescriptor(
                     definition: definition,
                     source: .a2a,
-                    effectClass: .unknown,
+                    effectClass: .mutating,
                     parallelHint: .serialOnly,
                     policyTags: [],
                     normalizedSchema: normalized

@@ -433,6 +433,21 @@ import MCP
         // Test that it has the required methods (compile-time check)
         let _: ToolProvider = provider
     }
+
+    @Test("A2AToolProvider provides explicit descriptor metadata defaults")
+    func testA2AToolProviderMetadataCompleteness() async throws {
+        let provider = A2AToolProvider(clients: [])
+        let definition = ToolDefinition(
+            name: "delegated_tool",
+            description: "delegated",
+            parameters: [],
+            type: .a2aAgent
+        )
+
+        #expect(await provider.effectClass(for: definition) == .mutating)
+        #expect(await provider.executionParallelHint(for: definition) == .serialOnly)
+        #expect(await provider.parallelSafety(for: ToolCall(name: definition.name, arguments: .object([:]), id: "a2a")) == .mutating)
+    }
     
     @Test("A2AToolProvider should handle tool execution with empty clients")
     func testA2AToolProviderExecuteToolWithEmptyClients() async throws {
@@ -471,6 +486,21 @@ import MCP
         
         // Test that it has the required methods (compile-time check)
         let _: ToolProvider = provider
+    }
+
+    @Test("MCPToolProvider provides explicit descriptor metadata defaults")
+    func testMCPToolProviderMetadataCompleteness() async throws {
+        let provider = MCPToolProvider(clients: [])
+        let definition = ToolDefinition(
+            name: "mcp_tool",
+            description: "mcp",
+            parameters: [],
+            type: .mcpTool
+        )
+
+        #expect(await provider.effectClass(for: definition) == .mutating)
+        #expect(await provider.executionParallelHint(for: definition) == .serialOnly)
+        #expect(await provider.parallelSafety(for: ToolCall(name: definition.name, arguments: .object([:]), id: "mcp")) == .mutating)
     }
     
     @Test("MCPToolProvider should handle tool execution with empty clients")

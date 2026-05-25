@@ -177,8 +177,8 @@ public actor MCPManager {
                     RegisteredToolDescriptor(
                         definition: tool,
                         source: .mcp,
-                        effectClass: .unknown,
-                        parallelHint: .unknown,
+                        effectClass: .mutating,
+                        parallelHint: .serialOnly,
                         policyTags: [],
                         normalizedSchema: normalized
                     )

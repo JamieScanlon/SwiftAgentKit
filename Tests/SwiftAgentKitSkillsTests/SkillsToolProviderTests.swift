@@ -324,4 +324,27 @@ struct SkillsToolProviderTests {
             #expect(name == "unknown_tool")
         }
     }
+
+    @Test("SkillsToolProvider registers explicit descriptor metadata for all tools")
+    func testSkillsToolProviderMetadataCompleteness() async throws {
+        let rootDir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: rootDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: rootDir) }
+
+        let provider = SkillsToolProvider(loader: SkillLoader(skillsDirectoryURL: rootDir))
+        let tools = await provider.availableTools()
+        #expect(!tools.isEmpty)
+
+        for tool in tools {
+            let effect = await provider.effectClass(for: tool)
+            let parallelHint = await provider.executionParallelHint(for: tool)
+            #expect(effect != .unknown)
+            #expect(parallelHint != .unknown)
+        }
+
+        let listSafety = await provider.parallelSafety(
+            for: ToolCall(name: SkillsToolProvider.listActivatedToolName, arguments: .object([:]), id: "list")
+        )
+        #expect(listSafety == .parallelSafe)
+    }
 }

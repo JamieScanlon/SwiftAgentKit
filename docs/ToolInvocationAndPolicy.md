@@ -29,7 +29,7 @@ Policy metadata (`reasonCode`, `reasonText`, optional `approvalSpec`) is attache
 
 `ToolManager` now supports descriptor validation modes:
 
-- `.warning` (default): keeps descriptors but logs completeness issues.
+- `.warning` (default): keeps descriptors and logs completeness issues once per unique `(toolName, source, issues)` fingerprint per process.
 - `.strict`: rejects descriptors with incomplete canonical metadata.
 
 Canonical completeness requires:
@@ -37,6 +37,19 @@ Canonical completeness requires:
 - explicit `effectClass` (not `unknown`)
 - explicit `parallelHint` (not `unknown`)
 - normalized schema fingerprint
+
+## Metadata Hinting for Providers
+
+Providers can declare per-tool canonical metadata in one place by conforming to `ToolDescriptorHinting` and returning `descriptorHintsByToolName`.
+
+`ToolProvider` default implementations consult these hints for:
+
+- `effectClass(for:)`
+- `executionParallelHint(for:)`
+- `policyTags(for:)`
+- `parallelSafety(for:)` (derived from hint unless overridden)
+
+This avoids repetitive per-tool `switch` statements and reduces annotation drift.
 
 ## Dispatch Planner Modes
 

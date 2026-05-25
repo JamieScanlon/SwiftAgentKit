@@ -26,7 +26,7 @@ public typealias OnSkillDeactivated = @Sendable (String) async -> Void
 ///
 /// Provide `onSkillActivated` and `onSkillDeactivated` callbacks to update system context when skills
 /// are activated or deactivated; updating context is beyond the scope of this library.
-public struct SkillsToolProvider: ToolProvider {
+public struct SkillsToolProvider: ToolProvider, ToolDescriptorHinting {
     
     /// Errors thrown by `SkillsToolProvider`.
     public enum Error: Swift.Error, Sendable {
@@ -45,6 +45,22 @@ public struct SkillsToolProvider: ToolProvider {
     private let onSkillDeactivated: OnSkillDeactivated?
     
     public var name: String { "Agent Skills" }
+    public var descriptorHintsByToolName: [String: ToolDescriptorHints] {
+        [
+            Self.activateToolName: ToolDescriptorHints(
+                effectClass: .mutating,
+                parallelHint: .serialOnly
+            ),
+            Self.deactivateToolName: ToolDescriptorHints(
+                effectClass: .mutating,
+                parallelHint: .serialOnly
+            ),
+            Self.listActivatedToolName: ToolDescriptorHints(
+                effectClass: .readOnly,
+                parallelHint: .parallelizable
+            )
+        ]
+    }
     
     /// - Parameters:
     ///   - loader: The skill loader (configured with the root skills directory).

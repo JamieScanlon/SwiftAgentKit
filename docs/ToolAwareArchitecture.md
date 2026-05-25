@@ -19,8 +19,16 @@ The tool-aware architecture allows you to easily assemble adapters with differen
 ```swift
 public protocol ToolProvider: Sendable {
     var name: String { get }
-    var availableTools: [ToolDefinition] { get }
+    func availableTools() async -> [ToolDefinition]
     func executeTool(_ toolCall: ToolCall) async throws -> ToolResult
+    func executeToolOutcome(_ toolCall: ToolCall) async throws -> ToolExecutionOutcome
+    func cancelPending(handleID: String, toolCallID: String) async -> Bool
+    func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety
+    func registrationSource(for definition: ToolDefinition) async -> ToolRegistrationSource
+    func effectClass(for definition: ToolDefinition) async -> ToolEffectClass
+    func executionParallelHint(for definition: ToolDefinition) async -> ToolExecutionParallelHint
+    func policyTags(for definition: ToolDefinition) async -> [ToolPolicyTag]
+    func rawSchema(for definition: ToolDefinition) async -> JSON?
 }
 ```
 
@@ -31,6 +39,14 @@ public protocol ToolProvider: Sendable {
 Coordinates multiple tool providers and handles tool execution.
 
 **Status**: ✅ Implemented
+
+### Metadata-safe wrappers
+
+When wrapping providers (for logging, policy, persistence, transforms), use `ForwardingToolProvider` so metadata methods are forwarded by default and descriptor hints are preserved.
+
+### Ergonomic metadata declaration
+
+Providers can conform to `ToolDescriptorHinting` and define `descriptorHintsByToolName` with `ToolDescriptorHints` to declare canonical metadata in a single map.
 
 ### 3. A2AToolProvider
 

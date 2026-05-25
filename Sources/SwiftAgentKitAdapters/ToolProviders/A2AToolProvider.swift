@@ -151,6 +151,18 @@ public struct A2AToolProvider: ToolProvider {
             error: "A2A agent not found or failed"
         ))
     }
+
+    public func effectClass(for definition: ToolDefinition) async -> ToolEffectClass {
+        .mutating
+    }
+
+    public func executionParallelHint(for definition: ToolDefinition) async -> ToolExecutionParallelHint {
+        .serialOnly
+    }
+
+    public func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        .mutating
+    }
 } 
 
 private extension TaskState {
