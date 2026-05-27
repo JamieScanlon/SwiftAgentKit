@@ -128,19 +128,21 @@ func loggingFilterExample() {
     }
     print()
     
-    // Example 6: OR matching (any criterion can match)
-    print("6. OR matching with whitelist behavior (matchMode: .any, disposition: .allow):")
+    // Example 6: OR matching across criteria
+    print("6. OR matching across criteria (matchMode: .any, disposition: .allow):")
     let anyAllowFilter = SwiftAgentKitLogging.LogFilter(
-        level: .minimum(.warning),
-        keywords: ["token"],
+        level: .minimum(.info),
+        keywords: ["token", "context"],
         matchMode: .any
     )
     SwiftAgentKitLogging.setFilter(anyAllowFilter)
 
     let logger6 = SwiftAgentKitLogging.logger(for: .core("AnyAllow"))
     logger6.info("Token refresh started - will pass (keyword matched)")
-    logger6.warning("Connection is slow - will pass (level matched)")
+    logger6.info("Context load started - will pass (keyword matched)")
+    logger6.warning("Network warning - will pass (level matched)")
     logger6.info("General status message - will be filtered")
+    logger6.debug("Debug status message - will be filtered")
 
     let anyAllowLogs = recorder.drain()
     print("   Captured \(anyAllowLogs.count) log entries:")
@@ -149,10 +151,9 @@ func loggingFilterExample() {
     }
     print()
 
-    // Example 7: Blacklist behavior (deny matching entries)
-    print("7. Blacklist behavior (matchMode: .all, disposition: .deny):")
+    // Example 7: Blacklist behavior across criteria
+    print("7. Blacklist behavior across criteria (matchMode: .all, disposition: .deny):")
     let allDenyFilter = SwiftAgentKitLogging.LogFilter(
-        level: .minimum(.info),
         keywords: ["token"],
         disposition: .deny
     )
@@ -161,7 +162,7 @@ func loggingFilterExample() {
     let logger7 = SwiftAgentKitLogging.logger(for: .core("AllDeny"))
     logger7.info("token message - will be denied")
     logger7.info("regular info message - will pass")
-    logger7.debug("token debug message - will pass (does not satisfy level criterion)")
+    logger7.debug("token debug message - will pass (level does not match)")
 
     let allDenyLogs = recorder.drain()
     print("   Captured \(allDenyLogs.count) log entries:")
@@ -204,7 +205,7 @@ func loggingFilterExample() {
     print("✅ Logging filter examples completed!")
     print("\nKey takeaways:")
     print("- Filters apply globally to all loggers")
-    print("- matchMode controls AND (.all) vs OR (.any) semantics")
+    print("- matchMode controls AND (.all) vs OR (.any) across active criteria")
     print("- disposition controls whitelist (.allow) vs blacklist (.deny) behavior")
     print("- Filters can be set at bootstrap or updated dynamically")
     print("- New loggers created after filter changes will respect the new filter")

@@ -114,7 +114,7 @@ public enum SwiftAgentKitLogging {
     ///
     /// By default, all specified filter criteria must match for a log entry to pass through
     /// (AND logic) and matching entries are allowed (whitelist behavior). Use `matchMode` to
-    /// switch to OR behavior and `disposition` to invert to blacklist behavior.
+    /// switch to OR behavior across active criteria and `disposition` to invert to blacklist behavior.
     /// If a filter criterion is `nil`, it is not applied.
     public struct LogFilter: Sendable {
         /// Minimum log level to allow, or specific set of allowed levels.
@@ -153,7 +153,6 @@ public enum SwiftAgentKitLogging {
             /// All active criteria must match (logical AND).
             case all
             /// At least one active criterion must match (logical OR).
-            /// If no criteria are active, this mode yields no match.
             case any
         }
 
@@ -603,7 +602,7 @@ struct FilteringLogHandler: LogHandler {
             }
         }
         
-        // Apply filters with AND logic - all must pass
+        // Apply filters with configured match/disposition behavior
         guard shouldAllowLog(
             level: level,
             message: message.description,
@@ -644,7 +643,12 @@ struct FilteringLogHandler: LogHandler {
         }
 
         if let keywords = filter.keywords {
-            criterionResults.append(matchesKeywords(keywords, message: message, metadata: metadata))
+            criterionResults.append(matchesKeywords(
+                keywords,
+                message: message,
+                metadata: metadata,
+                matchMode: filter.matchMode
+            ))
         }
 
         let isMatch: Bool
@@ -696,7 +700,8 @@ struct FilteringLogHandler: LogHandler {
     private func matchesKeywords(
         _ keywords: Set<String>,
         message: String,
-        metadata: Logger.Metadata
+        metadata: Logger.Metadata,
+        matchMode: SwiftAgentKitLogging.LogFilter.MatchMode
     ) -> Bool {
         let lowercasedMessage = message.lowercased()
         var foundKeywords = Set<String>()
@@ -720,8 +725,13 @@ struct FilteringLogHandler: LogHandler {
             }
         }
 
-        // Existing semantics: all configured keywords must be found.
-        return foundKeywords.count == keywords.count
+        switch matchMode {
+        case .all:
+            // Existing semantics: all configured keywords must be found.
+            return foundKeywords.count == keywords.count
+        case .any:
+            return !foundKeywords.isEmpty
+        }
     }
     
     /// Recursively extract all string values from metadata.

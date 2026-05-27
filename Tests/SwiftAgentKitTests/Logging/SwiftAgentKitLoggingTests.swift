@@ -527,7 +527,6 @@ struct SwiftAgentKitLoggingTests {
 
         let authLogger = SwiftAgentKitLogging.logger(for: .authentication("OAuth"))
         let coreLogger = SwiftAgentKitLogging.logger(for: .core("AnyDeny"))
-
         authLogger.info("plain auth message") // scope match -> denied
         coreLogger.info("token message")      // keyword match -> denied
         coreLogger.info("safe message")       // no criterion match -> allowed
@@ -535,6 +534,8 @@ struct SwiftAgentKitLoggingTests {
         let logs = recorder.drain()
         #expect(logs.count == 1)
         #expect(logs.first?.message.contains("safe message") == true)
+        #expect(!logs.contains { $0.message.contains("token message") })
+        #expect(!logs.contains { $0.message.contains("plain auth message") })
     }
 
     @Test
