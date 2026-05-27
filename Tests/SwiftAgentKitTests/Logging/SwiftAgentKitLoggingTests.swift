@@ -436,6 +436,138 @@ struct SwiftAgentKitLoggingTests {
         #expect(logs.count == 1)
         #expect(logs.first?.message.contains("warning") == true)
     }
+
+    @Test
+    func filterDefaultsPreserveExistingBehavior() {
+        let filter = SwiftAgentKitLogging.LogFilter(
+            level: .minimum(.info),
+            keywords: ["token"]
+        )
+
+        #expect(filter.matchMode == .all)
+        #expect(filter.disposition == .allow)
+    }
+
+    @Test
+    func matchModeAnyWithAllowDisposition() {
+        SwiftAgentKitLogging.resetForTesting()
+
+        let recorder = LogRecorder()
+        let capturingLogger = Logger(label: "AnyAllow") { _ in
+            CapturingLogHandler(recorder: recorder)
+        }
+
+        let filter = SwiftAgentKitLogging.LogFilter(
+            level: .minimum(.warning),
+            keywords: ["token"],
+            matchMode: .any
+        )
+        SwiftAgentKitLogging.bootstrap(logger: capturingLogger, level: .debug, filter: filter)
+        _ = recorder.drain()
+
+        let logger = SwiftAgentKitLogging.logger(for: .core("AnyAllow"))
+        logger.info("token info message")     // keyword matches
+        logger.warning("regular warning")     // level matches
+        logger.info("regular info")           // no criteria match
+
+        let logs = recorder.drain()
+        #expect(logs.count == 2)
+        #expect(logs.contains { $0.message.contains("token info message") })
+        #expect(logs.contains { $0.message.contains("regular warning") })
+        #expect(!logs.contains { $0.message.contains("regular info") })
+    }
+
+    @Test
+    func matchModeAllWithDenyDisposition() {
+        SwiftAgentKitLogging.resetForTesting()
+
+        let recorder = LogRecorder()
+        let capturingLogger = Logger(label: "AllDeny") { _ in
+            CapturingLogHandler(recorder: recorder)
+        }
+
+        let filter = SwiftAgentKitLogging.LogFilter(
+            level: .minimum(.info),
+            keywords: ["token"],
+            matchMode: .all,
+            disposition: .deny
+        )
+        SwiftAgentKitLogging.bootstrap(logger: capturingLogger, level: .debug, filter: filter)
+        _ = recorder.drain()
+
+        let logger = SwiftAgentKitLogging.logger(for: .core("AllDeny"))
+        logger.info("token message")          // matches all criteria -> denied
+        logger.info("other message")          // keyword missing -> allowed
+        logger.debug("token debug message")   // level missing -> allowed
+
+        let logs = recorder.drain()
+        #expect(logs.count == 2)
+        #expect(logs.contains { $0.message.contains("other message") })
+        #expect(logs.contains { $0.message.contains("token debug message") })
+        #expect(!logs.contains { $0.message.contains("token message") })
+    }
+
+    @Test
+    func matchModeAnyWithDenyDisposition() {
+        SwiftAgentKitLogging.resetForTesting()
+
+        let recorder = LogRecorder()
+        let capturingLogger = Logger(label: "AnyDeny") { _ in
+            CapturingLogHandler(recorder: recorder)
+        }
+
+        let filter = SwiftAgentKitLogging.LogFilter(
+            allowedScopes: [.authentication("OAuth")],
+            keywords: ["token"],
+            matchMode: .any,
+            disposition: .deny
+        )
+        SwiftAgentKitLogging.bootstrap(logger: capturingLogger, level: .debug, filter: filter)
+        _ = recorder.drain()
+
+        let authLogger = SwiftAgentKitLogging.logger(for: .authentication("OAuth"))
+        let coreLogger = SwiftAgentKitLogging.logger(for: .core("AnyDeny"))
+
+        authLogger.info("plain auth message") // scope match -> denied
+        coreLogger.info("token message")      // keyword match -> denied
+        coreLogger.info("safe message")       // no criterion match -> allowed
+
+        let logs = recorder.drain()
+        #expect(logs.count == 1)
+        #expect(logs.first?.message.contains("safe message") == true)
+    }
+
+    @Test
+    func noActiveCriteriaSemanticsByMatchAndDisposition() {
+        SwiftAgentKitLogging.resetForTesting()
+
+        let recorder = LogRecorder()
+        let capturingLogger = Logger(label: "NoCriteria") { _ in
+            CapturingLogHandler(recorder: recorder)
+        }
+
+        SwiftAgentKitLogging.bootstrap(logger: capturingLogger, level: .debug)
+        _ = recorder.drain()
+
+        let cases: [(SwiftAgentKitLogging.LogFilter.MatchMode, SwiftAgentKitLogging.LogFilter.Disposition, Bool)] = [
+            (.all, .allow, true),
+            (.all, .deny, false),
+            (.any, .allow, false),
+            (.any, .deny, true)
+        ]
+
+        for (index, testCase) in cases.enumerated() {
+            let filter = SwiftAgentKitLogging.LogFilter(
+                matchMode: testCase.0,
+                disposition: testCase.1
+            )
+            SwiftAgentKitLogging.setFilter(filter)
+            let logger = SwiftAgentKitLogging.logger(for: .core("NoCriteria\(index)"))
+            logger.info("message \(index)")
+            let logs = recorder.drain()
+            #expect((!logs.isEmpty) == testCase.2)
+        }
+    }
 }
 
 // MARK: - Helpers

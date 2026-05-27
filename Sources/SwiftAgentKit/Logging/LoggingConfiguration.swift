@@ -112,7 +112,9 @@ public enum SwiftAgentKitLogging {
     
     /// Filter configuration for controlling which log entries are emitted.
     ///
-    /// All specified filter criteria must match for a log entry to pass through (AND logic).
+    /// By default, all specified filter criteria must match for a log entry to pass through
+    /// (AND logic) and matching entries are allowed (whitelist behavior). Use `matchMode` to
+    /// switch to OR behavior and `disposition` to invert to blacklist behavior.
     /// If a filter criterion is `nil`, it is not applied.
     public struct LogFilter: Sendable {
         /// Minimum log level to allow, or specific set of allowed levels.
@@ -131,6 +133,12 @@ public enum SwiftAgentKitLogging {
         /// Keywords are matched case-insensitively.
         /// If `nil`, keyword filtering is not applied.
         public let keywords: Set<String>?
+
+        /// How active filter criteria are combined.
+        public let matchMode: MatchMode
+
+        /// Whether matching entries are allowed (whitelist) or denied (blacklist).
+        public let disposition: Disposition
         
         /// Level filtering options.
         public enum LevelFilter: Sendable {
@@ -139,17 +147,38 @@ public enum SwiftAgentKitLogging {
             /// Specific set of allowed levels.
             case allowed(Set<AgentLogLevel>)
         }
+
+        /// How active criteria are combined.
+        public enum MatchMode: Sendable {
+            /// All active criteria must match (logical AND).
+            case all
+            /// At least one active criterion must match (logical OR).
+            /// If no criteria are active, this mode yields no match.
+            case any
+        }
+
+        /// Whether matching entries are allowed or denied.
+        public enum Disposition: Sendable {
+            /// Matching entries pass through (whitelist behavior).
+            case allow
+            /// Matching entries are dropped (blacklist behavior).
+            case deny
+        }
         
         public init(
             level: LevelFilter? = nil,
             allowedScopes: Set<LoggingScope>? = nil,
             requiredMetadataKeys: Set<String>? = nil,
-            keywords: Set<String>? = nil
+            keywords: Set<String>? = nil,
+            matchMode: MatchMode = .all,
+            disposition: Disposition = .allow
         ) {
             self.level = level
             self.allowedScopes = allowedScopes
             self.requiredMetadataKeys = requiredMetadataKeys
             self.keywords = keywords
+            self.matchMode = matchMode
+            self.disposition = disposition
         }
     }
     
@@ -600,71 +629,99 @@ struct FilteringLogHandler: LogHandler {
         message: String,
         metadata: Logger.Metadata
     ) -> Bool {
-        // Level filter
+        var criterionResults: [Bool] = []
+
         if let levelFilter = filter.level {
-            let agentLevel = SwiftAgentKitLogging.AgentLogLevel(swiftLogLevel: level)
-            switch levelFilter {
-            case .minimum(let minLevel):
-                let levelOrder: [SwiftAgentKitLogging.AgentLogLevel] = [.debug, .info, .warning, .error]
-                guard let minIndex = levelOrder.firstIndex(of: minLevel),
-                      let currentIndex = levelOrder.firstIndex(of: agentLevel),
-                      currentIndex >= minIndex else {
-                    return false
-                }
-            case .allowed(let allowedLevels):
-                guard allowedLevels.contains(agentLevel) else {
-                    return false
-                }
-            }
+            criterionResults.append(matchesLevel(level, levelFilter: levelFilter))
         }
-        
-        // Scope filter
+
         if let allowedScopes = filter.allowedScopes {
-            guard allowedScopes.contains(scope) else {
-                return false
-            }
+            criterionResults.append(allowedScopes.contains(scope))
         }
-        
-        // Metadata key filter
+
         if let requiredKeys = filter.requiredMetadataKeys {
-            for key in requiredKeys {
-                guard metadata[key] != nil else {
-                    return false
-                }
-            }
+            criterionResults.append(matchesRequiredMetadataKeys(requiredKeys, metadata: metadata))
         }
-        
-        // Keyword filter
+
         if let keywords = filter.keywords {
-            let lowercasedMessage = message.lowercased()
-            var foundKeywords = Set<String>()
-            
-            // Check message text
-            for keyword in keywords {
-                if lowercasedMessage.contains(keyword.lowercased()) {
-                    foundKeywords.insert(keyword.lowercased())
-                }
+            criterionResults.append(matchesKeywords(keywords, message: message, metadata: metadata))
+        }
+
+        let isMatch: Bool
+        switch filter.matchMode {
+        case .all:
+            isMatch = criterionResults.allSatisfy { $0 }
+        case .any:
+            isMatch = criterionResults.contains(true)
+        }
+
+        switch filter.disposition {
+        case .allow:
+            return isMatch
+        case .deny:
+            return !isMatch
+        }
+    }
+
+    private func matchesLevel(
+        _ level: Logger.Level,
+        levelFilter: SwiftAgentKitLogging.LogFilter.LevelFilter
+    ) -> Bool {
+        let agentLevel = SwiftAgentKitLogging.AgentLogLevel(swiftLogLevel: level)
+        switch levelFilter {
+        case .minimum(let minLevel):
+            let levelOrder: [SwiftAgentKitLogging.AgentLogLevel] = [.debug, .info, .warning, .error]
+            guard let minIndex = levelOrder.firstIndex(of: minLevel),
+                  let currentIndex = levelOrder.firstIndex(of: agentLevel) else {
+                return false
             }
-            
-            // Check metadata values recursively
-            let metadataStrings = extractStrings(from: metadata)
-            for keyword in keywords {
-                let lowercasedKeyword = keyword.lowercased()
-                for metadataString in metadataStrings {
-                    if metadataString.lowercased().contains(lowercasedKeyword) {
-                        foundKeywords.insert(lowercasedKeyword)
-                        break
-                    }
-                }
-            }
-            
-            // All keywords must be found
-            guard foundKeywords.count == keywords.count else {
+            return currentIndex >= minIndex
+        case .allowed(let allowedLevels):
+            return allowedLevels.contains(agentLevel)
+        }
+    }
+
+    private func matchesRequiredMetadataKeys(
+        _ requiredKeys: Set<String>,
+        metadata: Logger.Metadata
+    ) -> Bool {
+        for key in requiredKeys {
+            guard metadata[key] != nil else {
                 return false
             }
         }
-        
         return true
+    }
+
+    private func matchesKeywords(
+        _ keywords: Set<String>,
+        message: String,
+        metadata: Logger.Metadata
+    ) -> Bool {
+        let lowercasedMessage = message.lowercased()
+        var foundKeywords = Set<String>()
+
+        // Check message text
+        for keyword in keywords {
+            if lowercasedMessage.contains(keyword.lowercased()) {
+                foundKeywords.insert(keyword.lowercased())
+            }
+        }
+
+        // Check metadata values recursively
+        let metadataStrings = extractStrings(from: metadata)
+        for keyword in keywords {
+            let lowercasedKeyword = keyword.lowercased()
+            for metadataString in metadataStrings {
+                if metadataString.lowercased().contains(lowercasedKeyword) {
+                    foundKeywords.insert(lowercasedKeyword)
+                    break
+                }
+            }
+        }
+
+        // Existing semantics: all configured keywords must be found.
+        return foundKeywords.count == keywords.count
     }
     
     /// Recursively extract all string values from metadata.

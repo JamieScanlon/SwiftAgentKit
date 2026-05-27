@@ -82,7 +82,7 @@ func loggingFilterExample() {
     print()
     
     // Example 4: Filter by keywords
-    print("4. Filtering by keywords (must contain 'error' or 'failed'):")
+    print("4. Filtering by keywords (must contain 'error'):")
     let keywordFilter = SwiftAgentKitLogging.LogFilter(
         keywords: ["error"]
     )
@@ -128,12 +128,54 @@ func loggingFilterExample() {
     }
     print()
     
-    // Example 6: Dynamic filter updates
-    print("6. Dynamic filter updates:")
+    // Example 6: OR matching (any criterion can match)
+    print("6. OR matching with whitelist behavior (matchMode: .any, disposition: .allow):")
+    let anyAllowFilter = SwiftAgentKitLogging.LogFilter(
+        level: .minimum(.warning),
+        keywords: ["token"],
+        matchMode: .any
+    )
+    SwiftAgentKitLogging.setFilter(anyAllowFilter)
+
+    let logger6 = SwiftAgentKitLogging.logger(for: .core("AnyAllow"))
+    logger6.info("Token refresh started - will pass (keyword matched)")
+    logger6.warning("Connection is slow - will pass (level matched)")
+    logger6.info("General status message - will be filtered")
+
+    let anyAllowLogs = recorder.drain()
+    print("   Captured \(anyAllowLogs.count) log entries:")
+    for log in anyAllowLogs {
+        print("   - [\(log.level)] \(log.message)")
+    }
+    print()
+
+    // Example 7: Blacklist behavior (deny matching entries)
+    print("7. Blacklist behavior (matchMode: .all, disposition: .deny):")
+    let allDenyFilter = SwiftAgentKitLogging.LogFilter(
+        level: .minimum(.info),
+        keywords: ["token"],
+        disposition: .deny
+    )
+    SwiftAgentKitLogging.setFilter(allDenyFilter)
+
+    let logger7 = SwiftAgentKitLogging.logger(for: .core("AllDeny"))
+    logger7.info("token message - will be denied")
+    logger7.info("regular info message - will pass")
+    logger7.debug("token debug message - will pass (does not satisfy level criterion)")
+
+    let allDenyLogs = recorder.drain()
+    print("   Captured \(allDenyLogs.count) log entries:")
+    for log in allDenyLogs {
+        print("   - [\(log.level)] \(log.message)")
+    }
+    print()
+
+    // Example 8: Dynamic filter updates
+    print("8. Dynamic filter updates:")
     SwiftAgentKitLogging.setFilter(nil)  // Clear any existing filter
     
-    let logger6 = SwiftAgentKitLogging.logger(for: .core("DynamicFilter"))
-    logger6.info("Message before filter")
+    let logger8 = SwiftAgentKitLogging.logger(for: .core("DynamicFilter"))
+    logger8.info("Message before filter")
     _ = recorder.drain()
     
     // Apply filter dynamically
@@ -141,9 +183,9 @@ func loggingFilterExample() {
     SwiftAgentKitLogging.setFilter(dynamicFilter)
     
     // Create new logger after filter is set
-    let logger6Filtered = SwiftAgentKitLogging.logger(for: .core("DynamicFilter"))
-    logger6Filtered.info("Regular message - will be filtered")
-    logger6Filtered.info("Important message - will pass")
+    let logger8Filtered = SwiftAgentKitLogging.logger(for: .core("DynamicFilter"))
+    logger8Filtered.info("Regular message - will be filtered")
+    logger8Filtered.info("Important message - will pass")
     
     let dynamicLogs = recorder.drain()
     print("   Captured \(dynamicLogs.count) log entry:")
@@ -153,8 +195,8 @@ func loggingFilterExample() {
     
     // Clear filter
     SwiftAgentKitLogging.setFilter(nil)
-    let logger6Cleared = SwiftAgentKitLogging.logger(for: .core("DynamicFilter"))
-    logger6Cleared.info("Message after filter cleared")
+    let logger8Cleared = SwiftAgentKitLogging.logger(for: .core("DynamicFilter"))
+    logger8Cleared.info("Message after filter cleared")
     let clearedLogs = recorder.drain()
     print("   After clearing filter, captured \(clearedLogs.count) log entry")
     print()
@@ -162,7 +204,8 @@ func loggingFilterExample() {
     print("✅ Logging filter examples completed!")
     print("\nKey takeaways:")
     print("- Filters apply globally to all loggers")
-    print("- Multiple filter criteria use AND logic (all must match)")
+    print("- matchMode controls AND (.all) vs OR (.any) semantics")
+    print("- disposition controls whitelist (.allow) vs blacklist (.deny) behavior")
     print("- Filters can be set at bootstrap or updated dynamically")
     print("- New loggers created after filter changes will respect the new filter")
 }
