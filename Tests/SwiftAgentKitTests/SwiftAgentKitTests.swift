@@ -8,6 +8,6 @@ struct SwiftAgentKitTests {
     func testSwiftAgentKitVersion() throws {
         #expect(!swiftAgentKitVersion.isEmpty)
         let parts = swiftAgentKitVersion.split(separator: ".")
-        #expect(parts.count >= 2, "Expected semver-style swiftAgentKitVersion (e.g. 0.15.0), got: \(swiftAgentKitVersion)")
+        #expect(parts.count >= 2, "Expected semver-style swiftAgentKitVersion (e.g. 0.16.0), got: \(swiftAgentKitVersion)")
     }
 } 
