@@ -3,6 +3,7 @@ import Logging
 import SwiftAgentKit
 import SwiftAgentKitA2A
 import SwiftAgentKitMCP
+import SwiftAgentKitACP
 import SwiftAgentKitAdapters
 import EasyJSON
 
@@ -14,6 +15,8 @@ public struct OrchestratorConfig: Sendable {
     public let mcpEnabled: Bool
     /// Whether A2A (Agent-to-Agent) communication is enabled
     public let a2aEnabled: Bool
+    /// Whether ACP (Agent Client Protocol) communication is enabled
+    public let acpEnabled: Bool
     /// Connection timeout for MCP servers in seconds
     public let mcpConnectionTimeout: TimeInterval
     /// Maximum wall-clock time for a single tool call (MCP, A2A, or ToolManager dispatch) in seconds
@@ -53,6 +56,7 @@ public struct OrchestratorConfig: Sendable {
         streamingEnabled: Bool = false,
         mcpEnabled: Bool = false,
         a2aEnabled: Bool = false,
+        acpEnabled: Bool = false,
         mcpConnectionTimeout: TimeInterval = 30.0,
         toolCallTimeout: TimeInterval = 300.0,
         maxTokens: Int? = nil,
@@ -75,6 +79,7 @@ public struct OrchestratorConfig: Sendable {
         self.streamingEnabled = streamingEnabled
         self.mcpEnabled = mcpEnabled
         self.a2aEnabled = a2aEnabled
+        self.acpEnabled = acpEnabled
         self.mcpConnectionTimeout = mcpConnectionTimeout
         self.toolCallTimeout = toolCallTimeout
         self.maxTokens = maxTokens
@@ -107,6 +112,7 @@ public actor SwiftAgentKitOrchestrator {
     public let config: OrchestratorConfig
     public let mcpManager: MCPManager?
     public let a2aManager: A2AManager?
+    public let acpManager: ACPManager?
     /// Optional ToolManager for executing generic function tools (non-MCP, non-A2A)
     public let toolManager: ToolManager?
 
@@ -136,6 +142,10 @@ public actor SwiftAgentKitOrchestrator {
             if let a2aManager = a2aManager, config.a2aEnabled {
                 allTools.append(contentsOf: await a2aManager.availableTools())
             }
+
+            if let acpManager = acpManager, config.acpEnabled {
+                allTools.append(contentsOf: await acpManager.availableTools())
+            }
             
             // Get tools from generic ToolManager if configured
             if let toolManager = toolManager {
@@ -155,6 +165,9 @@ public actor SwiftAgentKitOrchestrator {
             }
             if let a2aManager = a2aManager, config.a2aEnabled {
                 allDescriptors.append(contentsOf: await a2aManager.registeredToolDescriptors())
+            }
+            if let acpManager = acpManager, config.acpEnabled {
+                allDescriptors.append(contentsOf: await acpManager.registeredToolDescriptors())
             }
             if let toolManager = toolManager {
                 allDescriptors.append(contentsOf: await toolManager.allRegisteredToolsAsync())
@@ -259,6 +272,7 @@ public actor SwiftAgentKitOrchestrator {
     ///     creates its own MCPManager, that manager will use this handler so remote servers requiring
     ///     manual OAuth can complete the flow. Ignored if `mcpManager` is provided.
     ///   - a2aManager: Pre-built A2A manager; if nil and `config.a2aEnabled` is true, one is created.
+    ///   - acpManager: Pre-built ACP manager; if nil and `config.acpEnabled` is true, one is created.
     ///   - toolManager: Optional ToolManager for generic function tools.
     ///   - logger: Optional logger; a default is created if nil.
     public init(
@@ -267,6 +281,7 @@ public actor SwiftAgentKitOrchestrator {
         mcpManager: MCPManager? = nil,
         mcpOAuthHandler: MCPOAuthHandler? = nil,
         a2aManager: A2AManager? = nil,
+        acpManager: ACPManager? = nil,
         toolManager: ToolManager? = nil,
         logger: Logger? = nil
     ) {
@@ -277,7 +292,8 @@ public actor SwiftAgentKitOrchestrator {
             metadata: SwiftAgentKitLogging.metadata(
                 ("streamingEnabled", .string(config.streamingEnabled ? "true" : "false")),
                 ("mcpEnabled", .string(config.mcpEnabled ? "true" : "false")),
-                ("a2aEnabled", .string(config.a2aEnabled ? "true" : "false"))
+                ("a2aEnabled", .string(config.a2aEnabled ? "true" : "false")),
+                ("acpEnabled", .string(config.acpEnabled ? "true" : "false"))
             )
         )
         self.logger = resolvedLogger
@@ -312,6 +328,21 @@ public actor SwiftAgentKitOrchestrator {
             )
         } else {
             self.a2aManager = nil
+        }
+
+        if let providedACPManager = acpManager {
+            self.acpManager = providedACPManager
+        } else if config.acpEnabled {
+            self.acpManager = ACPManager(
+                logger: SwiftAgentKitLogging.logger(
+                    for: .acp("ACPManager"),
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("source", .string("SwiftAgentKitOrchestrator"))
+                    )
+                )
+            )
+        } else {
+            self.acpManager = nil
         }
         
         self.toolManager = toolManager
@@ -1230,7 +1261,32 @@ public actor SwiftAgentKitOrchestrator {
             return SingleToolExecutionOutcome(responses: [err], pendingAccepted: false)
         }
 
-        // Try generic ToolManager if MCP and A2A didn't handle the tool
+        // Try ACP manager
+        if let acpManager = acpManager, config.acpEnabled {
+            do {
+                let acpResponses = try await acpManager.agentCall(toolCall, orchestratorDefaultTimeout: config.toolCallTimeout)
+                if let acpResponses {
+                    let responsesWithID = acpResponses.map { response in
+                        LLMResponse(
+                            content: response.content,
+                            toolCalls: response.toolCalls,
+                            metadata: response.metadata,
+                            isComplete: response.isComplete,
+                            toolCallId: toolCall.id
+                        )
+                    }
+                    callResponses.append(contentsOf: responsesWithID)
+                }
+            } catch {
+                abortedWithError = llmResponseFromToolExecutionError(error, toolCallId: toolCall.id)
+            }
+        }
+        if let err = abortedWithError {
+            publishToolLifecycle(toolCallID: callID, toolName: toolCall.name, state: .failed(err.content), dispatchMode: dispatchMode)
+            return SingleToolExecutionOutcome(responses: [err], pendingAccepted: false)
+        }
+
+        // Try generic ToolManager if MCP, A2A, and ACP didn't handle the tool
         if callResponses.isEmpty, let toolManager = toolManager {
             do {
                 let outcome = try await withToolCallTimeout(config.toolCallTimeout, toolName: toolCall.name) {
@@ -1437,6 +1493,14 @@ public actor SwiftAgentKitOrchestrator {
                 publishToolLifecycle(eventName: .toolCallCompleted, toolCallID: request.toolCallID, toolName: request.toolName, state: .completed, dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
                 return .completed(result: result, metadata: meta)
             }
+            if let acpManager = acpManager, config.acpEnabled,
+               let responses = try await acpManager.agentCall(call, orchestratorDefaultTimeout: timeout),
+               let first = responses.first {
+                let result = ToolResult(success: true, content: first.content, metadata: .object([:]), toolCallId: request.toolCallID)
+                let meta = ToolInvocationMetadata(conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source, callerProvenance: request.callerProvenance, policyDecision: nil, dispatchMode: dispatchMode, dispatchPlan: batchDiagnostics)
+                publishToolLifecycle(eventName: .toolCallCompleted, toolCallID: request.toolCallID, toolName: request.toolName, state: .completed, dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
+                return .completed(result: result, metadata: meta)
+            }
             if let toolManager {
                 let outcome = try await withToolCallTimeout(timeout, toolName: request.toolName) {
                     try await toolManager.executeToolOutcome(call)
@@ -1539,6 +1603,7 @@ public actor SwiftAgentKitOrchestrator {
     public func shutdown() async {
         await mcpManager?.shutdown()
         await a2aManager?.shutdown()
+        await acpManager?.shutdown()
     }
 }
 

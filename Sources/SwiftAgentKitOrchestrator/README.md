@@ -4,6 +4,7 @@ Building blocks for LLM orchestrators that can:
 
 - Use tools through **MCP** (Model Context Protocol)
 - Communicate with other agents through **A2A** (Agent-to-Agent)
+- Connect to coding agents through **ACP** (Agent Client Protocol)
 - Execute local function tools via **`ToolManager`**
 - Observe **instance**, **per-call**, and **agentic** state (see full doc below)
 
@@ -14,6 +15,7 @@ Building blocks for LLM orchestrators that can:
 - `SwiftAgentKit`
 - `SwiftAgentKitA2A`
 - `SwiftAgentKitMCP`
+- `SwiftAgentKitACP`
 - `SwiftAgentKitAdapters`
 - `swift-log`
 

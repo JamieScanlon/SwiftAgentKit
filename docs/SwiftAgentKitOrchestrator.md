@@ -1,6 +1,6 @@
 # SwiftAgentKitOrchestrator
 
-`SwiftAgentKitOrchestrator` is an **`actor`** that wires an `LLMProtocol` implementation to optional **MCP** tools, **A2A** agents, and local **function** tools via `ToolManager`. It runs a recursive **agentic** loop: LLM response → tool execution → follow-up LLM calls until a final assistant message without pending tool calls.
+`SwiftAgentKitOrchestrator` is an **`actor`** that wires an `LLMProtocol` implementation to optional **MCP** tools, **A2A** agents, **ACP** agents, and local **function** tools via `ToolManager`. It runs a recursive **agentic** loop: LLM response → tool execution → follow-up LLM calls until a final assistant message without pending tool calls.
 
 > **See also**  
 > [**LLM state and observation**](LLMStateAndObservation.md) — `StatefulLLM`, `QueuedLLM`, `LLMRuntimeState`, `LLMRequestState`, `AgenticLoopState`.
@@ -13,6 +13,7 @@
 - **SwiftAgentKit** — `LLMProtocol`, `Message`, `ToolDefinition`, state types  
 - **SwiftAgentKitMCP** — `MCPManager` (optional)  
 - **SwiftAgentKitA2A** — `A2AManager` (optional)  
+- **SwiftAgentKitACP** — `ACPManager` (optional)  
 - **SwiftAgentKitAdapters** — shared adapter/tool types  
 
 ## Configuration (`OrchestratorConfig`)
@@ -22,6 +23,7 @@
 | `streamingEnabled` | Use `llm.stream` vs `llm.send` for each LLM step |
 | `mcpEnabled` | Use `mcpManager` for tool dispatch when configured |
 | `a2aEnabled` | Use `a2aManager` for agent-style tool calls |
+| `acpEnabled` | Use `acpManager` for ACP agent tool calls |
 | `mcpConnectionTimeout` | Seconds for MCP connections when the orchestrator creates its own `MCPManager` |
 | `toolCallTimeout` | Maximum wall-clock time (**seconds**) for a single tool dispatch (MCP, A2A, or `ToolManager`). Default **300** (5 minutes). On expiry, the model receives a tool-role error via `ToolCallTimeoutError` (see **Tool dispatch** below). |
 | `maxTokens`, `temperature`, `topP`, `additionalParameters` | Passed through to `LLMRequestConfig` for every LLM call |

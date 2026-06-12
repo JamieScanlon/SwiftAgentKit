@@ -83,6 +83,7 @@ public struct ToolDefinition: Sendable, Codable {
     public enum ToolType: String, Codable, Sendable, Equatable {
         case a2aAgent = "a2a_agent"
         case mcpTool = "mcp_tool"
+        case acpAgent = "acp_agent"
         case function = "function"
     }
     
