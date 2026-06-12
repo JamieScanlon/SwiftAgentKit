@@ -25,7 +25,8 @@ struct MessageFilteringExample {
         let client = MCPClient(
             name: "filtering-example-client",
             version: "1.0.0",
-            isStrict: false
+            isStrict: false,
+            messageFilterConfig: JSONRPCMessageFilter.Configuration.default
         )
         
         print("✓ MCP client created with message filtering enabled")

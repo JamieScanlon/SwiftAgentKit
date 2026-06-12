@@ -15,7 +15,7 @@ struct ACPExample {
         let logger = SwiftAgentKitLogging.logger(for: .examples("ACPExample"))
         logger.info("Starting in-process ACP client/agent demo")
 
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
         let adapter = EchoACPAgentAdapter(name: "demo-echo-agent", responseText: "Hello from ACP")
 
         let agent = ACPAgent(adapter: adapter, transport: agentTransport)

@@ -6,7 +6,6 @@
 import Foundation
 import Logging
 import SwiftAgentKit
-import os
 
 /// Shared mutable state for ACP agent handlers (Sendable-safe via lock).
 final class ACPAgentState: @unchecked Sendable {
@@ -50,15 +49,15 @@ public actor ACPAgent {
     }
 
     private let adapter: any ACPAgentAdapter
-    private let connection: ACPConnection
+    private let connection: JSONRPCConnection
     private let stateBox: ACPAgentState
     private let logger: Logging.Logger
     public private(set) var state: State = .idle
 
-    public init(adapter: any ACPAgentAdapter, transport: any ACPTransport, logger: Logging.Logger? = nil) {
+    public init(adapter: any ACPAgentAdapter, transport: any JSONRPCTransport, logger: Logging.Logger? = nil) {
         self.adapter = adapter
         self.stateBox = ACPAgentState()
-        self.connection = ACPConnection(transport: transport, logger: logger)
+        self.connection = JSONRPCConnection(transport: transport, logger: logger)
         self.logger = logger ?? SwiftAgentKitLogging.logger(for: .acp("ACPAgent"))
     }
 
@@ -111,8 +110,8 @@ public actor ACPAgent {
                 stateBox.isAuthenticated || adapter.authMethods.isEmpty
             }
             guard authenticated else {
-                throw ACPConnectionError.remoteError(
-                    ACPJSONRPCError(code: ACPErrorCode.authRequired.rawValue, message: "Authentication required")
+                throw JSONRPCConnectionError.remoteError(
+                    JSONRPCError(code: ACPErrorCode.authRequired.rawValue, message: "Authentication required")
                 )
             }
             let decoder = JSONDecoder()
@@ -145,73 +144,5 @@ public actor ACPAgent {
         await connection.registerNotification("session/cancel") { _ in
             // Cooperative cancellation handled by prompt task in full implementation
         }
-    }
-}
-
-/// Stdio transport for agent process — reads stdin, writes stdout.
-public final class ACPProcessStdioTransport: ACPTransport, @unchecked Sendable {
-    private let connectedState = OSAllocatedUnfairLock(initialState: false)
-    private var messageStream: AsyncThrowingStream<Data, Error>!
-    private var messageContinuation: AsyncThrowingStream<Data, Error>.Continuation!
-    private let messageFilter = ACPMessageFilter()
-
-    public init() {
-        var continuation: AsyncThrowingStream<Data, Error>.Continuation!
-        messageStream = AsyncThrowingStream { continuation = $0 }
-        messageContinuation = continuation
-    }
-
-    public func connect() async throws {
-        let alreadyConnected = connectedState.withLock { state -> Bool in
-            if state { return true }
-            state = true
-            return false
-        }
-        guard !alreadyConnected else { return }
-        Task.detached { [weak self] in
-            await self?.readLoop()
-        }
-    }
-
-    public func disconnect() async {
-        connectedState.withLock { $0 = false }
-        messageContinuation.finish()
-    }
-
-    public func send(_ data: Data) async throws {
-        guard isConnectedFlag() else { throw ACPConnectionError.notConnected }
-        var payload = data
-        if payload.last != UInt8(ascii: "\n") {
-            payload.append(UInt8(ascii: "\n"))
-        }
-        FileHandle.standardOutput.write(payload)
-    }
-
-    public func receive() -> AsyncThrowingStream<Data, Error> {
-        messageStream
-    }
-
-    private func readLoop() async {
-        let handle = FileHandle.standardInput
-        var buffer = Data()
-        while isConnectedFlag() {
-            let chunk = handle.availableData
-            if chunk.isEmpty {
-                try? await Task.sleep(for: .milliseconds(10))
-                continue
-            }
-            buffer.append(chunk)
-            while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let lineData = buffer[..<newlineIndex]
-                buffer = buffer[(newlineIndex + 1)...]
-                if let filtered = messageFilter.filterMessage(Data(lineData)) {
-                    messageContinuation.yield(filtered)
-                }
-            }
-        }
-    }
-
-    private func isConnectedFlag() -> Bool {
-        connectedState.withLock { $0 }
     }
 }

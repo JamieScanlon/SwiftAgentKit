@@ -41,7 +41,7 @@ public actor ACPClient {
     public private(set) var sessionId: String?
     public private(set) var toolCallTimeout: TimeInterval?
 
-    private let connection: ACPConnection
+    private let connection: JSONRPCConnection
     private let delegate: any ACPClientDelegate
     private let clientInfo: ACPImplementation
     private let clientCapabilities: ACPClientCapabilities
@@ -52,7 +52,7 @@ public actor ACPClient {
 
     public init(
         name: String,
-        transport: any ACPTransport,
+        transport: any JSONRPCTransport,
         delegate: any ACPClientDelegate = DefaultACPClientDelegate(),
         clientInfo: ACPImplementation = ACPImplementation(name: "swiftagentkit-acp-client", version: "1.0.0"),
         clientCapabilities: ACPClientCapabilities = ACPClientCapabilities(
@@ -67,7 +67,7 @@ public actor ACPClient {
         self.clientInfo = clientInfo
         self.clientCapabilities = clientCapabilities
         self.toolCallTimeout = toolCallTimeout
-        self.connection = ACPConnection(transport: transport, logger: logger)
+        self.connection = JSONRPCConnection(transport: transport, logger: logger)
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .acp("ACPClient"),
             metadata: SwiftAgentKitLogging.metadata(("name", .string(name)))
@@ -92,7 +92,11 @@ public actor ACPClient {
             environment: environment,
             useShell: useShell
         )
-        let transport = ACPStdioTransport(inPipe: launched.inPipe, outPipe: launched.outPipe)
+        let transport = PipeStdioTransport(
+            inPipe: launched.inPipe,
+            outPipe: launched.outPipe,
+            logger: logger
+        )
         let client = ACPClient(
             name: name,
             transport: transport,

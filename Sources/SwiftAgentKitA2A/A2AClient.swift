@@ -184,7 +184,11 @@ public actor A2AClient {
             throw A2AClientError.notInitialized
         }
         
-        let jsonRPCRequest = JSONRPCRequest<MessageSendParams>(id: requestId, params: params)
+        let jsonRPCRequest = JSONRPCRequest(
+            id: .int(requestId),
+            method: "message/stream",
+            params: params
+        )
         requestId += 1
 //        let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Sendable] ?? [:]
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(jsonRPCRequest)) as? [String: Sendable] ?? [:]

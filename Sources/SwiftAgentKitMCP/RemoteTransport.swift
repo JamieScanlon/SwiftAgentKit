@@ -235,7 +235,7 @@ public actor RemoteTransport: Transport {
             }
             
             // Validate that it's a proper JSON-RPC response
-            if isValidJSONRPCMessage(processedData) {
+            if JSONRPCMessageValidator.isValidMessage(processedData) {
                 messageContinuation?.yield(processedData)
             } else {
                 logger.warning(
@@ -502,27 +502,6 @@ public actor RemoteTransport: Transport {
         }
         
         logger.debug("Background communication handler stopped")
-    }
-    
-    private nonisolated func isValidJSONRPCMessage(_ data: Data) -> Bool {
-        // First, check if it's valid JSON
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
-        }
-        
-        // Check for required JSON-RPC fields
-        guard let jsonrpc = json["jsonrpc"] as? String,
-              jsonrpc == "2.0" else {
-            return false
-        }
-        
-        // Check if it has either method (request) or result/error (response)
-        let hasMethod = json["method"] != nil
-        let hasResult = json["result"] != nil
-        let hasError = json["error"] != nil
-        
-        // Must have either method (for requests) or result/error (for responses)
-        return hasMethod || hasResult || hasError
     }
     
     /// Extracts JSON data from Server-Sent Events format

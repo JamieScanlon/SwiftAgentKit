@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SwiftAgentKit
 
 /// Handles Client-side ACP methods invoked by an Agent.
 public protocol ACPClientDelegate: Sendable {
@@ -20,19 +21,19 @@ public protocol ACPClientDelegate: Sendable {
 
 public extension ACPClientDelegate {
     func createTerminal(_ request: ACPCreateTerminalRequest) async throws -> ACPCreateTerminalResponse {
-        throw ACPConnectionError.methodNotFound("terminal/create")
+        throw JSONRPCConnectionError.methodNotFound("terminal/create")
     }
     func terminalOutput(_ request: ACPTerminalOutputRequest) async throws -> ACPTerminalOutputResponse {
-        throw ACPConnectionError.methodNotFound("terminal/output")
+        throw JSONRPCConnectionError.methodNotFound("terminal/output")
     }
     func waitForTerminalExit(_ request: ACPWaitForExitRequest) async throws -> ACPWaitForExitResponse {
-        throw ACPConnectionError.methodNotFound("terminal/wait_for_exit")
+        throw JSONRPCConnectionError.methodNotFound("terminal/wait_for_exit")
     }
     func killTerminal(_ request: ACPKillTerminalRequest) async throws -> ACPKillTerminalResponse {
-        throw ACPConnectionError.methodNotFound("terminal/kill")
+        throw JSONRPCConnectionError.methodNotFound("terminal/kill")
     }
     func releaseTerminal(_ request: ACPReleaseTerminalRequest) async throws -> ACPReleaseTerminalResponse {
-        throw ACPConnectionError.methodNotFound("terminal/release")
+        throw JSONRPCConnectionError.methodNotFound("terminal/release")
     }
 }
 
@@ -74,7 +75,7 @@ public struct DefaultACPClientDelegate: ACPClientDelegate {
     private func resolvePath(_ path: String) throws -> URL {
         let url = URL(fileURLWithPath: path).standardizedFileURL
         guard allowedRoots.contains(where: { url.path.hasPrefix($0.standardizedFileURL.path) }) else {
-            throw ACPConnectionError.invalidRequest
+            throw JSONRPCConnectionError.invalidRequest
         }
         return url
     }

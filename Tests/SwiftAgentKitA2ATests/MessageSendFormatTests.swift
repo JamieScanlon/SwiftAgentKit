@@ -9,6 +9,7 @@
 import Testing
 import Foundation
 import EasyJSON
+import SwiftAgentKit
 @testable import SwiftAgentKitA2A
 
 @Suite("A2A message/send Format Compliance Tests")
@@ -25,7 +26,12 @@ struct MessageSendFormatTests {
             messageId: UUID().uuidString
         )
         let params = MessageSendParams(message: message)
-        let rpcRequest = JSONRPCRequest(jsonrpc: "2.0", id: 1, params: params)
+        let rpcRequest = SwiftAgentKit.JSONRPCRequest(
+            jsonrpc: "2.0",
+            id: .int(1),
+            method: "message/send",
+            params: params
+        )
         
         // When - Encode to JSON
         let encoder = JSONEncoder()
@@ -189,7 +195,12 @@ struct MessageSendFormatTests {
             messageId: messageId
         )
         let params = MessageSendParams(message: message)
-        let rpcRequest = JSONRPCRequest(jsonrpc: "2.0", id: 7, params: params)
+        let rpcRequest = SwiftAgentKit.JSONRPCRequest(
+            jsonrpc: "2.0",
+            id: .int(7),
+            method: "message/send",
+            params: params
+        )
         
         // When
         let encoder = JSONEncoder()
@@ -340,17 +351,22 @@ struct MessageSendFormatTests {
             messageId: UUID().uuidString
         )
         let params = MessageSendParams(message: message)
-        let originalRequest = JSONRPCRequest(jsonrpc: "2.0", id: 42, params: params)
+        let originalRequest = SwiftAgentKit.JSONRPCRequest(
+            jsonrpc: "2.0",
+            id: .int(42),
+            method: "message/send",
+            params: params
+        )
         
         // When
         let encoder = JSONEncoder()
         let decoder = JSONDecoder()
         let data = try encoder.encode(originalRequest)
-        let decodedRequest = try decoder.decode(JSONRPCRequest<MessageSendParams>.self, from: data)
+        let decodedRequest = try decoder.decode(SwiftAgentKit.JSONRPCRequest<MessageSendParams>.self, from: data)
         
         // Then
         #expect(decodedRequest.jsonrpc == "2.0")
-        #expect(decodedRequest.id == 42)
+        #expect(decodedRequest.id == .int(42))
         #expect(decodedRequest.params.message.role == "user")
     }
     

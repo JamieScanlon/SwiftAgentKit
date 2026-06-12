@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SwiftAgentKit
 import Testing
 @testable import SwiftAgentKitACP
 
@@ -42,9 +43,9 @@ struct ACPAgentTests {
     @Test("Initialize returns agent capabilities")
     func initializeHandshake() async throws {
         let adapter = EchoACPAgentAdapter(name: "cap-agent", version: "3.0.0")
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
         let agent = ACPAgent(adapter: adapter, transport: agentTransport)
-        let client = ACPConnection(transport: clientTransport)
+        let client = JSONRPCConnection(transport: clientTransport)
 
         try await agent.run()
         defer { Task { await agent.stop() } }
@@ -76,9 +77,9 @@ struct ACPAgentTests {
             ) async throws -> ACPStopReason { .endTurn }
         }
 
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
         let agent = ACPAgent(adapter: AuthAdapter(), transport: agentTransport)
-        let client = ACPConnection(transport: clientTransport)
+        let client = JSONRPCConnection(transport: clientTransport)
 
         try await agent.run()
         defer { Task { await agent.stop() } }
@@ -106,9 +107,9 @@ struct ACPAgentTests {
 
     @Test("Session not found for unknown session prompt")
     func sessionNotFound() async throws {
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
         let agent = ACPAgent(adapter: EchoACPAgentAdapter(), transport: agentTransport)
-        let client = ACPConnection(transport: clientTransport)
+        let client = JSONRPCConnection(transport: clientTransport)
 
         try await agent.run()
         defer { Task { await agent.stop() } }
@@ -129,9 +130,9 @@ struct ACPAgentTests {
                 params: ACPPromptRequest(sessionId: "unknown-session", prompt: [.text("hi")])
             )
             Issue.record("Expected error for unknown session")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             if case .remoteError(let rpcError) = error {
-                #expect(rpcError.code == ACPErrorCode.internalError.rawValue)
+                #expect(rpcError.code == JSONRPCErrorCode.internalError.rawValue)
             } else {
                 Issue.record("Expected remoteError, got \(error)")
             }
@@ -153,9 +154,9 @@ struct ACPAgentTests {
             ) async throws -> ACPStopReason { .endTurn }
         }
 
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
         let agent = ACPAgent(adapter: AuthAdapter(), transport: agentTransport)
-        let client = ACPConnection(transport: clientTransport)
+        let client = JSONRPCConnection(transport: clientTransport)
 
         try await agent.run()
         defer { Task { await agent.stop() } }
@@ -172,7 +173,7 @@ struct ACPAgentTests {
                 params: ACPNewSessionRequest(cwd: "/tmp")
             )
             Issue.record("Expected authRequired")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             if case .remoteError(let rpcError) = error {
                 #expect(rpcError.code == ACPErrorCode.authRequired.rawValue)
             } else {

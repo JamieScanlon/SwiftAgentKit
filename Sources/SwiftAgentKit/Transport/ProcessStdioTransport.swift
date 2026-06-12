@@ -1,36 +1,23 @@
 //
-//  ACPStdioTransport.swift
-//  SwiftAgentKitACP
+//  ProcessStdioTransport.swift
+//  SwiftAgentKit
 //
 
 import Foundation
-import Logging
-import SwiftAgentKit
 import os
 
-/// Newline-delimited JSON-RPC transport over stdin/stdout pipes.
-public final class ACPStdioTransport: ACPTransport, @unchecked Sendable {
-    private let inPipe: Pipe
-    private let outPipe: Pipe
-    private let messageFilter: ACPMessageFilter
-    private let logger: Logging.Logger
+/// Stdio transport for agent process — reads stdin, writes stdout.
+public final class ProcessStdioTransport: JSONRPCTransport, @unchecked Sendable {
     private let connectedState = OSAllocatedUnfairLock(initialState: false)
     private var messageStream: AsyncThrowingStream<Data, Error>!
     private var messageContinuation: AsyncThrowingStream<Data, Error>.Continuation!
+    private let messageFilter: JSONRPCMessageFilter
 
-    public init(
-        inPipe: Pipe,
-        outPipe: Pipe,
-        messageFilter: ACPMessageFilter = ACPMessageFilter(),
-        logger: Logging.Logger? = nil
-    ) {
-        self.inPipe = inPipe
-        self.outPipe = outPipe
+    public init(messageFilter: JSONRPCMessageFilter = JSONRPCMessageFilter()) {
         self.messageFilter = messageFilter
-        self.logger = logger ?? SwiftAgentKitLogging.logger(for: .acp("ACPStdioTransport"))
         var continuation: AsyncThrowingStream<Data, Error>.Continuation!
-        self.messageStream = AsyncThrowingStream { continuation = $0 }
-        self.messageContinuation = continuation
+        messageStream = AsyncThrowingStream { continuation = $0 }
+        messageContinuation = continuation
     }
 
     public func connect() async throws {
@@ -47,17 +34,13 @@ public final class ACPStdioTransport: ACPTransport, @unchecked Sendable {
 
     public func disconnect() async {
         connectedState.withLock { $0 = false }
-        outPipe.fileHandleForReading.readabilityHandler = nil
         messageContinuation.finish()
     }
 
     public func send(_ data: Data) async throws {
-        guard isConnectedFlag() else { throw ACPConnectionError.notConnected }
-        var payload = data
-        if payload.last != UInt8(ascii: "\n") {
-            payload.append(UInt8(ascii: "\n"))
-        }
-        try inPipe.fileHandleForWriting.write(contentsOf: payload)
+        guard isConnectedFlag() else { throw JSONRPCConnectionError.notConnected }
+        let payload = NewlineDelimitedFraming.appendNewlineIfNeeded(data)
+        FileHandle.standardOutput.write(payload)
     }
 
     public func receive() -> AsyncThrowingStream<Data, Error> {
@@ -65,9 +48,8 @@ public final class ACPStdioTransport: ACPTransport, @unchecked Sendable {
     }
 
     private func readLoop() async {
-        let handle = outPipe.fileHandleForReading
+        let handle = FileHandle.standardInput
         var buffer = Data()
-
         while isConnectedFlag() {
             let chunk = handle.availableData
             if chunk.isEmpty {
@@ -75,11 +57,7 @@ public final class ACPStdioTransport: ACPTransport, @unchecked Sendable {
                 continue
             }
             buffer.append(chunk)
-
-            while let newlineIndex = buffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let lineData = buffer[..<newlineIndex]
-                buffer = buffer[(newlineIndex + 1)...]
-
+            for lineData in NewlineDelimitedFraming.splitLines(from: &buffer) {
                 if let filtered = messageFilter.filterMessage(Data(lineData)) {
                     messageContinuation.yield(filtered)
                 }

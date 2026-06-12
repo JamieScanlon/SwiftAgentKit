@@ -1,14 +1,15 @@
 //
-//  ACPConnectionTests.swift
+//  JSONRPCConnectionTests.swift
 //  SwiftAgentKitACPTests
 //
 
 import Foundation
+import SwiftAgentKit
 import Testing
 @testable import SwiftAgentKitACP
 
 @Suite("ACP Connection Lifecycle")
-struct ACPConnectionLifecycleTests {
+struct JSONRPCConnectionLifecycleTests {
     @Test("Client-agent lifecycle over memory transport")
     func lifecycle() async throws {
         let (client, agent, _, _) = ACPTestHelpers.pairedClientAndAgent()
@@ -23,9 +24,9 @@ struct ACPConnectionLifecycleTests {
 
     @Test("Call and response round-trip")
     func callResponse() async throws {
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
-        let server = ACPConnection(transport: agentTransport)
-        let client = ACPConnection(transport: clientTransport)
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
+        let server = JSONRPCConnection(transport: agentTransport)
+        let client = JSONRPCConnection(transport: clientTransport)
 
         await server.registerMethod("echo") { paramsData in
             let decoder = JSONDecoder()
@@ -48,9 +49,9 @@ struct ACPConnectionLifecycleTests {
 
     @Test("Notification delivery")
     func notificationDelivery() async throws {
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
-        let receiver = ACPConnection(transport: clientTransport)
-        let sender = ACPConnection(transport: agentTransport)
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
+        let receiver = JSONRPCConnection(transport: clientTransport)
+        let sender = JSONRPCConnection(transport: agentTransport)
 
         let received = LockBox(false)
         await receiver.registerNotification("session/update") { _ in
@@ -74,9 +75,9 @@ struct ACPConnectionLifecycleTests {
 
     @Test("Method not found returns error")
     func methodNotFound() async throws {
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
-        let server = ACPConnection(transport: agentTransport)
-        let client = ACPConnection(transport: clientTransport)
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
+        let server = JSONRPCConnection(transport: agentTransport)
+        let client = JSONRPCConnection(transport: clientTransport)
 
         try await server.connect()
         try await client.connect()
@@ -87,9 +88,9 @@ struct ACPConnectionLifecycleTests {
                 params: ACPPromptRequest(sessionId: "s1", prompt: [])
             )
             Issue.record("Expected remote error")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             if case .remoteError(let rpcError) = error {
-                #expect(rpcError.code == ACPErrorCode.methodNotFound.rawValue)
+                #expect(rpcError.code == JSONRPCErrorCode.methodNotFound.rawValue)
             } else {
                 Issue.record("Expected remoteError, got \(error)")
             }
@@ -101,23 +102,23 @@ struct ACPConnectionLifecycleTests {
 
     @Test("Call when not connected throws")
     func notConnected() async throws {
-        let transport = ACPMemoryTransport()
-        let connection = ACPConnection(transport: transport)
+        let transport = JSONRPCMemoryTransport()
+        let connection = JSONRPCConnection(transport: transport)
         do {
             let _: ACPInitializeResponse = try await connection.call(
                 "initialize",
                 params: ACPInitializeRequest(protocolVersion: 1)
             )
             Issue.record("Expected notConnected")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             #expect(ACPTestHelpers.connectionErrorsEqual(error, .notConnected))
         }
     }
 
     @Test("Mark initialized flag")
     func markInitialized() async throws {
-        let transport = ACPMemoryTransport()
-        let connection = ACPConnection(transport: transport)
+        let transport = JSONRPCMemoryTransport()
+        let connection = JSONRPCConnection(transport: transport)
         #expect(await connection.initialized == false)
         await connection.markInitialized()
         #expect(await connection.initialized == true)
@@ -125,10 +126,10 @@ struct ACPConnectionLifecycleTests {
 }
 
 @Suite("ACP Memory Transport")
-struct ACPMemoryTransportTests {
+struct JSONRPCMemoryTransportTests {
     @Test("Paired transports deliver messages")
     func pairedDelivery() async throws {
-        let (a, b) = ACPMemoryTransport.paired()
+        let (a, b) = JSONRPCMemoryTransport.paired()
         try await a.connect()
         try await b.connect()
 
@@ -149,11 +150,11 @@ struct ACPMemoryTransportTests {
 
     @Test("Send without connect throws")
     func sendWithoutConnect() async throws {
-        let transport = ACPMemoryTransport()
+        let transport = JSONRPCMemoryTransport()
         do {
             try await transport.send(Data("x".utf8))
             Issue.record("Expected notConnected")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             #expect(ACPTestHelpers.connectionErrorsEqual(error, .notConnected))
         }
     }

@@ -1,48 +1,18 @@
 //
-//  ACPConnection.swift
-//  SwiftAgentKitACP
+//  JSONRPCConnection.swift
+//  SwiftAgentKit
 //
 
 import Foundation
 import Logging
-import SwiftAgentKit
 
-public enum ACPConnectionError: Error, LocalizedError, Sendable {
-    case notConnected
-    case parseError
-    case invalidRequest
-    case methodNotFound(String)
-    case remoteError(ACPJSONRPCError)
-    case encodingFailed
-    case disconnected
-
-    public var errorDescription: String? {
-        switch self {
-        case .notConnected: return "ACP connection is not connected"
-        case .parseError: return "Failed to parse JSON-RPC message"
-        case .invalidRequest: return "Invalid JSON-RPC request"
-        case .methodNotFound(let method): return "Method not found: \(method)"
-        case .remoteError(let error): return "Remote error \(error.code): \(error.message)"
-        case .encodingFailed: return "Failed to encode JSON-RPC message"
-        case .disconnected: return "ACP connection disconnected"
-        }
-    }
-}
-
-public protocol ACPTransport: Sendable {
-    func connect() async throws
-    func disconnect() async
-    func send(_ data: Data) async throws
-    func receive() -> AsyncThrowingStream<Data, Error>
-}
-
-/// Bidirectional JSON-RPC dispatcher for ACP.
-public actor ACPConnection {
+/// Bidirectional JSON-RPC dispatcher.
+public actor JSONRPCConnection {
     public typealias MethodHandler = @Sendable (Data) async throws -> Data
     public typealias NotificationHandler = @Sendable (Data) async -> Void
 
-    private let transport: any ACPTransport
-    private let logger: Logger
+    private let transport: any JSONRPCTransport
+    private let logger: Logging.Logger
     private var nextRequestID: Int = 1
     private var pendingContinuations: [String: CheckedContinuation<Data, Error>] = [:]
     private var methodHandlers: [String: MethodHandler] = [:]
@@ -51,9 +21,9 @@ public actor ACPConnection {
     private var isConnected = false
     private var isInitialized = false
 
-    public init(transport: any ACPTransport, logger: Logger? = nil) {
+    public init(transport: any JSONRPCTransport, logger: Logging.Logger? = nil) {
         self.transport = transport
-        self.logger = logger ?? SwiftAgentKitLogging.logger(for: .acp("ACPConnection"))
+        self.logger = logger ?? SwiftAgentKitLogging.logger(for: .core("JSONRPCConnection"))
     }
 
     public var initialized: Bool { isInitialized }
@@ -76,7 +46,7 @@ public actor ACPConnection {
         readTask?.cancel()
         readTask = nil
         for (_, continuation) in pendingContinuations {
-            continuation.resume(throwing: ACPConnectionError.disconnected)
+            continuation.resume(throwing: JSONRPCConnectionError.disconnected)
         }
         pendingContinuations.removeAll()
         await transport.disconnect()
@@ -94,36 +64,40 @@ public actor ACPConnection {
         _ method: String,
         params: P
     ) async throws -> R {
-        guard isConnected else { throw ACPConnectionError.notConnected }
+        guard isConnected else { throw JSONRPCConnectionError.notConnected }
         let id = JSONRPCID.int(nextRequestID)
         nextRequestID += 1
-        let requestData = try ACPJSONRPCEncoding.encodeRequest(method, id: id, params: params)
+        let requestData = try JSONRPCEncoding.encodeRequest(method, id: id, params: params)
         let responseData = try await sendRequest(requestData, id: idKey(for: id))
         let decoder = JSONDecoder()
-        if let errorResponse = try? decoder.decode(ACPJSONRPCErrorResponse.self, from: responseData) {
-            throw ACPConnectionError.remoteError(errorResponse.error)
+        if let errorResponse = try? decoder.decode(JSONRPCErrorResponse.self, from: responseData) {
+            throw JSONRPCConnectionError.remoteError(errorResponse.error)
         }
         guard let object = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
               let resultObject = object["result"] else {
-            throw ACPConnectionError.parseError
+            throw JSONRPCConnectionError.parseError
         }
         let resultData = try JSONSerialization.data(withJSONObject: resultObject)
         return try decoder.decode(R.self, from: resultData)
     }
 
     public func notify<P: Encodable & Sendable>(_ method: String, params: P) async throws {
-        guard isConnected else { throw ACPConnectionError.notConnected }
-        let data = try ACPJSONRPCEncoding.encodeNotification(method, params: params)
+        guard isConnected else { throw JSONRPCConnectionError.notConnected }
+        let data = try JSONRPCEncoding.encodeNotification(method, params: params)
         try await sendRaw(data)
     }
 
     public func sendSuccess<R: Encodable & Sendable>(id: JSONRPCID, result: R) async throws {
-        let data = try ACPJSONRPCEncoding.encodeSuccess(id: id, result: result)
+        let data = try JSONRPCEncoding.encodeSuccess(id: id, result: result)
         try await sendRaw(data)
     }
 
-    public func sendError(id: JSONRPCID?, code: ACPErrorCode, message: String) async throws {
-        let data = try ACPJSONRPCEncoding.encodeError(id: id, code: code, message: message)
+    public func sendError(id: JSONRPCID?, code: JSONRPCErrorCode, message: String) async throws {
+        try await sendError(id: id, code: code.rawValue, message: message)
+    }
+
+    public func sendError(id: JSONRPCID?, code: Int, message: String) async throws {
+        let data = try JSONRPCEncoding.encodeError(id: id, code: code, message: message)
         try await sendRaw(data)
     }
 
@@ -157,12 +131,12 @@ public actor ACPConnection {
             }
         } catch {
             logger.debug(
-                "ACP read loop ended",
+                "JSON-RPC read loop ended",
                 metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
             )
         }
         for (_, continuation) in pendingContinuations {
-            continuation.resume(throwing: ACPConnectionError.disconnected)
+            continuation.resume(throwing: JSONRPCConnectionError.disconnected)
         }
         pendingContinuations.removeAll()
     }
@@ -176,18 +150,18 @@ public actor ACPConnection {
         for line in lines {
             guard let lineData = line.data(using: .utf8) else { continue }
             do {
-                let message = try ACPJSONRPCParsing.parse(lineData)
+                let message = try JSONRPCParsing.parse(lineData)
                 await dispatch(message)
             } catch {
                 logger.warning(
-                    "Failed to parse ACP message",
+                    "Failed to parse JSON-RPC message",
                     metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
                 )
             }
         }
     }
 
-    private func dispatch(_ message: ACPInboundMessage) async {
+    private func dispatch(_ message: JSONRPCInboundMessage) async {
         switch message {
         case .request(let id, let method, let params):
             await handleRequest(id: id, method: method, params: params)
@@ -201,12 +175,12 @@ public actor ACPConnection {
                     let responseData = try JSONSerialization.data(withJSONObject: wrapper)
                     continuation.resume(returning: responseData)
                 } catch {
-                    continuation.resume(throwing: ACPConnectionError.parseError)
+                    continuation.resume(throwing: JSONRPCConnectionError.parseError)
                 }
             }
         case .error(let id, let error):
             if let id, let continuation = pendingContinuations.removeValue(forKey: idKey(for: id)) {
-                continuation.resume(throwing: ACPConnectionError.remoteError(error))
+                continuation.resume(throwing: JSONRPCConnectionError.remoteError(error))
             }
         }
     }
@@ -222,10 +196,10 @@ public actor ACPConnection {
             let wrapper: [String: Any] = ["jsonrpc": "2.0", "id": idValue(for: id), "result": resultObject]
             let responseData = try JSONSerialization.data(withJSONObject: wrapper)
             try await sendRaw(responseData)
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             switch error {
             case .remoteError(let rpcError):
-                try? await sendError(id: id, code: ACPErrorCode(rawValue: rpcError.code) ?? .internalError, message: rpcError.message)
+                try? await sendError(id: id, code: rpcError.code, message: rpcError.message)
             default:
                 try? await sendError(id: id, code: .internalError, message: error.localizedDescription)
             }
@@ -251,50 +225,5 @@ public actor ACPConnection {
         case .int(let value): return value
         case .string(let value): return value
         }
-    }
-}
-
-/// In-memory transport for tests — paired read/write ends.
-public final class ACPMemoryTransport: ACPTransport, @unchecked Sendable {
-    private let outbound: AsyncStream<Data>.Continuation
-    private let inbound: AsyncThrowingStream<Data, Error>
-    private var peer: ACPMemoryTransport?
-    private var connected = false
-
-    public init() {
-        var inboundContinuation: AsyncThrowingStream<Data, Error>.Continuation!
-        inbound = AsyncThrowingStream { inboundContinuation = $0 }
-        var outboundContinuation: AsyncStream<Data>.Continuation!
-        _ = AsyncStream<Data> { outboundContinuation = $0 }
-        outbound = outboundContinuation
-        self.inboundContinuation = inboundContinuation
-    }
-
-    private var inboundContinuation: AsyncThrowingStream<Data, Error>.Continuation
-
-    public static func paired() -> (ACPMemoryTransport, ACPMemoryTransport) {
-        let a = ACPMemoryTransport()
-        let b = ACPMemoryTransport()
-        a.peer = b
-        b.peer = a
-        return (a, b)
-    }
-
-    public func connect() async throws {
-        connected = true
-    }
-
-    public func disconnect() async {
-        connected = false
-        inboundContinuation.finish()
-    }
-
-    public func send(_ data: Data) async throws {
-        guard connected, let peer else { throw ACPConnectionError.notConnected }
-        peer.inboundContinuation.yield(data)
-    }
-
-    public func receive() -> AsyncThrowingStream<Data, Error> {
-        inbound
     }
 }

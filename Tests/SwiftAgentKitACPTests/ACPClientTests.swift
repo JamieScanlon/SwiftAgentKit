@@ -5,6 +5,7 @@
 
 import EasyJSON
 import Foundation
+import SwiftAgentKit
 import Testing
 @testable import SwiftAgentKitACP
 
@@ -71,7 +72,7 @@ struct ACPClientTests {
 
     @Test("Prompt without session throws noSession")
     func promptWithoutSession() async throws {
-        let transport = ACPMemoryTransport()
+        let transport = JSONRPCMemoryTransport()
         let client = ACPClient(name: "lonely", transport: transport)
         do {
             _ = try await client.prompt("hi")

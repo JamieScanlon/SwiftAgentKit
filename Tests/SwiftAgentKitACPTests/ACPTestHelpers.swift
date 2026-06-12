@@ -5,6 +5,7 @@
 
 import EasyJSON
 import Foundation
+import SwiftAgentKit
 @testable import SwiftAgentKitACP
 
 /// Thread-safe box for async callback tests.
@@ -42,8 +43,8 @@ enum ACPTestHelpers {
     static func pairedClientAndAgent(
         adapter: any ACPAgentAdapter = EchoACPAgentAdapter(name: "test-agent"),
         delegate: any ACPClientDelegate = DefaultACPClientDelegate(allowedRoots: [URL(fileURLWithPath: "/")])
-    ) -> (ACPClient, ACPAgent, ACPMemoryTransport, ACPMemoryTransport) {
-        let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
+    ) -> (ACPClient, ACPAgent, JSONRPCMemoryTransport, JSONRPCMemoryTransport) {
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
         let agent = ACPAgent(adapter: adapter, transport: agentTransport)
         let client = ACPClient(name: "test-client", transport: clientTransport, delegate: delegate)
         return (client, agent, clientTransport, agentTransport)
@@ -71,7 +72,7 @@ enum ACPTestHelpers {
         return left == right
     }
 
-    static func connectionErrorsEqual(_ lhs: ACPConnectionError, _ rhs: ACPConnectionError) -> Bool {
+    static func connectionErrorsEqual(_ lhs: JSONRPCConnectionError, _ rhs: JSONRPCConnectionError) -> Bool {
         switch (lhs, rhs) {
         case (.notConnected, .notConnected): return true
         case (.parseError, .parseError): return true

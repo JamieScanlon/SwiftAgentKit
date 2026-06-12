@@ -1,19 +1,20 @@
 //
-//  ACPStdioTransportTests.swift
+//  PipeStdioTransportTests.swift
 //  SwiftAgentKitACPTests
 //
 
 import Foundation
+import SwiftAgentKit
 import Testing
 @testable import SwiftAgentKitACP
 
 @Suite("ACP Stdio Transport")
-struct ACPStdioTransportTests {
+struct PipeStdioTransportTests {
     @Test("Send writes newline-delimited payload to inPipe")
     func sendAppendsNewline() async throws {
         let inPipe = Pipe()
         let outPipe = Pipe()
-        let transport = ACPStdioTransport(inPipe: inPipe, outPipe: outPipe)
+        let transport = PipeStdioTransport(inPipe: inPipe, outPipe: outPipe)
         try await transport.connect()
 
         let payload = #"{"jsonrpc":"2.0","method":"notify"}"#.data(using: .utf8)!
@@ -30,7 +31,7 @@ struct ACPStdioTransportTests {
     func receiveFiltered() async throws {
         let inPipe = Pipe()
         let outPipe = Pipe()
-        let transport = ACPStdioTransport(inPipe: inPipe, outPipe: outPipe)
+        let transport = PipeStdioTransport(inPipe: inPipe, outPipe: outPipe)
         try await transport.connect()
 
         let jsonLine = #"{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}"#
@@ -54,18 +55,18 @@ struct ACPStdioTransportTests {
 
     @Test("Send without connect throws")
     func sendWithoutConnect() async throws {
-        let transport = ACPStdioTransport(inPipe: Pipe(), outPipe: Pipe())
+        let transport = PipeStdioTransport(inPipe: Pipe(), outPipe: Pipe())
         do {
             try await transport.send(Data("x".utf8))
             Issue.record("Expected notConnected")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             #expect(ACPTestHelpers.connectionErrorsEqual(error, .notConnected))
         }
     }
 
     @Test("Connect twice is idempotent")
     func connectTwice() async throws {
-        let transport = ACPStdioTransport(inPipe: Pipe(), outPipe: Pipe())
+        let transport = PipeStdioTransport(inPipe: Pipe(), outPipe: Pipe())
         try await transport.connect()
         try await transport.connect()
         await transport.disconnect()
@@ -73,21 +74,21 @@ struct ACPStdioTransportTests {
 }
 
 @Suite("ACP Process Stdio Transport")
-struct ACPProcessStdioTransportTests {
+struct ProcessStdioTransportTests {
     @Test("Connect and disconnect lifecycle")
     func lifecycle() async throws {
-        let transport = ACPProcessStdioTransport()
+        let transport = ProcessStdioTransport()
         try await transport.connect()
         await transport.disconnect()
     }
 
     @Test("Send without connect throws")
     func sendWithoutConnect() async throws {
-        let transport = ACPProcessStdioTransport()
+        let transport = ProcessStdioTransport()
         do {
             try await transport.send(Data("x".utf8))
             Issue.record("Expected notConnected")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             #expect(ACPTestHelpers.connectionErrorsEqual(error, .notConnected))
         }
     }

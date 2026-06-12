@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SwiftAgentKit
 import Testing
 @testable import SwiftAgentKitACP
 
@@ -50,7 +51,7 @@ struct DefaultACPClientDelegateTests {
         do {
             _ = try await delegate.readTextFile(ACPReadTextFileRequest(path: "/etc/hosts"))
             Issue.record("Expected invalidRequest")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             #expect(ACPTestHelpers.connectionErrorsEqual(error, .invalidRequest))
         }
     }
@@ -109,7 +110,7 @@ struct ACPClientDelegateTerminalStubTests {
         do {
             _ = try await delegate.createTerminal(ACPCreateTerminalRequest(sessionId: "s1"))
             Issue.record("Expected methodNotFound")
-        } catch let error as ACPConnectionError {
+        } catch let error as JSONRPCConnectionError {
             if case .methodNotFound(let method) = error {
                 #expect(method == "terminal/create")
             } else {

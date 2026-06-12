@@ -92,7 +92,22 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 - Property keys use `camelCase`; discriminator string values use `snake_case` per spec.
 - File paths must be absolute; line numbers are 1-based.
 - Reuse MCP-style stdio filtering for non-JSON log lines on stdout.
-- Bidirectional `ACPConnection` is the core abstraction; test with in-memory paired transports before stdio.
+- Bidirectional `JSONRPCConnection` is the core abstraction; test with `JSONRPCMemoryTransport.paired()` before stdio.
+
+## Shared infrastructure
+
+JSON-RPC wire types, connection dispatch, message filtering, and stdio transports are hoisted to **SwiftAgentKit** so ACP, MCP, and A2A share one implementation:
+
+| SwiftAgentKit type | Role in ACP |
+|--------------------|-------------|
+| `JSONRPCConnection` | Bidirectional request/response dispatcher used by `ACPClient` and `ACPAgent` |
+| `JSONRPCMemoryTransport` | In-process paired transport for tests |
+| `PipeStdioTransport` / `ProcessStdioTransport` | Newline-delimited stdio I/O |
+| `JSONRPCMessageFilter` | Filters non-JSON log lines from stdout |
+| `JSONRPCErrorCode` | Standard JSON-RPC error codes |
+| `ACPErrorCode` (SwiftAgentKitACP) | ACP-specific codes only (`authRequired`, `sessionNotFound`) |
+
+ACP does **not** replace the MCP SDK — MCP continues to use the external `MCP.Client`/`MCP.Server` types while sharing filter/validator/stdio helpers from core.
 
 ## Progress log
 

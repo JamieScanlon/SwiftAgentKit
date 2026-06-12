@@ -10,6 +10,10 @@ ACP standardizes editor-to-agent communication:
 - **Bidirectional**: agents call client methods for filesystem, terminal, and permission flows
 - **Session-based** prompt turns with streaming `session/update` notifications
 
+## Shared JSON-RPC infrastructure
+
+ACP uses shared JSON-RPC and stdio transport types from **SwiftAgentKit** (`JSONRPCConnection`, `PipeStdioTransport`, `ProcessStdioTransport`, `JSONRPCMessageFilter`). Protocol-specific models and error codes (`ACPErrorCode`) remain in SwiftAgentKitACP.
+
 ## Key Types
 
 - `ACPClient` — Client role; connects to external ACP agent subprocesses
@@ -28,7 +32,7 @@ import SwiftAgentKitACP
 SwiftAgentKitLogging.bootstrap()
 
 // In-process demo (memory transport)
-let (clientTransport, agentTransport) = ACPMemoryTransport.paired()
+let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
 let agent = ACPAgent(adapter: EchoACPAgentAdapter(), transport: agentTransport)
 let client = ACPClient(name: "demo", transport: clientTransport)
 

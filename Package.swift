@@ -144,7 +144,6 @@ let package = Package(
             name: "SwiftAgentKitACP",
             dependencies: [
                 "SwiftAgentKit",
-                .product(name: "NIO", package: "swift-nio"),
                 .product(name: "EasyJSON", package: "EasyJSON"),
                 .product(name: "Logging", package: "swift-log"),
             ],

@@ -519,14 +519,14 @@ public actor A2AServer {
         
         // Decode JSON-RPC request envelope (params are optional for this endpoint)
         // Per A2A spec 7.10, this endpoint can have optional AuthenticatedExtendedCardParams
-        let requestId: Int
+        let requestId: JSONRPCID
         do {
             // Try to decode as JSON-RPC request with optional params
             if let rpcRequest = try? req.content.decode(JSONRPCRequest<JSON>.self) {
                 requestId = rpcRequest.id
             } else {
                 // If it fails, default to id 1 (shouldn't happen with proper clients)
-                requestId = 1
+                requestId = .int(1)
             }
         }
         
@@ -818,7 +818,7 @@ public actor A2AServer {
 
 extension A2AServer {
     /// Helper to create a JSON-RPC 2.0 error response
-    fileprivate func jsonRPCErrorResponse(id: Int = 1, code: Int, message: String, status: HTTPResponseStatus) -> Response {
+    fileprivate func jsonRPCErrorResponse(id: JSONRPCID = .int(1), code: Int, message: String, status: HTTPResponseStatus) -> Response {
         let error = JSONRPCError(code: code, message: message)
         let errorResp = JSONRPCErrorResponse(jsonrpc: "2.0", id: id, error: error)
         let data = (try? encoder.encode(errorResp)) ?? Data()
@@ -826,7 +826,7 @@ extension A2AServer {
     }
     
     /// Helper to create a JSON-RPC 2.0 success response with a properly encoded result
-    fileprivate func jsonRPCSuccessResponse<T: Encodable>(id: Int, result: T) throws -> Response {
+    fileprivate func jsonRPCSuccessResponse<T: Encodable>(id: JSONRPCID, result: T) throws -> Response {
         // First encode the result to JSON data
         let resultData = try encoder.encode(result)
         
@@ -834,9 +834,14 @@ extension A2AServer {
         let resultObject = try JSONSerialization.jsonObject(with: resultData)
         
         // Create the RPC response envelope
+        let idValue: Any
+        switch id {
+        case .int(let value): idValue = value
+        case .string(let value): idValue = value
+        }
         let rpcResponse: [String: Any] = [
             "jsonrpc": "2.0",
-            "id": id,
+            "id": idValue,
             "result": resultObject
         ]
         
@@ -853,7 +858,7 @@ extension A2AServer {
 // MARK: - Logging Helpers
 
 private extension A2AServer {
-    nonisolated func metadataForMessageSend(params: MessageSendParams, requestId: Int, stream: Bool = false) -> Logger.Metadata {
+    nonisolated func metadataForMessageSend(params: MessageSendParams, requestId: JSONRPCID, stream: Bool = false) -> Logger.Metadata {
         var metadata = SwiftAgentKitLogging.metadata(
             ("requestId", .stringConvertible(requestId)),
             ("messageId", .string(params.message.messageId)),
@@ -867,7 +872,7 @@ private extension A2AServer {
         return metadata
     }
     
-    nonisolated func metadataForMessage(message: A2AMessage, requestId: Int) -> Logger.Metadata {
+    nonisolated func metadataForMessage(message: A2AMessage, requestId: JSONRPCID) -> Logger.Metadata {
         var metadata = SwiftAgentKitLogging.metadata(
             ("requestId", .stringConvertible(requestId)),
             ("messageId", .string(message.messageId)),
@@ -880,7 +885,7 @@ private extension A2AServer {
         return metadata
     }
     
-    nonisolated func metadataForTask(task: A2ATask, requestId: Int) -> Logger.Metadata {
+    nonisolated func metadataForTask(task: A2ATask, requestId: JSONRPCID) -> Logger.Metadata {
         var metadata = SwiftAgentKitLogging.metadata(
             ("requestId", .stringConvertible(requestId)),
             ("taskId", .string(task.id)),

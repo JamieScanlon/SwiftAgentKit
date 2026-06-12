@@ -2,6 +2,8 @@
 
 Swift implementation of the [Agent Client Protocol (ACP)](https://agentclientprotocol.com) for SwiftAgentKit.
 
+JSON-RPC envelopes, connection dispatch, and stdio transports come from the core **SwiftAgentKit** module (`JSONRPCConnection`, `PipeStdioTransport`, `JSONRPCMessageFilter`). This module provides ACP domain models, client/agent roles, and configuration.
+
 ## Quick Start
 
 ```swift
