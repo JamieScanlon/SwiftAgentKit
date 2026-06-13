@@ -14,7 +14,8 @@ struct JSONRPCConnectionLifecycleTests {
     func lifecycle() async throws {
         let (client, agent, _, _) = ACPTestHelpers.pairedClientAndAgent()
         async let runAgent: Void = try await agent.run()
-        try await client.connect(cwd: "/tmp")
+        try await client.connect()
+        try await client.newSession(cwd: "/tmp")
         let text = try await client.promptCollectingText("hello ACP")
         #expect(text.contains("Echo"))
         await client.shutdown()

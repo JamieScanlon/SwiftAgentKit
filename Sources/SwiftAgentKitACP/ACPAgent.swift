@@ -13,10 +13,44 @@ final class ACPAgentState: @unchecked Sendable {
     var sessions: [String: ACPSessionState] = [:]
     var isAuthenticated = false
     var negotiatedProtocolVersion: ACPProtocolVersion = 1
+    var lastClientCapabilities: ACPClientCapabilities?
 
     struct ACPSessionState: Sendable {
         let sessionId: String
-        let cwd: String
+        var cwd: String
+        var mcpServers: [ACPMcpServer]
+        var additionalDirectories: [String]
+        var title: String?
+        var updatedAt: String?
+        var isActive: Bool
+
+        init(
+            sessionId: String,
+            cwd: String,
+            mcpServers: [ACPMcpServer],
+            additionalDirectories: [String] = [],
+            title: String? = nil,
+            updatedAt: String? = nil,
+            isActive: Bool = true
+        ) {
+            self.sessionId = sessionId
+            self.cwd = cwd
+            self.mcpServers = mcpServers
+            self.additionalDirectories = additionalDirectories
+            self.title = title
+            self.updatedAt = updatedAt
+            self.isActive = isActive
+        }
+
+        func asSessionInfo() -> ACPSessionInfo {
+            ACPSessionInfo(
+                sessionId: sessionId,
+                cwd: cwd,
+                title: title,
+                updatedAt: updatedAt,
+                additionalDirectories: additionalDirectories.isEmpty ? nil : additionalDirectories
+            )
+        }
     }
 
     func withLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -48,6 +82,8 @@ public actor ACPAgent {
         }
     }
 
+    private static let defaultPageSize = 50
+
     private let adapter: any ACPAgentAdapter
     private let connection: JSONRPCConnection
     private let stateBox: ACPAgentState
@@ -76,6 +112,16 @@ public actor ACPAgent {
         logger.info("ACP agent stopped")
     }
 
+    /// Returns MCP servers supplied at session creation for the given session, if it exists.
+    public func mcpServers(forSessionId sessionId: String) async -> [ACPMcpServer]? {
+        stateBox.withLock { stateBox.sessions[sessionId]?.mcpServers }
+    }
+
+    /// Returns client capabilities from the most recent `initialize` handshake.
+    public func clientCapabilitiesFromInitialize() async -> ACPClientCapabilities? {
+        stateBox.withLock { stateBox.lastClientCapabilities }
+    }
+
     private func registerHandlers() async {
         let adapter = self.adapter
         let stateBox = self.stateBox
@@ -87,6 +133,7 @@ public actor ACPAgent {
             stateBox.withLock {
                 stateBox.negotiatedProtocolVersion = min(request.protocolVersion, 1)
                 stateBox.isAuthenticated = adapter.authMethods.isEmpty
+                stateBox.lastClientCapabilities = request.clientCapabilities
             }
             let response = ACPInitializeResponse(
                 protocolVersion: stateBox.negotiatedProtocolVersion,
@@ -106,28 +153,157 @@ public actor ACPAgent {
         }
 
         await connection.registerMethod("session/new") { paramsData in
-            let authenticated = stateBox.withLock {
-                stateBox.isAuthenticated || adapter.authMethods.isEmpty
-            }
-            guard authenticated else {
-                throw JSONRPCConnectionError.remoteError(
-                    JSONRPCError(code: ACPErrorCode.authRequired.rawValue, message: "Authentication required")
-                )
-            }
+            try Self.requireAuthenticated(stateBox: stateBox, adapter: adapter)
             let decoder = JSONDecoder()
             let request = try decoder.decode(ACPNewSessionRequest.self, from: paramsData)
             let sessionId = UUID().uuidString
             stateBox.withLock {
-                stateBox.sessions[sessionId] = ACPAgentState.ACPSessionState(sessionId: sessionId, cwd: request.cwd)
+                stateBox.sessions[sessionId] = ACPAgentState.ACPSessionState(
+                    sessionId: sessionId,
+                    cwd: request.cwd,
+                    mcpServers: request.mcpServers,
+                    additionalDirectories: request.additionalRoots ?? []
+                )
             }
             return try JSONEncoder().encode(ACPNewSessionResponse(sessionId: sessionId))
+        }
+
+        if adapter.agentCapabilities.sessionCapabilities.supportsList {
+            await connection.registerMethod("session/list") { paramsData in
+                try Self.requireAuthenticated(stateBox: stateBox, adapter: adapter)
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPListSessionsRequest.self, from: paramsData)
+
+                let knownSessions = stateBox.withLock {
+                    stateBox.sessions.values
+                        .filter { session in
+                            guard let cwd = request.cwd else { return true }
+                            return session.cwd == cwd
+                        }
+                        .sorted { $0.sessionId < $1.sessionId }
+                        .map { $0.asSessionInfo() }
+                }
+
+                let supplemented = try await adapter.supplementSessionList(
+                    cursor: request.cursor,
+                    cwd: request.cwd,
+                    knownSessions: knownSessions
+                )
+
+                let (page, nextCursor) = Self.paginateSessions(
+                    supplemented.sessions,
+                    cursor: request.cursor,
+                    pageSize: Self.defaultPageSize
+                )
+                let resolvedNextCursor = supplemented.nextCursor ?? nextCursor
+
+                return try JSONEncoder().encode(
+                    ACPListSessionsResponse(sessions: page, nextCursor: resolvedNextCursor)
+                )
+            }
+        }
+
+        if adapter.agentCapabilities.loadSession {
+            await connection.registerMethod("session/load") { paramsData in
+                try Self.requireAuthenticated(stateBox: stateBox, adapter: adapter)
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPLoadSessionRequest.self, from: paramsData)
+
+                let exists = stateBox.withLock { stateBox.sessions[request.sessionId] != nil }
+                guard exists else {
+                    throw ACPAgentError.sessionNotFound(request.sessionId)
+                }
+
+                let sessionId = request.sessionId
+                stateBox.withLock {
+                    guard var session = stateBox.sessions[sessionId] else { return }
+                    session.cwd = request.cwd
+                    session.mcpServers = request.mcpServers
+                    session.additionalDirectories = request.additionalDirectories ?? []
+                    session.isActive = true
+                    stateBox.sessions[sessionId] = session
+                }
+
+                try await adapter.loadSessionHistory(sessionId: sessionId) { update in
+                    try await connection.notify(
+                        "session/update",
+                        params: ACPSessionUpdateNotification(sessionId: sessionId, update: update)
+                    )
+                }
+
+                return try JSONEncoder().encode(ACPLoadSessionResponse())
+            }
+        }
+
+        if adapter.agentCapabilities.sessionCapabilities.supportsResume {
+            await connection.registerMethod("session/resume") { paramsData in
+                try Self.requireAuthenticated(stateBox: stateBox, adapter: adapter)
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPResumeSessionRequest.self, from: paramsData)
+
+                let exists = stateBox.withLock { stateBox.sessions[request.sessionId] != nil }
+                guard exists else {
+                    throw ACPAgentError.sessionNotFound(request.sessionId)
+                }
+
+                stateBox.withLock {
+                    guard var session = stateBox.sessions[request.sessionId] else { return }
+                    session.cwd = request.cwd
+                    if let mcpServers = request.mcpServers {
+                        session.mcpServers = mcpServers
+                    }
+                    session.additionalDirectories = request.additionalDirectories ?? []
+                    session.isActive = true
+                    stateBox.sessions[request.sessionId] = session
+                }
+
+                return try JSONEncoder().encode(ACPResumeSessionResponse())
+            }
+        }
+
+        if adapter.agentCapabilities.sessionCapabilities.supportsClose {
+            await connection.registerMethod("session/close") { paramsData in
+                try Self.requireAuthenticated(stateBox: stateBox, adapter: adapter)
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPCloseSessionRequest.self, from: paramsData)
+
+                let exists = stateBox.withLock { stateBox.sessions[request.sessionId] != nil }
+                guard exists else {
+                    throw ACPAgentError.sessionNotFound(request.sessionId)
+                }
+
+                stateBox.withLock {
+                    guard var session = stateBox.sessions[request.sessionId] else { return }
+                    session.isActive = false
+                    stateBox.sessions[request.sessionId] = session
+                }
+
+                try await adapter.onSessionClosed(sessionId: request.sessionId)
+                return try JSONEncoder().encode(ACPCloseSessionResponse())
+            }
+        }
+
+        if adapter.agentCapabilities.sessionCapabilities.supportsDelete {
+            await connection.registerMethod("session/delete") { paramsData in
+                try Self.requireAuthenticated(stateBox: stateBox, adapter: adapter)
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPDeleteSessionRequest.self, from: paramsData)
+
+                let removed = stateBox.withLock { stateBox.sessions.removeValue(forKey: request.sessionId) != nil }
+                guard removed else {
+                    throw ACPAgentError.sessionNotFound(request.sessionId)
+                }
+
+                try await adapter.onSessionDeleted(sessionId: request.sessionId)
+                return try JSONEncoder().encode(ACPDeleteSessionResponse())
+            }
         }
 
         await connection.registerMethod("session/prompt") { paramsData in
             let decoder = JSONDecoder()
             let request = try decoder.decode(ACPPromptRequest.self, from: paramsData)
-            let exists = stateBox.withLock { stateBox.sessions[request.sessionId] != nil }
-            guard exists else {
+            let session = stateBox.withLock { stateBox.sessions[request.sessionId] }
+            guard let session, session.isActive else {
                 throw ACPAgentError.sessionNotFound(request.sessionId)
             }
 
@@ -144,5 +320,38 @@ public actor ACPAgent {
         await connection.registerNotification("session/cancel") { _ in
             // Cooperative cancellation handled by prompt task in full implementation
         }
+    }
+
+    private static func requireAuthenticated(stateBox: ACPAgentState, adapter: any ACPAgentAdapter) throws {
+        let authenticated = stateBox.withLock {
+            stateBox.isAuthenticated || adapter.authMethods.isEmpty
+        }
+        guard authenticated else {
+            throw JSONRPCConnectionError.remoteError(
+                JSONRPCError(code: ACPErrorCode.authRequired.rawValue, message: "Authentication required")
+            )
+        }
+    }
+
+    private static func paginateSessions(
+        _ sessions: [ACPSessionInfo],
+        cursor: String?,
+        pageSize: Int
+    ) -> (page: [ACPSessionInfo], nextCursor: String?) {
+        let startIndex: Int
+        if let cursor, let index = sessions.firstIndex(where: { $0.sessionId == cursor }) {
+            startIndex = index + 1
+        } else {
+            startIndex = 0
+        }
+
+        guard startIndex < sessions.count else {
+            return ([], nil)
+        }
+
+        let endIndex = min(startIndex + pageSize, sessions.count)
+        let page = Array(sessions[startIndex..<endIndex])
+        let nextCursor = endIndex < sessions.count ? sessions[endIndex - 1].sessionId : nil
+        return (page, nextCursor)
     }
 }

@@ -68,14 +68,40 @@ public struct ACPMcpCapabilities: Codable, Sendable, Equatable {
     }
 }
 
-public struct ACPSessionCapabilities: Codable, Sendable, Equatable {
-    public var load: Bool?
-    public var list: Bool?
-    public var resume: Bool?
-    public var delete: Bool?
-    public var close: Bool?
-    public var setMode: Bool?
-    public var setConfigOption: Bool?
+/// Empty-object capability marker per ACP spec (`{}` means supported).
+public struct ACPCapabilityMarker: Codable, Sendable {
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case meta = "_meta"
+    }
+
+    public init(meta: JSON? = nil) {
+        self.meta = meta
+    }
+
+    public init(from decoder: Decoder) throws {
+        if let container = try? decoder.container(keyedBy: CodingKeys.self) {
+            meta = try container.decodeIfPresent(JSON.self, forKey: .meta)
+        } else {
+            meta = nil
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encodeIfPresent(meta, forKey: .meta)
+    }
+}
+
+public struct ACPSessionCapabilities: Codable, Sendable {
+    public var load: ACPCapabilityMarker?
+    public var list: ACPCapabilityMarker?
+    public var resume: ACPCapabilityMarker?
+    public var delete: ACPCapabilityMarker?
+    public var close: ACPCapabilityMarker?
+    public var setMode: ACPCapabilityMarker?
+    public var setConfigOption: ACPCapabilityMarker?
 
     enum CodingKeys: String, CodingKey {
         case load, list, resume, delete, close
@@ -84,13 +110,13 @@ public struct ACPSessionCapabilities: Codable, Sendable, Equatable {
     }
 
     public init(
-        load: Bool? = nil,
-        list: Bool? = nil,
-        resume: Bool? = nil,
-        delete: Bool? = nil,
-        close: Bool? = nil,
-        setMode: Bool? = nil,
-        setConfigOption: Bool? = nil
+        load: ACPCapabilityMarker? = nil,
+        list: ACPCapabilityMarker? = nil,
+        resume: ACPCapabilityMarker? = nil,
+        delete: ACPCapabilityMarker? = nil,
+        close: ACPCapabilityMarker? = nil,
+        setMode: ACPCapabilityMarker? = nil,
+        setConfigOption: ACPCapabilityMarker? = nil
     ) {
         self.load = load
         self.list = list
@@ -100,7 +126,51 @@ public struct ACPSessionCapabilities: Codable, Sendable, Equatable {
         self.setMode = setMode
         self.setConfigOption = setConfigOption
     }
+
+    public var supportsList: Bool { list != nil }
+    public var supportsResume: Bool { resume != nil }
+    public var supportsDelete: Bool { delete != nil }
+    public var supportsClose: Bool { close != nil }
+    public var supportsSetMode: Bool { setMode != nil }
+    public var supportsSetConfigOption: Bool { setConfigOption != nil }
+
+    public static func withList() -> ACPSessionCapabilities {
+        ACPSessionCapabilities(list: ACPCapabilityMarker())
+    }
+
+    public static func withResume() -> ACPSessionCapabilities {
+        ACPSessionCapabilities(resume: ACPCapabilityMarker())
+    }
+
+    public static func withClose() -> ACPSessionCapabilities {
+        ACPSessionCapabilities(close: ACPCapabilityMarker())
+    }
+
+    public static func withDelete() -> ACPSessionCapabilities {
+        ACPSessionCapabilities(delete: ACPCapabilityMarker())
+    }
+
+    public static func fullLifecycle() -> ACPSessionCapabilities {
+        ACPSessionCapabilities(
+            list: ACPCapabilityMarker(),
+            resume: ACPCapabilityMarker(),
+            delete: ACPCapabilityMarker(),
+            close: ACPCapabilityMarker()
+        )
+    }
+
+    public static func == (lhs: ACPSessionCapabilities, rhs: ACPSessionCapabilities) -> Bool {
+        lhs.supportsList == rhs.supportsList
+            && lhs.supportsResume == rhs.supportsResume
+            && lhs.supportsDelete == rhs.supportsDelete
+            && lhs.supportsClose == rhs.supportsClose
+            && lhs.supportsSetMode == rhs.supportsSetMode
+            && lhs.supportsSetConfigOption == rhs.supportsSetConfigOption
+            && (lhs.load != nil) == (rhs.load != nil)
+    }
 }
+
+extension ACPSessionCapabilities: Equatable {}
 
 public struct ACPAuthCapabilities: Codable, Sendable, Equatable {
     public var logout: Bool?
@@ -250,6 +320,13 @@ public struct ACPMcpServer: Codable, Sendable, Equatable {
         self.args = args
         self.env = env
     }
+
+    public init(name: String, command: String, arguments: [String], environment: [String: String] = [:]) {
+        self.name = name
+        self.command = command
+        self.args = arguments
+        self.env = environment.isEmpty ? nil : environment
+    }
 }
 
 // MARK: - Session
@@ -385,6 +462,235 @@ public struct ACPSessionCancelParams: Codable, Sendable {
     }
 }
 
+public struct ACPSessionInfo: Codable, Sendable {
+    public var sessionId: String
+    public var cwd: String
+    public var title: String?
+    public var updatedAt: String?
+    public var additionalDirectories: [String]?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId, cwd, title, updatedAt, additionalDirectories
+        case meta = "_meta"
+    }
+
+    public init(
+        sessionId: String,
+        cwd: String,
+        title: String? = nil,
+        updatedAt: String? = nil,
+        additionalDirectories: [String]? = nil,
+        meta: JSON? = nil
+    ) {
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.title = title
+        self.updatedAt = updatedAt
+        self.additionalDirectories = additionalDirectories
+        self.meta = meta
+    }
+}
+
+public struct ACPSessionInfoUpdate: Codable, Sendable {
+    public var title: String?
+    public var updatedAt: String?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case title, updatedAt
+        case meta = "_meta"
+    }
+
+    public init(title: String? = nil, updatedAt: String? = nil, meta: JSON? = nil) {
+        self.title = title
+        self.updatedAt = updatedAt
+        self.meta = meta
+    }
+}
+
+extension ACPSessionInfoUpdate: Equatable {
+    public static func == (lhs: ACPSessionInfoUpdate, rhs: ACPSessionInfoUpdate) -> Bool {
+        lhs.title == rhs.title && lhs.updatedAt == rhs.updatedAt
+    }
+}
+
+public struct ACPListSessionsRequest: Codable, Sendable {
+    public var cursor: String?
+    public var cwd: String?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case cursor, cwd
+        case meta = "_meta"
+    }
+
+    public init(cursor: String? = nil, cwd: String? = nil, meta: JSON? = nil) {
+        self.cursor = cursor
+        self.cwd = cwd
+        self.meta = meta
+    }
+}
+
+public struct ACPListSessionsResponse: Codable, Sendable {
+    public var sessions: [ACPSessionInfo]
+    public var nextCursor: String?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case sessions, nextCursor
+        case meta = "_meta"
+    }
+
+    public init(sessions: [ACPSessionInfo], nextCursor: String? = nil, meta: JSON? = nil) {
+        self.sessions = sessions
+        self.nextCursor = nextCursor
+        self.meta = meta
+    }
+}
+
+public struct ACPLoadSessionRequest: Codable, Sendable {
+    public var sessionId: String
+    public var cwd: String
+    public var mcpServers: [ACPMcpServer]
+    public var additionalDirectories: [String]?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId, cwd, mcpServers, additionalDirectories
+        case meta = "_meta"
+    }
+
+    public init(
+        sessionId: String,
+        cwd: String,
+        mcpServers: [ACPMcpServer] = [],
+        additionalDirectories: [String]? = nil,
+        meta: JSON? = nil
+    ) {
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.mcpServers = mcpServers
+        self.additionalDirectories = additionalDirectories
+        self.meta = meta
+    }
+}
+
+public struct ACPLoadSessionResponse: Codable, Sendable {
+    public var configOptions: [ACPSessionConfigOption]?
+    public var mode: ACPSessionModeState?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case configOptions, mode
+        case meta = "_meta"
+    }
+
+    public init(configOptions: [ACPSessionConfigOption]? = nil, mode: ACPSessionModeState? = nil, meta: JSON? = nil) {
+        self.configOptions = configOptions
+        self.mode = mode
+        self.meta = meta
+    }
+}
+
+public struct ACPResumeSessionRequest: Codable, Sendable {
+    public var sessionId: String
+    public var cwd: String
+    public var mcpServers: [ACPMcpServer]?
+    public var additionalDirectories: [String]?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId, cwd, mcpServers, additionalDirectories
+        case meta = "_meta"
+    }
+
+    public init(
+        sessionId: String,
+        cwd: String,
+        mcpServers: [ACPMcpServer]? = nil,
+        additionalDirectories: [String]? = nil,
+        meta: JSON? = nil
+    ) {
+        self.sessionId = sessionId
+        self.cwd = cwd
+        self.mcpServers = mcpServers
+        self.additionalDirectories = additionalDirectories
+        self.meta = meta
+    }
+}
+
+public struct ACPResumeSessionResponse: Codable, Sendable {
+    public var configOptions: [ACPSessionConfigOption]?
+    public var mode: ACPSessionModeState?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case configOptions, mode
+        case meta = "_meta"
+    }
+
+    public init(configOptions: [ACPSessionConfigOption]? = nil, mode: ACPSessionModeState? = nil, meta: JSON? = nil) {
+        self.configOptions = configOptions
+        self.mode = mode
+        self.meta = meta
+    }
+}
+
+public struct ACPCloseSessionRequest: Codable, Sendable {
+    public var sessionId: String
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId
+        case meta = "_meta"
+    }
+
+    public init(sessionId: String, meta: JSON? = nil) {
+        self.sessionId = sessionId
+        self.meta = meta
+    }
+}
+
+public struct ACPCloseSessionResponse: Codable, Sendable {
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case meta = "_meta"
+    }
+
+    public init(meta: JSON? = nil) {
+        self.meta = meta
+    }
+}
+
+public struct ACPDeleteSessionRequest: Codable, Sendable {
+    public var sessionId: String
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case sessionId
+        case meta = "_meta"
+    }
+
+    public init(sessionId: String, meta: JSON? = nil) {
+        self.sessionId = sessionId
+        self.meta = meta
+    }
+}
+
+public struct ACPDeleteSessionResponse: Codable, Sendable {
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case meta = "_meta"
+    }
+
+    public init(meta: JSON? = nil) {
+        self.meta = meta
+    }
+}
+
 // MARK: - Content blocks
 
 public enum ACPContentBlock: Codable, Sendable, Equatable {
@@ -510,9 +816,10 @@ public enum ACPSessionUpdate: Codable, Sendable, Equatable {
     case toolCall(toolCallId: String, title: String?, kind: String?, status: String?)
     case toolCallUpdate(toolCallId: String, status: String?, content: [ACPContentBlock]?)
     case usageUpdate(used: Int, size: Int, cost: ACPUsageCost?)
+    case sessionInfoUpdate(ACPSessionInfoUpdate)
 
     enum CodingKeys: String, CodingKey {
-        case sessionUpdate, messageId, content, entries, toolCallId, title, kind, status, used, size, cost
+        case sessionUpdate, messageId, content, entries, toolCallId, title, kind, status, used, size, cost, updatedAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -545,6 +852,8 @@ public enum ACPSessionUpdate: Codable, Sendable, Equatable {
                 size: try container.decode(Int.self, forKey: .size),
                 cost: try container.decodeIfPresent(ACPUsageCost.self, forKey: .cost)
             )
+        case "session_info_update":
+            self = .sessionInfoUpdate(try ACPSessionInfoUpdate(from: decoder))
         default:
             throw DecodingError.dataCorruptedError(forKey: .sessionUpdate, in: container, debugDescription: "Unknown session update: \(kind)")
         }
@@ -576,6 +885,9 @@ public enum ACPSessionUpdate: Codable, Sendable, Equatable {
             try container.encode(used, forKey: .used)
             try container.encode(size, forKey: .size)
             try container.encodeIfPresent(cost, forKey: .cost)
+        case .sessionInfoUpdate(let info):
+            try container.encode("session_info_update", forKey: .sessionUpdate)
+            try info.encode(to: encoder)
         }
     }
 }

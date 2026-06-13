@@ -26,7 +26,8 @@ struct ACPExample {
         )
 
         async let agentTask: Void = try await agent.run()
-        try await client.connect(cwd: FileManager.default.currentDirectoryPath)
+        try await client.connect()
+        try await client.newSession(cwd: FileManager.default.currentDirectoryPath)
 
         let response = try await client.promptCollectingText("What is SwiftAgentKitACP?")
         logger.info("Agent response: \(response)")

@@ -57,9 +57,28 @@ enum ACPTestHelpers {
     ) async throws -> (ACPClient, ACPAgent) {
         let (client, agent, _, _) = pairedClientAndAgent(adapter: adapter, delegate: delegate)
         async let agentRun: Void = try await agent.run()
-        try await client.connect(cwd: cwd)
+        try await client.connect()
+        try await client.newSession(cwd: cwd)
         _ = try await agentRun
         return (client, agent)
+    }
+
+    static func registerMinimalAgentStub(on connection: JSONRPCConnection) async {
+        await connection.registerMethod("initialize") { paramsData in
+            let decoder = JSONDecoder()
+            let request = try decoder.decode(ACPInitializeRequest.self, from: paramsData)
+            let response = ACPInitializeResponse(
+                protocolVersion: min(request.protocolVersion, 1),
+                agentCapabilities: ACPAgentCapabilities(),
+                agentInfo: ACPImplementation(name: "stub-agent", version: "1.0.0"),
+                authMethods: []
+            )
+            await connection.markInitialized()
+            return try JSONEncoder().encode(response)
+        }
+        await connection.registerMethod("session/new") { _ in
+            try JSONEncoder().encode(ACPNewSessionResponse(sessionId: "stub-session"))
+        }
     }
 
     static func jsonEqual(_ lhs: JSON?, _ rhs: JSON?) -> Bool {
@@ -92,6 +111,7 @@ enum ACPTestHelpers {
         case (.noSession, .noSession): return true
         case (.initializationFailed, .initializationFailed): return true
         case (.bootFailed(let a), .bootFailed(let b)): return a == b
+        case (.capabilityNotSupported(let a), .capabilityNotSupported(let b)): return a == b
         default: return false
         }
     }
@@ -103,5 +123,48 @@ enum ACPTestHelpers {
         case (.sessionNotFound(let a), .sessionNotFound(let b)): return a == b
         default: return false
         }
+    }
+}
+
+/// Records terminal delegate invocations for capability gating tests.
+final class RecordingTerminalDelegate: ACPClientDelegate, @unchecked Sendable {
+    let createTerminalCallCount = LockBox(0)
+    let terminalId: String
+
+    init(terminalId: String = "term-test-1") {
+        self.terminalId = terminalId
+    }
+
+    func readTextFile(_ request: ACPReadTextFileRequest) async throws -> ACPReadTextFileResponse {
+        ACPReadTextFileResponse(content: "")
+    }
+
+    func writeTextFile(_ request: ACPWriteTextFileRequest) async throws -> ACPWriteTextFileResponse {
+        ACPWriteTextFileResponse()
+    }
+
+    func requestPermission(_ request: ACPRequestPermissionRequest) async throws -> ACPRequestPermissionResponse {
+        ACPRequestPermissionResponse(outcome: .cancelled)
+    }
+
+    func createTerminal(_ request: ACPCreateTerminalRequest) async throws -> ACPCreateTerminalResponse {
+        createTerminalCallCount.value += 1
+        return ACPCreateTerminalResponse(terminalId: terminalId)
+    }
+
+    func terminalOutput(_ request: ACPTerminalOutputRequest) async throws -> ACPTerminalOutputResponse {
+        ACPTerminalOutputResponse(output: "")
+    }
+
+    func waitForTerminalExit(_ request: ACPWaitForExitRequest) async throws -> ACPWaitForExitResponse {
+        ACPWaitForExitResponse(exitStatus: ACPTerminalExitStatus(exitCode: 0))
+    }
+
+    func killTerminal(_ request: ACPKillTerminalRequest) async throws -> ACPKillTerminalResponse {
+        ACPKillTerminalResponse()
+    }
+
+    func releaseTerminal(_ request: ACPReleaseTerminalRequest) async throws -> ACPReleaseTerminalResponse {
+        ACPReleaseTerminalResponse()
     }
 }

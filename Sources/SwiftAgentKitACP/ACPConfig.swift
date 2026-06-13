@@ -14,6 +14,8 @@ public struct ACPConfig: Sendable {
         public let environment: JSON
         public let useShell: Bool
         public let toolCallTimeout: TimeInterval?
+        /// When true, the booted client advertises `clientCapabilities.terminal` during `initialize`.
+        public let advertiseTerminal: Bool
 
         public init(
             name: String,
@@ -21,7 +23,8 @@ public struct ACPConfig: Sendable {
             arguments: [String],
             environment: JSON,
             useShell: Bool = false,
-            toolCallTimeout: TimeInterval? = nil
+            toolCallTimeout: TimeInterval? = nil,
+            advertiseTerminal: Bool = false
         ) {
             self.name = name
             self.command = command
@@ -29,10 +32,11 @@ public struct ACPConfig: Sendable {
             self.environment = environment
             self.useShell = useShell
             self.toolCallTimeout = toolCallTimeout
+            self.advertiseTerminal = advertiseTerminal
         }
 
         enum CodingKeys: String, CodingKey {
-            case name, command, arguments, environment, useShell, toolCallTimeout
+            case name, command, arguments, environment, useShell, toolCallTimeout, advertiseTerminal
         }
 
         public init(from decoder: Decoder) throws {
@@ -43,12 +47,15 @@ public struct ACPConfig: Sendable {
             environment = try c.decode(JSON.self, forKey: .environment)
             useShell = try c.decodeIfPresent(Bool.self, forKey: .useShell) ?? false
             toolCallTimeout = try c.decodeIfPresent(TimeInterval.self, forKey: .toolCallTimeout)
+            advertiseTerminal = try c.decodeIfPresent(Bool.self, forKey: .advertiseTerminal) ?? false
         }
     }
 
     public var agentBootCalls: [ServerBootCall] = []
     public var globalEnvironment: JSON = .object([:])
     public var toolCallTimeout: TimeInterval? = nil
+    /// MCP server descriptors forwarded to ACP agents at `session/new` when clients are booted from config.
+    public var mcpBootServers: [ACPMcpServer] = []
 }
 
 public struct ACPConfigHelper {
@@ -77,6 +84,11 @@ public struct ACPConfigHelper {
         if let bootCalls = json["agentBootCalls"] as? [[String: Any]] {
             let bootData = try JSONSerialization.data(withJSONObject: bootCalls)
             config.agentBootCalls = try JSONDecoder().decode([ACPConfig.ServerBootCall].self, from: bootData)
+        }
+
+        if let mcpBootServers = json["mcpBootServers"] as? [[String: Any]] {
+            let mcpData = try JSONSerialization.data(withJSONObject: mcpBootServers)
+            config.mcpBootServers = try JSONDecoder().decode([ACPMcpServer].self, from: mcpData)
         }
 
         return config

@@ -52,13 +52,13 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 | `authenticate` | sends | handles | ✅ |
 | `logout` | sends | handles | ⬜ |
 | `session/new` | sends | handles | ✅ |
-| `session/load` | sends | handles | ⬜ |
-| `session/list` | sends | handles | ⬜ |
-| `session/resume` | sends | handles | ⬜ |
+| `session/load` | sends | handles | ✅ |
+| `session/list` | sends | handles | ✅ |
+| `session/resume` | sends | handles | ✅ |
 | `session/prompt` | sends | handles | ✅ |
 | `session/cancel` | notification | handles | ✅ |
-| `session/close` | sends | handles | ⬜ |
-| `session/delete` | sends | handles | ⬜ |
+| `session/close` | sends | handles | ✅ |
+| `session/delete` | sends | handles | ✅ |
 | `session/set_mode` | sends | handles | ⬜ |
 | `session/set_config_option` | sends | handles | ⬜ |
 
@@ -69,11 +69,11 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 | `fs/read_text_file` | calls | handles | ✅ |
 | `fs/write_text_file` | calls | handles | ✅ |
 | `session/request_permission` | calls | handles | ✅ |
-| `terminal/create` | calls | handles | 🚧 stub |
-| `terminal/output` | calls | handles | 🚧 stub |
-| `terminal/wait_for_exit` | calls | handles | 🚧 stub |
-| `terminal/kill` | calls | handles | 🚧 stub |
-| `terminal/release` | calls | handles | 🚧 stub |
+| `terminal/create` | calls | handles | ✅ capability-gated |
+| `terminal/output` | calls | handles | ✅ capability-gated |
+| `terminal/wait_for_exit` | calls | handles | ✅ capability-gated |
+| `terminal/kill` | calls | handles | ✅ capability-gated |
+| `terminal/release` | calls | handles | ✅ capability-gated |
 
 ### Notifications
 
@@ -84,8 +84,32 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 ## Open questions
 
 - **Auth methods**: Per-agent; `authenticate` implemented but no built-in OAuth flows yet.
-- **Terminal capability**: Stub handlers return `methodNotFound` unless delegate implements terminal methods.
-- **mcpServers wiring**: Document follow-up to connect `SwiftAgentKitMCP` when agent requests MCP servers at session creation.
+- **mcpServers wiring**: Wired via `ACPSessionMcpServersProvider` and `ACPConfig.mcpBootServers`; see `SwiftAgentKitAdapters` bridge from `MCPManager.localServerBootCalls()`.
+
+## Terminal capability (Agent → Client)
+
+Terminal RPCs flow **agent → client**: during prompt turns the agent subprocess invokes client methods; the host (ACP client) implements them via `ACPClientDelegate`. Capability is negotiated at `initialize` through `ACPClientCapabilities.terminal` (default **`false`**).
+
+| RPC | Purpose |
+|-----|---------|
+| `terminal/create` | Start a shell command; returns `terminalId` |
+| `terminal/output` | Read stdout/stderr from a running terminal |
+| `terminal/wait_for_exit` | Block until the process exits |
+| `terminal/kill` | Send signal to terminate |
+| `terminal/release` | Release terminal resources |
+
+**Handler gating:** When `clientCapabilities.terminal == false`, `ACPClient` does not register `terminal/*` handlers. Incoming calls receive JSON-RPC `-32601 methodNotFound` at the connection layer without invoking the delegate.
+
+**Opt-in paths:**
+
+- `ACPClient.boot(..., clientCapabilities:)` or `ACPClient.defaultClientCapabilities(advertiseTerminal: true)`
+- `ACPConfig.ServerBootCall.advertiseTerminal` (per agent boot entry; default `false`)
+
+**Delegate guidance (Option B):** Hosts supply an `ACPClientDelegate` at boot time. For per-session policy (cwd, sandbox scope), use a wrapper delegate keyed by `sessionId` (present on all terminal request params). There is no `setDelegate` hot-swap API — boot a new client or wrap context in the delegate when requirements change.
+
+**`DefaultACPClientDelegate`:** Implements filesystem and permission methods only. It does not implement terminal methods; terminal stubs in the `ACPClientDelegate` protocol extension throw `methodNotFound` if a custom delegate opts into terminal at the capability level but forgets to implement a method.
+
+Host sandbox, tool allowlists, and permission UX are **out of scope** for SwiftAgentKit — hosts implement those inside `ACPClientDelegate`.
 
 ## Notes
 
@@ -114,3 +138,4 @@ ACP does **not** replace the MCP SDK — MCP continues to use the external `MCP.
 | Date | Note |
 |------|------|
 | 2026-06-11 | Initial implementation: models, connection, client, agent, manager, tests, adapters, orchestrator |
+| 2026-06-13 | Session lifecycle: load, list, resume, close, delete; connect() split from session creation |

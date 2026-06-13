@@ -105,6 +105,39 @@ struct ACPAgentTests {
         await client.disconnect()
     }
 
+    @Test("Session new stores mcpServers on session state")
+    func sessionStoresMcpServers() async throws {
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
+        let agent = ACPAgent(adapter: EchoACPAgentAdapter(), transport: agentTransport)
+        let client = JSONRPCConnection(transport: clientTransport)
+
+        try await agent.run()
+        defer { Task { await agent.stop() } }
+        try await client.connect()
+
+        let _: ACPInitializeResponse = try await client.call(
+            "initialize",
+            params: ACPInitializeRequest(protocolVersion: 1)
+        )
+
+        let mcpServers = [
+            ACPMcpServer(name: "tools", command: "mcp", arguments: ["--stdio"], environment: ["KEY": "val"])
+        ]
+        let session: ACPNewSessionResponse = try await client.call(
+            "session/new",
+            params: ACPNewSessionRequest(cwd: "/workspace", mcpServers: mcpServers)
+        )
+
+        let stored = await agent.mcpServers(forSessionId: session.sessionId)
+        #expect(stored?.count == 1)
+        #expect(stored?[0].name == "tools")
+        #expect(stored?[0].command == "mcp")
+        #expect(stored?[0].args == ["--stdio"])
+        #expect(stored?[0].env?["KEY"] == "val")
+
+        await client.disconnect()
+    }
+
     @Test("Session not found for unknown session prompt")
     func sessionNotFound() async throws {
         let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
@@ -192,7 +225,7 @@ struct ACPAgentStateTests {
         let state = ACPAgentState()
         state.withLock {
             state.isAuthenticated = true
-            state.sessions["s1"] = ACPAgentState.ACPSessionState(sessionId: "s1", cwd: "/tmp")
+            state.sessions["s1"] = ACPAgentState.ACPSessionState(sessionId: "s1", cwd: "/tmp", mcpServers: [])
         }
         let authenticated = state.withLock { state.isAuthenticated }
         let exists = state.withLock { state.sessions["s1"] != nil }

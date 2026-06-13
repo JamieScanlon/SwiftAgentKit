@@ -104,7 +104,65 @@ struct ACPConfigHelperTests {
 
         let config = try ACPConfigHelper.parseACPConfig(fileURL: url)
         #expect(config.agentBootCalls.isEmpty)
+        #expect(config.mcpBootServers.isEmpty)
         #expect(config.toolCallTimeout == nil)
+    }
+
+    @Test("Parse mcpBootServers")
+    func parseMcpBootServers() throws {
+        let json = """
+        {
+          "mcpBootServers": [
+            {
+              "name": "tools",
+              "command": "mcp-server",
+              "args": ["--stdio"],
+              "env": {"API_KEY": "secret"}
+            }
+          ]
+        }
+        """
+        let url = ACPTestHelpers.tempFileURL(prefix: "acp-config-mcp")
+        try json.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let config = try ACPConfigHelper.parseACPConfig(fileURL: url)
+        #expect(config.mcpBootServers.count == 1)
+        #expect(config.mcpBootServers[0].name == "tools")
+        #expect(config.mcpBootServers[0].command == "mcp-server")
+        #expect(config.mcpBootServers[0].args == ["--stdio"])
+        #expect(config.mcpBootServers[0].env?["API_KEY"] == "secret")
+    }
+
+    @Test("Parse advertiseTerminal on agent boot calls")
+    func parseAdvertiseTerminal() throws {
+        let json = """
+        {
+          "agentBootCalls": [
+            {
+              "name": "terminal-agent",
+              "command": "echo",
+              "arguments": [],
+              "environment": {},
+              "advertiseTerminal": true
+            },
+            {
+              "name": "plain-agent",
+              "command": "echo",
+              "arguments": [],
+              "environment": {}
+            }
+          ]
+        }
+        """
+        let url = ACPTestHelpers.tempFileURL(prefix: "acp-config-terminal")
+        try json.write(to: url, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let config = try ACPConfigHelper.parseACPConfig(fileURL: url)
+        #expect(config.agentBootCalls.count == 2)
+        #expect(config.agentBootCalls[0].advertiseTerminal == true)
+        #expect(config.agentBootCalls[1].advertiseTerminal == false)
     }
 }
 
@@ -118,10 +176,12 @@ struct ACPConfigModelTests {
             arguments: ["a"],
             environment: .object([:]),
             useShell: true,
-            toolCallTimeout: 10
+            toolCallTimeout: 10,
+            advertiseTerminal: true
         )
         #expect(boot.name == "n")
         #expect(boot.useShell == true)
         #expect(boot.toolCallTimeout == 10)
+        #expect(boot.advertiseTerminal == true)
     }
 }

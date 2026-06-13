@@ -49,8 +49,25 @@ struct ACPSharedModelsTests {
 
     @Test("ACPSessionCapabilities round-trip")
     func sessionCapabilities() throws {
-        let original = ACPSessionCapabilities(load: true, list: false, resume: true, setMode: true)
-        #expect(try ACPTestHelpers.roundTrip(original) == original)
+        let original = ACPSessionCapabilities(
+            list: ACPCapabilityMarker(),
+            resume: ACPCapabilityMarker(),
+            setMode: ACPCapabilityMarker()
+        )
+        #expect(try ACPTestHelpers.roundTrip(original).supportsList == original.supportsList)
+        #expect(original.supportsList)
+        #expect(original.supportsResume)
+        #expect(!original.supportsDelete)
+    }
+
+    @Test("ACPSessionCapabilities decodes empty object markers")
+    func sessionCapabilitiesEmptyObject() throws {
+        let json = #"{"list":{},"resume":{},"close":{},"delete":{}}"#.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ACPSessionCapabilities.self, from: json)
+        #expect(decoded.supportsList)
+        #expect(decoded.supportsResume)
+        #expect(decoded.supportsClose)
+        #expect(decoded.supportsDelete)
     }
 
     @Test("ACPAuthCapabilities round-trip")
@@ -74,7 +91,7 @@ struct ACPSharedModelsTests {
             loadSession: true,
             promptCapabilities: ACPPromptCapabilities(image: true),
             mcpCapabilities: ACPMcpCapabilities(http: true),
-            sessionCapabilities: ACPSessionCapabilities(load: true),
+            sessionCapabilities: ACPSessionCapabilities(list: ACPCapabilityMarker()),
             auth: ACPAuthCapabilities(logout: true)
         )
         #expect(try ACPTestHelpers.roundTrip(original) == original)
@@ -212,6 +229,82 @@ struct ACPSessionModelsTests {
         let decoded = try ACPTestHelpers.roundTripCodable(original)
         #expect(decoded.sessionId == "sess-1")
     }
+
+    @Test("ACPSessionInfo round-trip")
+    func sessionInfo() throws {
+        let original = ACPSessionInfo(
+            sessionId: "sess-1",
+            cwd: "/project",
+            title: "My session",
+            updatedAt: "2026-06-13T12:00:00Z",
+            additionalDirectories: ["/extra"]
+        )
+        let decoded = try ACPTestHelpers.roundTripCodable(original)
+        #expect(decoded.sessionId == original.sessionId)
+        #expect(decoded.cwd == original.cwd)
+        #expect(decoded.title == original.title)
+    }
+
+    @Test("ACPListSessionsRequest/Response round-trip")
+    func listSessions() throws {
+        let request = ACPListSessionsRequest(cursor: "abc", cwd: "/project")
+        let decodedReq = try ACPTestHelpers.roundTripCodable(request)
+        #expect(decodedReq.cursor == "abc")
+
+        let response = ACPListSessionsResponse(
+            sessions: [ACPSessionInfo(sessionId: "s1", cwd: "/project")],
+            nextCursor: "next"
+        )
+        let decodedResp = try ACPTestHelpers.roundTripCodable(response)
+        #expect(decodedResp.sessions.count == 1)
+        #expect(decodedResp.nextCursor == "next")
+    }
+
+    @Test("ACPLoadSessionRequest/Response round-trip")
+    func loadSession() throws {
+        let request = ACPLoadSessionRequest(
+            sessionId: "s1",
+            cwd: "/project",
+            mcpServers: [ACPMcpServer(name: "tools")],
+            additionalDirectories: ["/extra"]
+        )
+        let decodedReq = try ACPTestHelpers.roundTripCodable(request)
+        #expect(decodedReq.sessionId == "s1")
+
+        let response = ACPLoadSessionResponse(mode: ACPSessionModeState(currentModeId: "default"))
+        let decodedResp = try ACPTestHelpers.roundTripCodable(response)
+        #expect(decodedResp.mode?.currentModeId == "default")
+    }
+
+    @Test("ACPResumeSessionRequest/Response round-trip")
+    func resumeSession() throws {
+        let request = ACPResumeSessionRequest(sessionId: "s1", cwd: "/project")
+        let decodedReq = try ACPTestHelpers.roundTripCodable(request)
+        #expect(decodedReq.sessionId == "s1")
+
+        let response = ACPResumeSessionResponse()
+        _ = try ACPTestHelpers.roundTripCodable(response)
+    }
+
+    @Test("ACPCloseSessionRequest/Response round-trip")
+    func closeSession() throws {
+        let request = ACPCloseSessionRequest(sessionId: "s1")
+        let decodedReq = try ACPTestHelpers.roundTripCodable(request)
+        #expect(decodedReq.sessionId == "s1")
+
+        let response = ACPCloseSessionResponse()
+        _ = try ACPTestHelpers.roundTripCodable(response)
+    }
+
+    @Test("ACPDeleteSessionRequest/Response round-trip")
+    func deleteSession() throws {
+        let request = ACPDeleteSessionRequest(sessionId: "s1")
+        let decodedReq = try ACPTestHelpers.roundTripCodable(request)
+        #expect(decodedReq.sessionId == "s1")
+
+        let response = ACPDeleteSessionResponse()
+        _ = try ACPTestHelpers.roundTripCodable(response)
+    }
 }
 
 // MARK: - Content Blocks
@@ -289,6 +382,14 @@ struct ACPSessionUpdateModelsTests {
     @Test("Usage update")
     func usageUpdate() throws {
         let update = ACPSessionUpdate.usageUpdate(used: 100, size: 200, cost: ACPUsageCost(amount: 0.01, currency: "USD"))
+        #expect(try ACPTestHelpers.roundTrip(update) == update)
+    }
+
+    @Test("Session info update")
+    func sessionInfoUpdate() throws {
+        let update = ACPSessionUpdate.sessionInfoUpdate(
+            ACPSessionInfoUpdate(title: "Renamed", updatedAt: "2026-06-13T12:00:00Z")
+        )
         #expect(try ACPTestHelpers.roundTrip(update) == update)
     }
 

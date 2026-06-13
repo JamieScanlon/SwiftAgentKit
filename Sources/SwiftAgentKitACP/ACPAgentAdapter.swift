@@ -16,10 +16,46 @@ public protocol ACPAgentAdapter: Sendable {
         prompt: [ACPContentBlock],
         eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
     ) async throws -> ACPStopReason
+
+    /// Streams prior conversation history during `session/load`.
+    func loadSessionHistory(
+        sessionId: String,
+        eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
+    ) async throws
+
+    /// Called when a session is closed via `session/close`.
+    func onSessionClosed(sessionId: String) async throws
+
+    /// Called when a session is deleted via `session/delete`.
+    func onSessionDeleted(sessionId: String) async throws
+
+    /// Merges adapter-persisted sessions into in-memory list results.
+    func supplementSessionList(
+        cursor: String?,
+        cwd: String?,
+        knownSessions: [ACPSessionInfo]
+    ) async throws -> (sessions: [ACPSessionInfo], nextCursor: String?)
 }
 
 public extension ACPAgentAdapter {
     var authMethods: [ACPAuthMethod] { [] }
+
+    func loadSessionHistory(
+        sessionId: String,
+        eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
+    ) async throws {}
+
+    func onSessionClosed(sessionId: String) async throws {}
+
+    func onSessionDeleted(sessionId: String) async throws {}
+
+    func supplementSessionList(
+        cursor: String?,
+        cwd: String?,
+        knownSessions: [ACPSessionInfo]
+    ) async throws -> (sessions: [ACPSessionInfo], nextCursor: String?) {
+        (knownSessions, nil)
+    }
 }
 
 /// Simple echo adapter for tests and examples.

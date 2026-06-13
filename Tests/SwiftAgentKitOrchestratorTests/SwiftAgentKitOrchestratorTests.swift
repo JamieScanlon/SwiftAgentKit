@@ -4,6 +4,7 @@ import SwiftAgentKitOrchestrator
 import SwiftAgentKit
 import SwiftAgentKitMCP
 import SwiftAgentKitA2A
+import SwiftAgentKitACP
 import Logging
 import EasyJSON
 
@@ -382,6 +383,52 @@ func makeOrchestratorWithRecordingA2AClient(
     return (orchestrator, client)
 }
 
+/// Records whether inline ACP execution invoked `promptStream`.
+actor RecordingACPStreamClient: ACPAgentStreamClient {
+    let info: ACPImplementation
+    private(set) var promptStreamCallCount = 0
+    private let responseText: String
+
+    init(name: String, responseText: String = "done") {
+        self.info = ACPImplementation(name: name, version: "1.0.0")
+        self.responseText = responseText
+    }
+
+    var agentInfo: ACPImplementation? { info }
+
+    func promptStream(_ instructions: String) async throws -> (
+        updates: AsyncStream<ACPSessionUpdate>,
+        response: Task<ACPPromptResponse, Error>
+    ) {
+        promptStreamCallCount += 1
+        let responseText = self.responseText
+        let updates = AsyncStream<ACPSessionUpdate> { continuation in
+            continuation.yield(.agentMessageChunk(messageId: "1", content: .text(responseText)))
+            continuation.finish()
+        }
+        let response = Task<ACPPromptResponse, Error> { ACPPromptResponse(stopReason: .endTurn) }
+        return (updates, response)
+    }
+
+    func shutdown() async {}
+}
+
+func makeOrchestratorWithRecordingACPClient(
+    integration: ACPOrchestratorIntegration,
+    agentName: String,
+    responseText: String = "done"
+) async throws -> (SwiftAgentKitOrchestrator, RecordingACPStreamClient) {
+    let client = RecordingACPStreamClient(name: agentName, responseText: responseText)
+    let acpManager = ACPManager(logger: Logger(label: "TestACP"))
+    try await acpManager.initialize(clients: [client])
+    let orchestrator = SwiftAgentKitOrchestrator(
+        llm: MockLLM(model: "test-model", logger: Logger(label: "MockLLM")),
+        config: OrchestratorConfig(acpIntegration: integration),
+        acpManager: acpManager
+    )
+    return (orchestrator, client)
+}
+
 actor MockCancellableA2AStreamClientForOrchestrator: A2ATaskLifecycleClient {
     var agentCard: AgentCard?
     private let initialEvents: [SendStreamingMessageSuccessResponse<MessageResult>]
@@ -626,6 +673,8 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
         #expect(config.mcpEnabled == false)
         #expect(config.a2aIntegration == .disabled)
         #expect(config.a2aEnabled == false)
+        #expect(config.acpIntegration == .disabled)
+        #expect(config.acpEnabled == false)
         #expect(config.maxTokens == nil)
         #expect(config.temperature == nil)
         #expect(config.topP == nil)
@@ -666,6 +715,24 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
         let disabled = OrchestratorConfig(a2aEnabled: false)
         #expect(disabled.a2aIntegration == .disabled)
         #expect(disabled.a2aEnabled == false)
+    }
+
+    @Test("OrchestratorConfig acpIntegration primary init accepts registrationOnly")
+    func testOrchestratorConfigACPIntegrationPrimaryInit() throws {
+        let config = OrchestratorConfig(acpIntegration: .registrationOnly)
+        #expect(config.acpIntegration == .registrationOnly)
+        #expect(config.acpEnabled == false)
+    }
+
+    @Test("Deprecated acpEnabled init maps to acpIntegration")
+    func testDeprecatedAcpEnabledInitMapsToIntegration() throws {
+        let enabled = OrchestratorConfig(acpEnabled: true)
+        #expect(enabled.acpIntegration == .inlineExecution)
+        #expect(enabled.acpEnabled == true)
+
+        let disabled = OrchestratorConfig(acpEnabled: false)
+        #expect(disabled.acpIntegration == .disabled)
+        #expect(disabled.acpEnabled == false)
     }
 
     // MARK: - A2A integration mode tests
@@ -748,6 +815,82 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
             Issue.record("Expected completed outcome from inline A2A execution")
         }
         #expect(await client.streamMessageCallCount == 1)
+    }
+
+    // MARK: - ACP integration mode tests
+
+    @Test("ACP integration disabled excludes agents from catalog")
+    func testACPIntegrationDisabledExcludesCatalog() async throws {
+        let agentName = "DisabledACPAgent"
+        let (orchestrator, _) = try await makeOrchestratorWithRecordingACPClient(
+            integration: .disabled,
+            agentName: agentName
+        )
+
+        let tools = await orchestrator.allAvailableTools
+        let descriptors = await orchestrator.allRegisteredTools
+        #expect(tools.contains { $0.name == agentName } == false)
+        #expect(descriptors.contains { $0.definition.name == agentName } == false)
+    }
+
+    @Test("ACP integration registrationOnly merges catalog without inline agentCall")
+    func testACPIntegrationRegistrationOnlyCatalogWithoutInlineExecution() async throws {
+        let agentName = "RegOnlyACPAgent"
+        let (orchestrator, client) = try await makeOrchestratorWithRecordingACPClient(
+            integration: .registrationOnly,
+            agentName: agentName
+        )
+
+        let tools = await orchestrator.allAvailableTools
+        let descriptors = await orchestrator.allRegisteredTools
+        #expect(tools.contains { $0.name == agentName })
+        #expect(descriptors.contains { $0.definition.name == agentName && $0.definition.type == .acpAgent && $0.source == .acp })
+
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: agentName,
+                argumentsPayload: .object(["instructions": .string("Run task")]),
+                source: .direct,
+                callerProvenance: "acp-registration-only-test"
+            )
+        )
+
+        switch outcome {
+        case .completed(let result, _):
+            #expect(result.success == false)
+            #expect(result.error?.contains("No provider handled tool") == true)
+        default:
+            Issue.record("Expected completed fallback outcome")
+        }
+        #expect(await client.promptStreamCallCount == 0)
+    }
+
+    @Test("ACP integration inlineExecution invokes agentCall")
+    func testACPIntegrationInlineExecutionInvokesAgentCall() async throws {
+        let agentName = "InlineExecACPAgent"
+        let (orchestrator, client) = try await makeOrchestratorWithRecordingACPClient(
+            integration: .inlineExecution,
+            agentName: agentName,
+            responseText: "done"
+        )
+
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: agentName,
+                argumentsPayload: .object(["instructions": .string("Run task")]),
+                source: .direct,
+                callerProvenance: "acp-inline-exec-test"
+            )
+        )
+
+        switch outcome {
+        case .completed(let result, _):
+            #expect(result.success == true)
+            #expect(result.content == "done")
+        default:
+            Issue.record("Expected completed outcome from inline ACP execution")
+        }
+        #expect(await client.promptStreamCallCount == 1)
     }
     
     @Test("OrchestratorConfig can be initialized with LLM request params")
