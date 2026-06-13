@@ -82,6 +82,29 @@ let orchestrator = SwiftAgentKitOrchestrator(
 try await orchestrator.acpManager?.initialize(configFileURL: configURL)
 ```
 
+## Session configuration
+
+When the agent advertises `setMode` / `setConfigOption` capabilities, hosts can change session state after `newSession`:
+
+```swift
+try await client.connect()
+let session = try await client.newSession(cwd: "/project")
+
+if session.mode != nil {
+    _ = try await client.setSessionMode(sessionId: session.sessionId, modeId: "code")
+}
+
+if session.configOptions?.isEmpty == false {
+    _ = try await client.setSessionConfigOption(
+        sessionId: session.sessionId,
+        configId: "mode",
+        value: "code"
+    )
+}
+```
+
+For agents requiring auth, call `authenticate(methodId:)` explicitly via `connect(autoAuthenticate: false)` when multiple `authMethods` are advertised.
+
 ## See Also
 
 - [ACPImplementation.md](ACPImplementation.md) — implementation tracker and spec coverage

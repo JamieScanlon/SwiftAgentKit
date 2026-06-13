@@ -165,7 +165,7 @@ struct ACPAgentTests {
             Issue.record("Expected error for unknown session")
         } catch let error as JSONRPCConnectionError {
             if case .remoteError(let rpcError) = error {
-                #expect(rpcError.code == JSONRPCErrorCode.internalError.rawValue)
+                #expect(rpcError.code == ACPErrorCode.sessionNotFound.rawValue)
             } else {
                 Issue.record("Expected remoteError, got \(error)")
             }
@@ -213,6 +213,58 @@ struct ACPAgentTests {
                 Issue.record("Expected remoteError")
             }
         }
+
+        await client.disconnect()
+    }
+
+    @Test("Cancel prompt returns cancelled stop reason")
+    func cancelPromptReturnsCancelled() async throws {
+        struct SlowAdapter: ACPAgentAdapter {
+            let agentInfo = ACPImplementation(name: "slow-agent", version: "1.0.0")
+            let agentCapabilities = ACPAgentCapabilities()
+
+            func handlePrompt(
+                sessionId: String,
+                prompt: [ACPContentBlock],
+                eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
+            ) async throws -> ACPStopReason {
+                while !Task.isCancelled {
+                    try await Task.sleep(nanoseconds: 20_000_000)
+                }
+                return .cancelled
+            }
+        }
+
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
+        let agent = ACPAgent(adapter: SlowAdapter(), transport: agentTransport)
+        let client = JSONRPCConnection(transport: clientTransport)
+
+        try await agent.run()
+        defer { Task { await agent.stop() } }
+        try await client.connect()
+
+        let _: ACPInitializeResponse = try await client.call(
+            "initialize",
+            params: ACPInitializeRequest(protocolVersion: 1)
+        )
+        let session: ACPNewSessionResponse = try await client.call(
+            "session/new",
+            params: ACPNewSessionRequest(cwd: "/tmp")
+        )
+
+        async let promptResponse: ACPPromptResponse = try await client.call(
+            "session/prompt",
+            params: ACPPromptRequest(sessionId: session.sessionId, prompt: [.text("hang")])
+        )
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        try await client.notify(
+            "session/cancel",
+            params: ACPSessionCancelParams(sessionId: session.sessionId)
+        )
+
+        let response = try await promptResponse
+        #expect(response.stopReason == .cancelled)
 
         await client.disconnect()
     }

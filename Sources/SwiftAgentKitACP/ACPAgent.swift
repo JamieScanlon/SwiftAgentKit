@@ -14,6 +14,8 @@ final class ACPAgentState: @unchecked Sendable {
     var isAuthenticated = false
     var negotiatedProtocolVersion: ACPProtocolVersion = 1
     var lastClientCapabilities: ACPClientCapabilities?
+    var activePromptTasks: [String: Task<ACPStopReason, Error>] = [:]
+    var cancelledSessionIds: Set<String> = []
 
     struct ACPSessionState: Sendable {
         let sessionId: String
@@ -23,6 +25,8 @@ final class ACPAgentState: @unchecked Sendable {
         var title: String?
         var updatedAt: String?
         var isActive: Bool
+        var mode: ACPSessionModeState?
+        var configOptions: [ACPSessionConfigOption]?
 
         init(
             sessionId: String,
@@ -31,7 +35,9 @@ final class ACPAgentState: @unchecked Sendable {
             additionalDirectories: [String] = [],
             title: String? = nil,
             updatedAt: String? = nil,
-            isActive: Bool = true
+            isActive: Bool = true,
+            mode: ACPSessionModeState? = nil,
+            configOptions: [ACPSessionConfigOption]? = nil
         ) {
             self.sessionId = sessionId
             self.cwd = cwd
@@ -40,6 +46,8 @@ final class ACPAgentState: @unchecked Sendable {
             self.title = title
             self.updatedAt = updatedAt
             self.isActive = isActive
+            self.mode = mode
+            self.configOptions = configOptions
         }
 
         func asSessionInfo() -> ACPSessionInfo {
@@ -107,6 +115,10 @@ public actor ACPAgent {
 
     public func stop() async {
         guard state == .running else { return }
+        let tasks = stateBox.withLock { Array(stateBox.activePromptTasks.values) }
+        for task in tasks {
+            task.cancel()
+        }
         await connection.disconnect()
         state = .stopped
         logger.info("ACP agent stopped")
@@ -147,9 +159,27 @@ public actor ACPAgent {
 
         await connection.registerMethod("authenticate") { paramsData in
             let decoder = JSONDecoder()
-            _ = try decoder.decode(ACPAuthenticateRequest.self, from: paramsData)
+            let request = try decoder.decode(ACPAuthenticateRequest.self, from: paramsData)
+            let validMethod = adapter.authMethods.contains { $0.id == request.methodId }
+            guard validMethod else {
+                throw JSONRPCConnectionError.remoteError(
+                    JSONRPCError(
+                        code: JSONRPCErrorCode.invalidParams.rawValue,
+                        message: "Unknown auth method: \(request.methodId)"
+                    )
+                )
+            }
+            try await adapter.authenticate(methodId: request.methodId)
             stateBox.withLock { stateBox.isAuthenticated = true }
             return try JSONEncoder().encode(ACPAuthenticateResponse())
+        }
+
+        if adapter.agentCapabilities.auth.supportsLogout {
+            await connection.registerMethod("logout") { _ in
+                try await adapter.logout()
+                stateBox.withLock { stateBox.isAuthenticated = false }
+                return try JSONEncoder().encode(ACPLogoutResponse())
+            }
         }
 
         await connection.registerMethod("session/new") { paramsData in
@@ -157,15 +187,28 @@ public actor ACPAgent {
             let decoder = JSONDecoder()
             let request = try decoder.decode(ACPNewSessionRequest.self, from: paramsData)
             let sessionId = UUID().uuidString
+            let setup = try await adapter.sessionSetup(
+                sessionId: sessionId,
+                cwd: request.cwd,
+                mcpServers: request.mcpServers
+            )
             stateBox.withLock {
                 stateBox.sessions[sessionId] = ACPAgentState.ACPSessionState(
                     sessionId: sessionId,
                     cwd: request.cwd,
                     mcpServers: request.mcpServers,
-                    additionalDirectories: request.additionalRoots ?? []
+                    additionalDirectories: request.additionalRoots ?? [],
+                    mode: setup.mode,
+                    configOptions: setup.configOptions
                 )
             }
-            return try JSONEncoder().encode(ACPNewSessionResponse(sessionId: sessionId))
+            return try JSONEncoder().encode(
+                ACPNewSessionResponse(
+                    sessionId: sessionId,
+                    configOptions: setup.configOptions,
+                    mode: setup.mode
+                )
+            )
         }
 
         if adapter.agentCapabilities.sessionCapabilities.supportsList {
@@ -211,16 +254,23 @@ public actor ACPAgent {
 
                 let exists = stateBox.withLock { stateBox.sessions[request.sessionId] != nil }
                 guard exists else {
-                    throw ACPAgentError.sessionNotFound(request.sessionId)
+                    try Self.throwSessionNotFound(request.sessionId)
                 }
 
                 let sessionId = request.sessionId
+                let setup = try await adapter.sessionSetup(
+                    sessionId: sessionId,
+                    cwd: request.cwd,
+                    mcpServers: request.mcpServers
+                )
                 stateBox.withLock {
                     guard var session = stateBox.sessions[sessionId] else { return }
                     session.cwd = request.cwd
                     session.mcpServers = request.mcpServers
                     session.additionalDirectories = request.additionalDirectories ?? []
                     session.isActive = true
+                    if let mode = setup.mode { session.mode = mode }
+                    if let configOptions = setup.configOptions { session.configOptions = configOptions }
                     stateBox.sessions[sessionId] = session
                 }
 
@@ -231,7 +281,13 @@ public actor ACPAgent {
                     )
                 }
 
-                return try JSONEncoder().encode(ACPLoadSessionResponse())
+                let sessionState = stateBox.withLock { stateBox.sessions[sessionId] }
+                return try JSONEncoder().encode(
+                    ACPLoadSessionResponse(
+                        configOptions: sessionState?.configOptions,
+                        mode: sessionState?.mode
+                    )
+                )
             }
         }
 
@@ -243,9 +299,14 @@ public actor ACPAgent {
 
                 let exists = stateBox.withLock { stateBox.sessions[request.sessionId] != nil }
                 guard exists else {
-                    throw ACPAgentError.sessionNotFound(request.sessionId)
+                    try Self.throwSessionNotFound(request.sessionId)
                 }
 
+                let setup = try await adapter.sessionSetup(
+                    sessionId: request.sessionId,
+                    cwd: request.cwd,
+                    mcpServers: request.mcpServers ?? []
+                )
                 stateBox.withLock {
                     guard var session = stateBox.sessions[request.sessionId] else { return }
                     session.cwd = request.cwd
@@ -254,10 +315,18 @@ public actor ACPAgent {
                     }
                     session.additionalDirectories = request.additionalDirectories ?? []
                     session.isActive = true
+                    if let mode = setup.mode { session.mode = mode }
+                    if let configOptions = setup.configOptions { session.configOptions = configOptions }
                     stateBox.sessions[request.sessionId] = session
                 }
 
-                return try JSONEncoder().encode(ACPResumeSessionResponse())
+                let sessionState = stateBox.withLock { stateBox.sessions[request.sessionId] }
+                return try JSONEncoder().encode(
+                    ACPResumeSessionResponse(
+                        configOptions: sessionState?.configOptions,
+                        mode: sessionState?.mode
+                    )
+                )
             }
         }
 
@@ -269,7 +338,7 @@ public actor ACPAgent {
 
                 let exists = stateBox.withLock { stateBox.sessions[request.sessionId] != nil }
                 guard exists else {
-                    throw ACPAgentError.sessionNotFound(request.sessionId)
+                    try Self.throwSessionNotFound(request.sessionId)
                 }
 
                 stateBox.withLock {
@@ -291,11 +360,82 @@ public actor ACPAgent {
 
                 let removed = stateBox.withLock { stateBox.sessions.removeValue(forKey: request.sessionId) != nil }
                 guard removed else {
-                    throw ACPAgentError.sessionNotFound(request.sessionId)
+                    try Self.throwSessionNotFound(request.sessionId)
                 }
 
                 try await adapter.onSessionDeleted(sessionId: request.sessionId)
                 return try JSONEncoder().encode(ACPDeleteSessionResponse())
+            }
+        }
+
+        if adapter.agentCapabilities.sessionCapabilities.supportsSetMode {
+            await connection.registerMethod("session/set_mode") { paramsData in
+                try Self.requireAuthenticated(stateBox: stateBox, adapter: adapter)
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPSetSessionModeRequest.self, from: paramsData)
+
+                let session = stateBox.withLock { stateBox.sessions[request.sessionId] }
+                guard let session, session.isActive else {
+                    try Self.throwSessionNotFound(request.sessionId)
+                }
+
+                if let availableModes = session.mode?.availableModes, !availableModes.isEmpty {
+                    guard availableModes.contains(where: { $0.id == request.modeId }) else {
+                        throw JSONRPCConnectionError.remoteError(
+                            JSONRPCError(
+                                code: JSONRPCErrorCode.invalidParams.rawValue,
+                                message: "Unknown mode: \(request.modeId)"
+                            )
+                        )
+                    }
+                }
+
+                let updatedMode = try await adapter.setSessionMode(
+                    sessionId: request.sessionId,
+                    modeId: request.modeId
+                )
+                stateBox.withLock {
+                    guard var stored = stateBox.sessions[request.sessionId] else { return }
+                    if let updatedMode {
+                        stored.mode = updatedMode
+                    } else if var mode = stored.mode {
+                        mode.currentModeId = request.modeId
+                        stored.mode = mode
+                    } else {
+                        stored.mode = ACPSessionModeState(currentModeId: request.modeId)
+                    }
+                    stateBox.sessions[request.sessionId] = stored
+                }
+
+                return try JSONEncoder().encode(ACPSetSessionModeResponse())
+            }
+        }
+
+        if adapter.agentCapabilities.sessionCapabilities.supportsSetConfigOption {
+            await connection.registerMethod("session/set_config_option") { paramsData in
+                try Self.requireAuthenticated(stateBox: stateBox, adapter: adapter)
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPSetSessionConfigOptionRequest.self, from: paramsData)
+
+                let session = stateBox.withLock { stateBox.sessions[request.sessionId] }
+                guard let session, session.isActive else {
+                    try Self.throwSessionNotFound(request.sessionId)
+                }
+
+                let configOptions = try await adapter.setSessionConfigOption(
+                    sessionId: request.sessionId,
+                    configId: request.configId,
+                    value: request.value
+                )
+                stateBox.withLock {
+                    guard var stored = stateBox.sessions[request.sessionId] else { return }
+                    stored.configOptions = configOptions
+                    stateBox.sessions[request.sessionId] = stored
+                }
+
+                return try JSONEncoder().encode(
+                    ACPSetSessionConfigOptionResponse(configOptions: configOptions)
+                )
             }
         }
 
@@ -304,21 +444,76 @@ public actor ACPAgent {
             let request = try decoder.decode(ACPPromptRequest.self, from: paramsData)
             let session = stateBox.withLock { stateBox.sessions[request.sessionId] }
             guard let session, session.isActive else {
-                throw ACPAgentError.sessionNotFound(request.sessionId)
+                try Self.throwSessionNotFound(request.sessionId)
             }
 
             let sessionId = request.sessionId
-            let stopReason = try await adapter.handlePrompt(sessionId: sessionId, prompt: request.prompt) { update in
-                try await connection.notify(
-                    "session/update",
-                    params: ACPSessionUpdateNotification(sessionId: sessionId, update: update)
-                )
+            let promptTask = Task {
+                try await adapter.handlePrompt(sessionId: sessionId, prompt: request.prompt) { update in
+                    try await connection.notify(
+                        "session/update",
+                        params: ACPSessionUpdateNotification(sessionId: sessionId, update: update)
+                    )
+                }
             }
+            stateBox.withLock {
+                stateBox.cancelledSessionIds.remove(sessionId)
+                stateBox.activePromptTasks[sessionId] = promptTask
+            }
+            defer {
+                _ = stateBox.withLock {
+                    stateBox.activePromptTasks.removeValue(forKey: sessionId)
+                    stateBox.cancelledSessionIds.remove(sessionId)
+                }
+            }
+
+            let stopReason = try await Self.runCancellablePrompt(
+                sessionId: sessionId,
+                stateBox: stateBox,
+                promptTask: promptTask
+            )
             return try JSONEncoder().encode(ACPPromptResponse(stopReason: stopReason))
         }
 
-        await connection.registerNotification("session/cancel") { _ in
-            // Cooperative cancellation handled by prompt task in full implementation
+        await connection.registerNotification("session/cancel") { paramsData in
+            let decoder = JSONDecoder()
+            guard let params = try? decoder.decode(ACPSessionCancelParams.self, from: paramsData) else {
+                return
+            }
+            _ = stateBox.withLock { stateBox.cancelledSessionIds.insert(params.sessionId) }
+            let task = stateBox.withLock { stateBox.activePromptTasks[params.sessionId] }
+            task?.cancel()
+            await adapter.cancelPrompt(sessionId: params.sessionId)
+        }
+    }
+
+    private static func runCancellablePrompt(
+        sessionId: String,
+        stateBox: ACPAgentState,
+        promptTask: Task<ACPStopReason, Error>
+    ) async throws -> ACPStopReason {
+        try await withThrowingTaskGroup(of: ACPStopReason.self) { group in
+            group.addTask {
+                do {
+                    return try await promptTask.value
+                } catch is CancellationError {
+                    return .cancelled
+                }
+            }
+            group.addTask {
+                while true {
+                    if stateBox.withLock({ stateBox.cancelledSessionIds.contains(sessionId) }) {
+                        promptTask.cancel()
+                        return .cancelled
+                    }
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                }
+            }
+            guard let result = try await group.next() else {
+                throw CancellationError()
+            }
+            group.cancelAll()
+            return result
         }
     }
 
@@ -331,6 +526,12 @@ public actor ACPAgent {
                 JSONRPCError(code: ACPErrorCode.authRequired.rawValue, message: "Authentication required")
             )
         }
+    }
+
+    private static func throwSessionNotFound(_ sessionId: String) throws -> Never {
+        throw JSONRPCConnectionError.remoteError(
+            JSONRPCError(code: ACPErrorCode.sessionNotFound.rawValue, message: "Session not found: \(sessionId)")
+        )
     }
 
     private static func paginateSessions(

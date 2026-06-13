@@ -64,4 +64,32 @@ struct ACPAgentAdapterDefaultsTests {
         }
         #expect(MinimalAdapter().authMethods.isEmpty)
     }
+
+    @Test("Default adapter hooks are no-op or throw as documented")
+    func defaultHooks() async throws {
+        struct MinimalAdapter: ACPAgentAdapter {
+            let agentInfo = ACPImplementation(name: "min", version: "1.0.0")
+            let agentCapabilities = ACPAgentCapabilities()
+            func handlePrompt(
+                sessionId: String,
+                prompt: [ACPContentBlock],
+                eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
+            ) async throws -> ACPStopReason { .endTurn }
+        }
+        let adapter = MinimalAdapter()
+        try await adapter.authenticate(methodId: "token")
+        try await adapter.logout()
+        await adapter.cancelPrompt(sessionId: "s1")
+        let setup = try await adapter.sessionSetup(sessionId: "s1", cwd: "/tmp", mcpServers: [])
+        #expect(setup.configOptions == nil)
+        #expect(setup.mode == nil)
+        do {
+            _ = try await adapter.setSessionMode(sessionId: "s1", modeId: "code")
+            Issue.record("Expected methodNotSupported")
+        } catch let error as ACPAgentAdapterError {
+            if case .methodNotSupported(let method) = error {
+                #expect(method == "session/set_mode")
+            }
+        }
+    }
 }

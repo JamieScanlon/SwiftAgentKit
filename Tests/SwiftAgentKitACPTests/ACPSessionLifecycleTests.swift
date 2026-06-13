@@ -231,6 +231,25 @@ struct ACPManagerSessionLifecycleTests {
 
         func cancelPrompt() async throws {}
 
+        var authMethods: [ACPAuthMethod] { [] }
+        var isAuthenticated: Bool { true }
+
+        func authenticate(methodId: String) async throws {}
+
+        func logout() async throws {}
+
+        func setSessionMode(sessionId: String, modeId: String) async throws -> ACPSetSessionModeResponse {
+            ACPSetSessionModeResponse()
+        }
+
+        func setSessionConfigOption(
+            sessionId: String,
+            configId: String,
+            value: String
+        ) async throws -> ACPSetSessionConfigOptionResponse {
+            ACPSetSessionConfigOptionResponse(configOptions: [])
+        }
+
         func newSession(cwd: String, additionalRoots: [String]?) async throws -> ACPNewSessionResponse {
             mockSessionId = "new-\(cwd)"
             return ACPNewSessionResponse(sessionId: mockSessionId!)

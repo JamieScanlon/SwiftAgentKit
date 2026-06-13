@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import SwiftAgentKit
 
 /// Pluggable behavior for an ACP Agent process.
 public protocol ACPAgentAdapter: Sendable {
@@ -35,6 +36,43 @@ public protocol ACPAgentAdapter: Sendable {
         cwd: String?,
         knownSessions: [ACPSessionInfo]
     ) async throws -> (sessions: [ACPSessionInfo], nextCursor: String?)
+
+    /// Validates credentials for the given auth method during `authenticate`.
+    func authenticate(methodId: String) async throws
+
+    /// Clears authenticated state during `logout`.
+    func logout() async throws
+
+    /// Supplies initial session configuration during `session/new`, `session/load`, and `session/resume`.
+    func sessionSetup(
+        sessionId: String,
+        cwd: String,
+        mcpServers: [ACPMcpServer]
+    ) async throws -> (configOptions: [ACPSessionConfigOption]?, mode: ACPSessionModeState?)
+
+    /// Changes the active mode for a session via `session/set_mode`.
+    func setSessionMode(sessionId: String, modeId: String) async throws -> ACPSessionModeState?
+
+    /// Changes a session configuration option via `session/set_config_option`.
+    func setSessionConfigOption(
+        sessionId: String,
+        configId: String,
+        value: String
+    ) async throws -> [ACPSessionConfigOption]
+
+    /// Called when the client sends a `session/cancel` notification.
+    func cancelPrompt(sessionId: String) async
+}
+
+public enum ACPAgentAdapterError: Error, LocalizedError, Sendable {
+    case methodNotSupported(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .methodNotSupported(let method):
+            return "Adapter does not support \(method)"
+        }
+    }
 }
 
 public extension ACPAgentAdapter {
@@ -56,6 +94,32 @@ public extension ACPAgentAdapter {
     ) async throws -> (sessions: [ACPSessionInfo], nextCursor: String?) {
         (knownSessions, nil)
     }
+
+    func authenticate(methodId: String) async throws {}
+
+    func logout() async throws {}
+
+    func sessionSetup(
+        sessionId: String,
+        cwd: String,
+        mcpServers: [ACPMcpServer]
+    ) async throws -> (configOptions: [ACPSessionConfigOption]?, mode: ACPSessionModeState?) {
+        (nil, nil)
+    }
+
+    func setSessionMode(sessionId: String, modeId: String) async throws -> ACPSessionModeState? {
+        throw ACPAgentAdapterError.methodNotSupported("session/set_mode")
+    }
+
+    func setSessionConfigOption(
+        sessionId: String,
+        configId: String,
+        value: String
+    ) async throws -> [ACPSessionConfigOption] {
+        throw ACPAgentAdapterError.methodNotSupported("session/set_config_option")
+    }
+
+    func cancelPrompt(sessionId: String) async {}
 }
 
 /// Simple echo adapter for tests and examples.

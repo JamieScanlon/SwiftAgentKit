@@ -38,6 +38,10 @@ public protocol ACPPromptLifecycleClient: ACPAgentStreamClient {
 /// Protocol for ACP clients that support session lifecycle operations.
 public protocol ACPSessionLifecycleClient: ACPPromptLifecycleClient {
     var agentCapabilities: ACPAgentCapabilities? { get async }
+    var authMethods: [ACPAuthMethod] { get async }
+    var isAuthenticated: Bool { get async }
+    func authenticate(methodId: String) async throws
+    func logout() async throws
     func newSession(cwd: String, additionalRoots: [String]?) async throws -> ACPNewSessionResponse
     func listSessions(cursor: String?, cwd: String?) async throws -> ACPListSessionsResponse
     func loadSession(
@@ -52,6 +56,12 @@ public protocol ACPSessionLifecycleClient: ACPPromptLifecycleClient {
     ) async throws -> ACPResumeSessionResponse
     func closeSession() async throws -> ACPCloseSessionResponse
     func deleteSession(sessionId: String) async throws -> ACPDeleteSessionResponse
+    func setSessionMode(sessionId: String, modeId: String) async throws -> ACPSetSessionModeResponse
+    func setSessionConfigOption(
+        sessionId: String,
+        configId: String,
+        value: String
+    ) async throws -> ACPSetSessionConfigOptionResponse
 }
 
 public extension ACPSessionLifecycleClient {
@@ -359,6 +369,59 @@ public actor ACPManager {
         return try await lifecycleClient.deleteSession(sessionId: sessionId)
     }
 
+    public func authenticate(agentName: String, methodId: String) async throws {
+        guard let client = await resolveClientByName(agentName) else {
+            throw ACPManagerError.agentNotFound(agentName)
+        }
+        guard let lifecycleClient = client as? any ACPSessionLifecycleClient else {
+            throw ACPManagerError.agentNotFound(agentName)
+        }
+        try await lifecycleClient.authenticate(methodId: methodId)
+    }
+
+    public func logout(agentName: String) async throws {
+        guard let client = await resolveClientByName(agentName) else {
+            throw ACPManagerError.agentNotFound(agentName)
+        }
+        guard let lifecycleClient = client as? any ACPSessionLifecycleClient else {
+            throw ACPManagerError.agentNotFound(agentName)
+        }
+        try await lifecycleClient.logout()
+    }
+
+    public func setSessionMode(
+        agentName: String,
+        sessionId: String,
+        modeId: String
+    ) async throws -> ACPSetSessionModeResponse {
+        guard let client = await resolveClientByName(agentName) else {
+            throw ACPManagerError.agentNotFound(agentName)
+        }
+        guard let lifecycleClient = client as? any ACPSessionLifecycleClient else {
+            throw ACPManagerError.agentNotFound(agentName)
+        }
+        return try await lifecycleClient.setSessionMode(sessionId: sessionId, modeId: modeId)
+    }
+
+    public func setSessionConfigOption(
+        agentName: String,
+        sessionId: String,
+        configId: String,
+        value: String
+    ) async throws -> ACPSetSessionConfigOptionResponse {
+        guard let client = await resolveClientByName(agentName) else {
+            throw ACPManagerError.agentNotFound(agentName)
+        }
+        guard let lifecycleClient = client as? any ACPSessionLifecycleClient else {
+            throw ACPManagerError.agentNotFound(agentName)
+        }
+        return try await lifecycleClient.setSessionConfigOption(
+            sessionId: sessionId,
+            configId: configId,
+            value: value
+        )
+    }
+
     public func availableTools() async -> [ToolDefinition] {
         var tools: [ToolDefinition] = []
         for client in streamClients {
@@ -515,6 +578,10 @@ public actor ACPManager {
                     case .usageUpdate:
                         break
                     case .sessionInfoUpdate:
+                        break
+                    case .currentModeUpdate:
+                        break
+                    case .configOptionUpdate:
                         break
                     }
                 }

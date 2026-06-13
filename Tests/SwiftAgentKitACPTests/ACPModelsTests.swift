@@ -72,8 +72,9 @@ struct ACPSharedModelsTests {
 
     @Test("ACPAuthCapabilities round-trip")
     func authCapabilities() throws {
-        let original = ACPAuthCapabilities(logout: true)
+        let original = ACPAuthCapabilities(logout: ACPCapabilityMarker())
         #expect(try ACPTestHelpers.roundTrip(original) == original)
+        #expect(original.supportsLogout)
     }
 
     @Test("ACPClientCapabilities round-trip")
@@ -92,7 +93,7 @@ struct ACPSharedModelsTests {
             promptCapabilities: ACPPromptCapabilities(image: true),
             mcpCapabilities: ACPMcpCapabilities(http: true),
             sessionCapabilities: ACPSessionCapabilities(list: ACPCapabilityMarker()),
-            auth: ACPAuthCapabilities(logout: true)
+            auth: ACPAuthCapabilities(logout: ACPCapabilityMarker())
         )
         #expect(try ACPTestHelpers.roundTrip(original) == original)
     }
@@ -148,6 +149,40 @@ struct ACPInitializeModelsTests {
         let decoded = try ACPTestHelpers.roundTripCodable(original)
         #expect(ACPTestHelpers.jsonEqual(decoded.meta, original.meta))
     }
+
+    @Test("ACPLogoutRequest/Response round-trip")
+    func logoutModels() throws {
+        let request = ACPLogoutRequest()
+        let response = ACPLogoutResponse(meta: .object(["ok": .boolean(true)]))
+        _ = try ACPTestHelpers.roundTripCodable(request)
+        let decodedResponse = try ACPTestHelpers.roundTripCodable(response)
+        #expect(ACPTestHelpers.jsonEqual(decodedResponse.meta, response.meta))
+    }
+
+    @Test("ACPSetSessionModeRequest/Response round-trip")
+    func setSessionModeModels() throws {
+        let request = ACPSetSessionModeRequest(sessionId: "s1", modeId: "code")
+        let response = ACPSetSessionModeResponse()
+        let decodedRequest = try ACPTestHelpers.roundTripCodable(request)
+        #expect(decodedRequest.sessionId == "s1")
+        #expect(decodedRequest.modeId == "code")
+        _ = try ACPTestHelpers.roundTripCodable(response)
+    }
+
+    @Test("ACPSetSessionConfigOptionRequest/Response round-trip")
+    func setSessionConfigOptionModels() throws {
+        let option = ACPSessionConfigOption(
+            id: "model",
+            currentValue: "model-1",
+            options: [ACPSessionConfigSelectOption(value: "model-1", name: "Model 1")]
+        )
+        let request = ACPSetSessionConfigOptionRequest(sessionId: "s1", configId: "model", value: "model-1")
+        let response = ACPSetSessionConfigOptionResponse(configOptions: [option])
+        let decodedRequest = try ACPTestHelpers.roundTripCodable(request)
+        #expect(decodedRequest.configId == "model")
+        let decodedResponse = try ACPTestHelpers.roundTripCodable(response)
+        #expect(decodedResponse.configOptions.count == 1)
+    }
 }
 
 // MARK: - Session
@@ -174,9 +209,15 @@ struct ACPSessionModelsTests {
 
     @Test("ACPNewSessionResponse round-trip")
     func newSessionResponse() throws {
+        let configOption = ACPSessionConfigOption(
+            id: "mode",
+            name: "Mode",
+            currentValue: "ask",
+            options: [ACPSessionConfigSelectOption(value: "ask", name: "Ask")]
+        )
         let original = ACPNewSessionResponse(
             sessionId: "sess-1",
-            configOptions: [ACPSessionConfigOption(id: "mode", name: "Mode")],
+            configOptions: [configOption],
             mode: ACPSessionModeState(currentModeId: "default")
         )
         let decoded = try ACPTestHelpers.roundTripCodable(original)
@@ -185,9 +226,42 @@ struct ACPSessionModelsTests {
 
     @Test("ACPSessionConfigOption round-trip")
     func sessionConfigOption() throws {
-        let original = ACPSessionConfigOption(id: "opt", name: "Option", type: "string", value: .string("x"))
+        let original = ACPSessionConfigOption(
+            id: "mode",
+            name: "Session Mode",
+            description: "Controls permission behavior",
+            category: "mode",
+            type: "select",
+            currentValue: "ask",
+            options: [
+                ACPSessionConfigSelectOption(value: "ask", name: "Ask"),
+                ACPSessionConfigSelectOption(value: "code", name: "Code")
+            ]
+        )
         let decoded = try ACPTestHelpers.roundTripCodable(original)
-        #expect(decoded.id == "opt")
+        #expect(decoded.id == "mode")
+        #expect(decoded.currentValue == "ask")
+        #expect(decoded.options.count == 2)
+    }
+
+    @Test("ACPSessionConfigOption decodes spec JSON")
+    func sessionConfigOptionSpecJSON() throws {
+        let json = """
+        {
+          "id": "mode",
+          "name": "Session Mode",
+          "category": "mode",
+          "type": "select",
+          "currentValue": "ask",
+          "options": [
+            { "value": "ask", "name": "Ask" },
+            { "value": "code", "name": "Code" }
+          ]
+        }
+        """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ACPSessionConfigOption.self, from: json)
+        #expect(decoded.id == "mode")
+        #expect(decoded.currentValue == "ask")
     }
 
     @Test("ACPSessionModeState round-trip")
@@ -390,6 +464,23 @@ struct ACPSessionUpdateModelsTests {
         let update = ACPSessionUpdate.sessionInfoUpdate(
             ACPSessionInfoUpdate(title: "Renamed", updatedAt: "2026-06-13T12:00:00Z")
         )
+        #expect(try ACPTestHelpers.roundTrip(update) == update)
+    }
+
+    @Test("Current mode update")
+    func currentModeUpdate() throws {
+        let update = ACPSessionUpdate.currentModeUpdate(modeId: "code")
+        #expect(try ACPTestHelpers.roundTrip(update) == update)
+    }
+
+    @Test("Config option update")
+    func configOptionUpdate() throws {
+        let option = ACPSessionConfigOption(
+            id: "mode",
+            currentValue: "code",
+            options: [ACPSessionConfigSelectOption(value: "code", name: "Code")]
+        )
+        let update = ACPSessionUpdate.configOptionUpdate(configOptions: [option])
         #expect(try ACPTestHelpers.roundTrip(update) == update)
     }
 

@@ -50,7 +50,7 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 |--------|--------|-------|--------|
 | `initialize` | sends | handles | ✅ |
 | `authenticate` | sends | handles | ✅ |
-| `logout` | sends | handles | ⬜ |
+| `logout` | sends | handles | ✅ |
 | `session/new` | sends | handles | ✅ |
 | `session/load` | sends | handles | ✅ |
 | `session/list` | sends | handles | ✅ |
@@ -59,8 +59,8 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 | `session/cancel` | notification | handles | ✅ |
 | `session/close` | sends | handles | ✅ |
 | `session/delete` | sends | handles | ✅ |
-| `session/set_mode` | sends | handles | ⬜ |
-| `session/set_config_option` | sends | handles | ⬜ |
+| `session/set_mode` | sends | handles | ✅ |
+| `session/set_config_option` | sends | handles | ✅ |
 
 ### Client methods (Agent → Client)
 
@@ -80,10 +80,24 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 | Method | Direction | Status |
 |--------|-----------|--------|
 | `session/update` | Agent → Client | ✅ |
+| `current_mode_update` / `config_option_update` (via `session/update`) | Agent → Client | ✅ decode |
+
+## Auth and session configuration (Client → Agent)
+
+| API | Capability gate | Adapter hook |
+|-----|-----------------|--------------|
+| `ACPClient.authenticate(methodId:)` | `authMethods` non-empty | `ACPAgentAdapter.authenticate(methodId:)` |
+| `ACPClient.logout()` | `agentCapabilities.auth.supportsLogout` | `ACPAgentAdapter.logout()` |
+| `ACPClient.setSessionMode(sessionId:modeId:)` | `sessionCapabilities.supportsSetMode` | `ACPAgentAdapter.setSessionMode` |
+| `ACPClient.setSessionConfigOption(sessionId:configId:value:)` | `sessionCapabilities.supportsSetConfigOption` | `ACPAgentAdapter.setSessionConfigOption` |
+
+`connect(autoAuthenticate:)` defaults to `true` (preserves `boot()` behavior). `session/new`, `session/load`, and `session/resume` return initial `mode` and `configOptions` from `ACPAgentAdapter.sessionSetup`.
+
+Cooperative `session/cancel` uses concurrent JSON-RPC dispatch (requests and notifications do not block the read loop) plus in-agent cancellation tracking.
 
 ## Open questions
 
-- **Auth methods**: Per-agent; `authenticate` implemented but no built-in OAuth flows yet.
+- **Auth methods**: Per-agent; `authenticate` / `logout` delegate to `ACPAgentAdapter`; no built-in OAuth flows yet.
 - **mcpServers wiring**: Wired via `ACPSessionMcpServersProvider` and `ACPConfig.mcpBootServers`; see `SwiftAgentKitAdapters` bridge from `MCPManager.localServerBootCalls()`.
 
 ## Terminal capability (Agent → Client)
@@ -139,3 +153,4 @@ ACP does **not** replace the MCP SDK — MCP continues to use the external `MCP.
 |------|------|
 | 2026-06-11 | Initial implementation: models, connection, client, agent, manager, tests, adapters, orchestrator |
 | 2026-06-13 | Session lifecycle: load, list, resume, close, delete; connect() split from session creation |
+| 2026-06-13 | Client→Agent completion: logout, set_mode, set_config_option, authenticate adapter hooks, cooperative session/cancel |

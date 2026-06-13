@@ -27,6 +27,7 @@ public actor ACPClient {
         case bootFailed(String)
         case initializationFailed
         case capabilityNotSupported(String)
+        case invalidAuthMethod(String)
 
         public var errorDescription: String? {
             switch self {
@@ -36,6 +37,7 @@ public actor ACPClient {
             case .bootFailed(let reason): return "Failed to boot ACP agent: \(reason)"
             case .initializationFailed: return "ACP initialize handshake failed"
             case .capabilityNotSupported(let method): return "Agent does not support \(method)"
+            case .invalidAuthMethod(let methodId): return "Unknown auth method: \(methodId)"
             }
         }
     }
@@ -43,6 +45,8 @@ public actor ACPClient {
     public private(set) var state: State = .disconnected
     public private(set) var agentInfo: ACPImplementation?
     public private(set) var agentCapabilities: ACPAgentCapabilities?
+    public private(set) var authMethods: [ACPAuthMethod] = []
+    public private(set) var isAuthenticated: Bool = false
     public private(set) var sessionId: String?
     public private(set) var toolCallTimeout: TimeInterval?
 
@@ -137,7 +141,7 @@ public actor ACPClient {
     }
 
     /// Connects transport and completes the initialize handshake (and auth when required).
-    public func connect() async throws {
+    public func connect(autoAuthenticate: Bool = true) async throws {
         guard state == .disconnected else { throw ACPClientError.alreadyConnected }
         await registerClientHandlers()
         try await connection.connect()
@@ -153,12 +157,11 @@ public actor ACPClient {
 
         agentInfo = initResponse.agentInfo
         agentCapabilities = initResponse.agentCapabilities
+        authMethods = initResponse.authMethods
+        isAuthenticated = initResponse.authMethods.isEmpty
 
-        if !initResponse.authMethods.isEmpty, let first = initResponse.authMethods.first {
-            let _: ACPAuthenticateResponse = try await connection.call(
-                "authenticate",
-                params: ACPAuthenticateRequest(methodId: first.id)
-            )
+        if autoAuthenticate, let first = initResponse.authMethods.first {
+            try await authenticate(methodId: first.id)
         }
 
         state = .initialized
@@ -169,6 +172,31 @@ public actor ACPClient {
                 ("agent", .string(initResponse.agentInfo?.name ?? "unknown"))
             )
         )
+    }
+
+    /// Authenticates with the agent using the given auth method id.
+    public func authenticate(methodId: String) async throws {
+        guard state == .disconnected || state == .initialized else {
+            throw ACPClientError.notInitialized
+        }
+        guard !authMethods.isEmpty else { return }
+        guard authMethods.contains(where: { $0.id == methodId }) else {
+            throw ACPClientError.invalidAuthMethod(methodId)
+        }
+
+        let _: ACPAuthenticateResponse = try await connection.call(
+            "authenticate",
+            params: ACPAuthenticateRequest(methodId: methodId)
+        )
+        isAuthenticated = true
+    }
+
+    /// Terminates the authenticated session via `logout`.
+    public func logout() async throws {
+        try requireCapability(agentCapabilities?.auth.supportsLogout == true, method: "logout")
+        try requireInitialized()
+        let _: ACPLogoutResponse = try await connection.call("logout", params: ACPLogoutRequest())
+        isAuthenticated = false
     }
 
     /// Creates a new session via `session/new`.
@@ -302,6 +330,37 @@ public actor ACPClient {
         return response
     }
 
+    /// Sets the active mode for a session via `session/set_mode`.
+    public func setSessionMode(sessionId: String, modeId: String) async throws -> ACPSetSessionModeResponse {
+        try requireCapability(agentCapabilities?.sessionCapabilities.supportsSetMode == true, method: "session/set_mode")
+        try requireInitialized()
+        return try await connection.call(
+            "session/set_mode",
+            params: ACPSetSessionModeRequest(sessionId: sessionId, modeId: modeId)
+        )
+    }
+
+    /// Sets a session configuration option via `session/set_config_option`.
+    public func setSessionConfigOption(
+        sessionId: String,
+        configId: String,
+        value: String
+    ) async throws -> ACPSetSessionConfigOptionResponse {
+        try requireCapability(
+            agentCapabilities?.sessionCapabilities.supportsSetConfigOption == true,
+            method: "session/set_config_option"
+        )
+        try requireInitialized()
+        return try await connection.call(
+            "session/set_config_option",
+            params: ACPSetSessionConfigOptionRequest(
+                sessionId: sessionId,
+                configId: configId,
+                value: value
+            )
+        )
+    }
+
     public func prompt(_ text: String) async throws -> (ACPPromptResponse, AsyncStream<ACPSessionUpdate>) {
         let (updates, responseTask) = try await promptStream(text)
         let response = try await responseTask.value
@@ -370,6 +429,8 @@ public actor ACPClient {
         sessionId = nil
         agentInfo = nil
         agentCapabilities = nil
+        authMethods = []
+        isAuthenticated = false
     }
 
     private func requireInitialized() throws {

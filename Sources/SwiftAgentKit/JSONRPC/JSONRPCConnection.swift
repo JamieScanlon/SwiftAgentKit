@@ -164,9 +164,9 @@ public actor JSONRPCConnection {
     private func dispatch(_ message: JSONRPCInboundMessage) async {
         switch message {
         case .request(let id, let method, let params):
-            await handleRequest(id: id, method: method, params: params)
+            Task { await handleRequest(id: id, method: method, params: params) }
         case .notification(let method, let params):
-            await handleNotification(method: method, params: params)
+            Task { await handleNotification(method: method, params: params) }
         case .success(let id, let result):
             if let continuation = pendingContinuations.removeValue(forKey: idKey(for: id)) {
                 do {
