@@ -119,7 +119,7 @@ Terminal RPCs flow **agent → client**: during prompt turns the agent subproces
 - `ACPClient.boot(..., clientCapabilities:)` or `ACPClient.defaultClientCapabilities(advertiseTerminal: true)`
 - `ACPConfig.ServerBootCall.advertiseTerminal` (per agent boot entry; default `false`)
 
-**Delegate guidance (Option B):** Hosts supply an `ACPClientDelegate` at boot time. For per-session policy (cwd, sandbox scope), use a wrapper delegate keyed by `sessionId` (present on all terminal request params). There is no `setDelegate` hot-swap API — boot a new client or wrap context in the delegate when requirements change.
+**Delegate guidance:** Hosts supply an `ACPClientDelegate` at boot time or swap it later via ``ACPClient/setDelegate(_:)``. For per-session policy (cwd, sandbox scope), use a wrapper delegate keyed by `sessionId` (present on all terminal request params).
 
 **`DefaultACPClientDelegate`:** Implements filesystem and permission methods only. It does not implement terminal methods; terminal stubs in the `ACPClientDelegate` protocol extension throw `methodNotFound` if a custom delegate opts into terminal at the capability level but forgets to implement a method.
 

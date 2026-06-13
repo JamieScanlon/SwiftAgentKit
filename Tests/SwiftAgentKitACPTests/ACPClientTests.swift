@@ -216,6 +216,40 @@ struct ACPClientTests {
         #expect(delegate.createTerminalCallCount.value == 1)
     }
 
+    @Test("setDelegate swaps inbound handler target after connect")
+    func setDelegateAfterConnect() async throws {
+        let (clientTransport, agentTransport) = JSONRPCMemoryTransport.paired()
+        let initialDelegate = DefaultACPClientDelegate(autoApprovePermissions: false)
+        let replacementDelegate = RecordingTerminalDelegate(terminalId: "term-swapped")
+        let client = ACPClient(
+            name: "test-client",
+            transport: clientTransport,
+            delegate: initialDelegate,
+            clientCapabilities: ACPClient.defaultClientCapabilities(advertiseTerminal: true)
+        )
+        let agentConnection = JSONRPCConnection(transport: agentTransport)
+        await ACPTestHelpers.registerMinimalAgentStub(on: agentConnection)
+
+        try await agentConnection.connect()
+        defer { Task { await agentConnection.disconnect(); await client.shutdown() } }
+
+        try await client.connect()
+        try await client.newSession(cwd: "/tmp")
+        await client.setDelegate(replacementDelegate)
+
+        guard let sessionId = await client.sessionId else {
+            Issue.record("Missing sessionId")
+            return
+        }
+
+        let response: ACPCreateTerminalResponse = try await agentConnection.call(
+            "terminal/create",
+            params: ACPCreateTerminalRequest(sessionId: sessionId, command: "echo")
+        )
+        #expect(response.terminalId == "term-swapped")
+        #expect(replacementDelegate.createTerminalCallCount.value == 1)
+    }
+
     @Test("Per-client terminal capabilities differ")
     func perClientTerminalCapabilitiesDiffer() async throws {
         let (clientTransport1, agentTransport1) = JSONRPCMemoryTransport.paired()

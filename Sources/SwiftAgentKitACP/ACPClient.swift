@@ -51,7 +51,7 @@ public actor ACPClient {
     public private(set) var toolCallTimeout: TimeInterval?
 
     private let connection: JSONRPCConnection
-    private let delegate: any ACPClientDelegate
+    private let delegateBox: ACPClientDelegateBox
     private let clientInfo: ACPImplementation
     private let clientCapabilities: ACPClientCapabilities
     private let logger: Logger
@@ -81,7 +81,7 @@ public actor ACPClient {
         logger: Logger? = nil
     ) {
         self.name = name
-        self.delegate = delegate
+        self.delegateBox = ACPClientDelegateBox(delegate)
         self.clientInfo = clientInfo
         self.clientCapabilities = clientCapabilities
         self.toolCallTimeout = toolCallTimeout
@@ -138,6 +138,13 @@ public actor ACPClient {
 
     func setBootProcess(_ process: Process) {
         bootProcess = process
+    }
+
+    /// Replaces the client delegate used for agent → client RPCs (filesystem, permission, terminal).
+    ///
+    /// Takes effect immediately for subsequent inbound calls. Safe to call before or after ``connect()``.
+    public func setDelegate(_ delegate: any ACPClientDelegate) {
+        delegateBox.setDelegate(delegate)
     }
 
     /// Connects transport and completes the initialize handshake (and auth when required).
@@ -479,53 +486,54 @@ public actor ACPClient {
     }
 
     private func registerClientHandlers() async {
-        await connection.registerMethod("fs/read_text_file") { [delegate] paramsData in
+        let delegateBox = self.delegateBox
+        await connection.registerMethod("fs/read_text_file") { paramsData in
             let decoder = JSONDecoder()
             let request = try decoder.decode(ACPReadTextFileRequest.self, from: paramsData)
-            let response = try await delegate.readTextFile(request)
+            let response = try await delegateBox.readTextFile(request)
             return try JSONEncoder().encode(response)
         }
-        await connection.registerMethod("fs/write_text_file") { [delegate] paramsData in
+        await connection.registerMethod("fs/write_text_file") { paramsData in
             let decoder = JSONDecoder()
             let request = try decoder.decode(ACPWriteTextFileRequest.self, from: paramsData)
-            let response = try await delegate.writeTextFile(request)
+            let response = try await delegateBox.writeTextFile(request)
             return try JSONEncoder().encode(response)
         }
-        await connection.registerMethod("session/request_permission") { [delegate] paramsData in
+        await connection.registerMethod("session/request_permission") { paramsData in
             let decoder = JSONDecoder()
             let request = try decoder.decode(ACPRequestPermissionRequest.self, from: paramsData)
-            let response = try await delegate.requestPermission(request)
+            let response = try await delegateBox.requestPermission(request)
             return try JSONEncoder().encode(response)
         }
         if clientCapabilities.terminal {
-            await connection.registerMethod("terminal/create") { [delegate] paramsData in
+            await connection.registerMethod("terminal/create") { paramsData in
                 let decoder = JSONDecoder()
                 let request = try decoder.decode(ACPCreateTerminalRequest.self, from: paramsData)
-                let response = try await delegate.createTerminal(request)
+                let response = try await delegateBox.createTerminal(request)
                 return try JSONEncoder().encode(response)
             }
-            await connection.registerMethod("terminal/output") { [delegate] paramsData in
+            await connection.registerMethod("terminal/output") { paramsData in
                 let decoder = JSONDecoder()
                 let request = try decoder.decode(ACPTerminalOutputRequest.self, from: paramsData)
-                let response = try await delegate.terminalOutput(request)
+                let response = try await delegateBox.terminalOutput(request)
                 return try JSONEncoder().encode(response)
             }
-            await connection.registerMethod("terminal/wait_for_exit") { [delegate] paramsData in
+            await connection.registerMethod("terminal/wait_for_exit") { paramsData in
                 let decoder = JSONDecoder()
                 let request = try decoder.decode(ACPWaitForExitRequest.self, from: paramsData)
-                let response = try await delegate.waitForTerminalExit(request)
+                let response = try await delegateBox.waitForTerminalExit(request)
                 return try JSONEncoder().encode(response)
             }
-            await connection.registerMethod("terminal/kill") { [delegate] paramsData in
+            await connection.registerMethod("terminal/kill") { paramsData in
                 let decoder = JSONDecoder()
                 let request = try decoder.decode(ACPKillTerminalRequest.self, from: paramsData)
-                let response = try await delegate.killTerminal(request)
+                let response = try await delegateBox.killTerminal(request)
                 return try JSONEncoder().encode(response)
             }
-            await connection.registerMethod("terminal/release") { [delegate] paramsData in
+            await connection.registerMethod("terminal/release") { paramsData in
                 let decoder = JSONDecoder()
                 let request = try decoder.decode(ACPReleaseTerminalRequest.self, from: paramsData)
-                let response = try await delegate.releaseTerminal(request)
+                let response = try await delegateBox.releaseTerminal(request)
                 return try JSONEncoder().encode(response)
             }
         }
@@ -539,6 +547,67 @@ public actor ACPClient {
         sessionUpdateContinuation?.finish()
         sessionUpdateContinuation = nil
         state = .sessionReady
+    }
+}
+
+private final class ACPClientDelegateBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var delegate: any ACPClientDelegate
+
+    init(_ delegate: any ACPClientDelegate) {
+        self.delegate = delegate
+    }
+
+    func setDelegate(_ delegate: any ACPClientDelegate) {
+        lock.lock()
+        self.delegate = delegate
+        lock.unlock()
+    }
+
+    func readTextFile(_ request: ACPReadTextFileRequest) async throws -> ACPReadTextFileResponse {
+        let delegate = currentDelegate()
+        return try await delegate.readTextFile(request)
+    }
+
+    func writeTextFile(_ request: ACPWriteTextFileRequest) async throws -> ACPWriteTextFileResponse {
+        let delegate = currentDelegate()
+        return try await delegate.writeTextFile(request)
+    }
+
+    func requestPermission(_ request: ACPRequestPermissionRequest) async throws -> ACPRequestPermissionResponse {
+        let delegate = currentDelegate()
+        return try await delegate.requestPermission(request)
+    }
+
+    func createTerminal(_ request: ACPCreateTerminalRequest) async throws -> ACPCreateTerminalResponse {
+        let delegate = currentDelegate()
+        return try await delegate.createTerminal(request)
+    }
+
+    func terminalOutput(_ request: ACPTerminalOutputRequest) async throws -> ACPTerminalOutputResponse {
+        let delegate = currentDelegate()
+        return try await delegate.terminalOutput(request)
+    }
+
+    func waitForTerminalExit(_ request: ACPWaitForExitRequest) async throws -> ACPWaitForExitResponse {
+        let delegate = currentDelegate()
+        return try await delegate.waitForTerminalExit(request)
+    }
+
+    func killTerminal(_ request: ACPKillTerminalRequest) async throws -> ACPKillTerminalResponse {
+        let delegate = currentDelegate()
+        return try await delegate.killTerminal(request)
+    }
+
+    func releaseTerminal(_ request: ACPReleaseTerminalRequest) async throws -> ACPReleaseTerminalResponse {
+        let delegate = currentDelegate()
+        return try await delegate.releaseTerminal(request)
+    }
+
+    private func currentDelegate() -> any ACPClientDelegate {
+        lock.lock()
+        defer { lock.unlock() }
+        return delegate
     }
 }
 
