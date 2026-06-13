@@ -118,13 +118,13 @@ func main() async {
     let config = OrchestratorConfig(
         streamingEnabled: true,
         mcpEnabled: true,
-        a2aEnabled: false
+        a2aIntegration: .disabled
     )
     
     // Initialize the orchestrator
     let orchestrator = SwiftAgentKitOrchestrator(llm: mockLLM, config: config, logger: logger)
     logger.info("Orchestrator initialized successfully: \(orchestrator)")
-    logger.info("Configuration - Streaming: \(config.streamingEnabled), MCP: \(config.mcpEnabled), A2A: \(config.a2aEnabled)")
+    logger.info("Configuration - Streaming: \(config.streamingEnabled), MCP: \(config.mcpEnabled), A2A: \(config.a2aIntegration)")
     
     // Demonstrate conversation processing
     logger.info("Demonstrating conversation processing...")

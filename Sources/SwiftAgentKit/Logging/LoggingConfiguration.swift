@@ -655,6 +655,15 @@ struct FilteringLogHandler: LogHandler {
             ))
         }
 
+        if criterionResults.isEmpty {
+            switch (filter.matchMode, filter.disposition) {
+            case (.all, .allow), (.any, .deny):
+                return true
+            case (.all, .deny), (.any, .allow):
+                return false
+            }
+        }
+
         let isMatch: Bool
         switch filter.matchMode {
         case .all:

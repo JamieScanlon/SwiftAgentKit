@@ -22,7 +22,7 @@
 |----------|---------|
 | `streamingEnabled` | Use `llm.stream` vs `llm.send` for each LLM step |
 | `mcpEnabled` | Use `mcpManager` for tool dispatch when configured |
-| `a2aEnabled` | Use `a2aManager` for agent-style tool calls |
+| `a2aIntegration` | How A2A agents are registered and executed (see table below). Replaces deprecated `a2aEnabled`. |
 | `acpEnabled` | Use `acpManager` for ACP agent tool calls |
 | `mcpConnectionTimeout` | Seconds for MCP connections when the orchestrator creates its own `MCPManager` |
 | `toolCallTimeout` | Maximum wall-clock time (**seconds**) for a single tool dispatch (MCP, A2A, or `ToolManager`). Default **300** (5 minutes). On expiry, the model receives a tool-role error via `ToolCallTimeoutError` (see **Tool dispatch** below). |
@@ -33,7 +33,17 @@
 | `maxCorrectionRetries` | Maximum correction passes after a rejected prose turn; `0` means a rejected turn throws `OrchestratorError.assistantTurnCorrectionRetriesExhausted` |
 | `correctionMessage` / `correctionRole` | Correction appended after rejection |
 
-All feature flags default to `false` unless you opt in.
+All feature flags default to `false` or `.disabled` unless you opt in.
+
+### A2A integration modes (`A2AOrchestratorIntegration`)
+
+| Mode | Catalog merge (`allAvailableTools`, `allRegisteredTools`) | Inline `agentCall` in orchestrator |
+|------|-----------------------------------------------------------|-------------------------------------|
+| `.disabled` | No | No |
+| `.registrationOnly` | Yes | No — host adapter executes A2A tools |
+| `.inlineExecution` | Yes | Yes (legacy behavior when `a2aEnabled` was `true`) |
+
+Deprecated: `a2aEnabled: true` → `.inlineExecution`; `a2aEnabled: false` → `.disabled`.
 
 **When parameters apply:** `OrchestratorConfig` is immutable on the orchestrator. Each inner LLM call builds a fresh `LLMRequestConfig` from that config. To change `additionalParameters` or metadata **without** recreating the orchestrator, use ``OrchestratorInvocationOptions`` on ``updateConversation(_:availableTools:options:)`` (merged shallowly into JSON objects; per-invocation keys win).
 
@@ -50,7 +60,7 @@ let orchestrator = SwiftAgentKitOrchestrator(
     config: OrchestratorConfig(
         streamingEnabled: true,
         mcpEnabled: false,
-        a2aEnabled: false,
+        a2aIntegration: .disabled,
         maxTokens: 4096,
         temperature: 0.7
     ),
@@ -59,7 +69,7 @@ let orchestrator = SwiftAgentKitOrchestrator(
 ```
 
 - If `mcpEnabled` is `true` and you pass `mcpManager: nil`, the orchestrator constructs an `MCPManager` (optionally with `mcpOAuthHandler` for remote OAuth).  
-- If `a2aEnabled` is `true` and `a2aManager` is `nil`, it constructs an `A2AManager`.  
+- If `a2aIntegration` is not `.disabled` and `a2aManager` is `nil`, it constructs an `A2AManager`.  
 - **`toolManager`** is optional; use it for in-process function tools that are neither MCP nor A2A.
 
 ## Conversation API
@@ -166,7 +176,7 @@ try await orchestrator.updateConversation(messages, availableTools: tools)
 For each `ToolCall`, the orchestrator aggregates responses from (in order):
 
 1. **MCP** — if `mcpManager != nil` and `mcpEnabled`  
-2. **A2A** — if `a2aManager != nil` and `a2aEnabled`  
+2. **A2A** — if prior steps did not handle the call, `a2aManager != nil`, and `a2aIntegration == .inlineExecution`  
 3. **`ToolManager`** — if still unresolved and `toolManager` is set  
 
 Each step is wrapped with **`withToolCallTimeout`** (`SwiftAgentKit`) inside **`MCPManager.toolCall`** and **`A2AManager.agentCall`** (orchestrator passes **`OrchestratorConfig.toolCallTimeout`** as the fallback). The effective limit is:

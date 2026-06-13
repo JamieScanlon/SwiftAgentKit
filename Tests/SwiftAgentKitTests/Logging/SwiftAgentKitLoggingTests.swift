@@ -540,16 +540,6 @@ struct SwiftAgentKitLoggingTests {
 
     @Test
     func noActiveCriteriaSemanticsByMatchAndDisposition() {
-        SwiftAgentKitLogging.resetForTesting()
-
-        let recorder = LogRecorder()
-        let capturingLogger = Logger(label: "NoCriteria") { _ in
-            CapturingLogHandler(recorder: recorder)
-        }
-
-        SwiftAgentKitLogging.bootstrap(logger: capturingLogger, level: .debug)
-        _ = recorder.drain()
-
         let cases: [(SwiftAgentKitLogging.LogFilter.MatchMode, SwiftAgentKitLogging.LogFilter.Disposition, Bool)] = [
             (.all, .allow, true),
             (.all, .deny, false),
@@ -558,14 +548,23 @@ struct SwiftAgentKitLoggingTests {
         ]
 
         for (index, testCase) in cases.enumerated() {
+            SwiftAgentKitLogging.resetForTesting()
+
+            let recorder = LogRecorder()
+            let capturingLogger = Logger(label: "NoCriteria\(index)") { _ in
+                CapturingLogHandler(recorder: recorder)
+            }
+
             let filter = SwiftAgentKitLogging.LogFilter(
                 matchMode: testCase.0,
                 disposition: testCase.1
             )
-            SwiftAgentKitLogging.setFilter(filter)
+            SwiftAgentKitLogging.bootstrap(logger: capturingLogger, level: .debug, filter: filter)
+            _ = recorder.drain()
+
             let logger = SwiftAgentKitLogging.logger(for: .core("NoCriteria\(index)"))
             logger.info("message \(index)")
-            let logs = recorder.drain()
+            let logs = recorder.drain().filter { $0.message.contains("message \(index)") }
             #expect((!logs.isEmpty) == testCase.2)
         }
     }

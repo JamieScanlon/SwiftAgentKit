@@ -26,6 +26,12 @@ public extension A2AAgentStreamClient {
     }
 }
 
+/// Protocol for A2A clients that support task lifecycle operations such as cancellation and polling.
+public protocol A2ATaskLifecycleClient: A2AAgentStreamClient {
+    func cancelTask(params: TaskIdParams) async throws -> A2ATask
+    func getTask(params: TaskQueryParams) async throws -> A2ATask
+}
+
 public actor A2AManager {
     private let logger: Logger
     
@@ -69,56 +75,255 @@ public actor A2AManager {
         self.clients = clients
         await buildToolsJson()
     }
-    
-    /// - Parameter orchestratorDefaultTimeout: Used when neither per-server nor root A2A config sets a tool-call timeout.
-    public func agentCall(_ toolCall: ToolCall, orchestratorDefaultTimeout: TimeInterval = 300) async throws -> [LLMResponse]? {
-        var matchingClient: (any A2AAgentStreamClient)?
+
+    /// Returns the stream client whose agent card name matches `name` (case-sensitive).
+    public func client(forAgentNamed name: String) async -> (any A2AAgentStreamClient)? {
         for client in clients {
             guard let agentCard = await client.agentCard else { continue }
-            if agentCard.name == toolCall.name {
-                matchingClient = client
-                break
+            if agentCard.name == name {
+                return client
             }
         }
-        
-        guard let client = matchingClient else {
-            return nil
+        return nil
+    }
+
+    /// Returns the agent card for the client whose name matches `name`, or `nil` if not found.
+    public func agentCard(forAgentNamed name: String) async -> AgentCard? {
+        guard let client = await client(forAgentNamed: name) else { return nil }
+        return await client.agentCard
+    }
+    
+    /// Streams normalized incremental A2A delegate events for a tool call.
+    ///
+    /// - Parameter orchestratorDefaultTimeout: Used when neither per-server nor root A2A config sets a tool-call timeout.
+    /// - Throws: ``A2AManagerError/agentNotFound(_:)`` or ``A2AManagerError/invalidArguments`` before the stream starts.
+    public func streamAgentCall(
+        _ toolCall: ToolCall,
+        invocationID: String,
+        orchestratorDefaultTimeout: TimeInterval = 300
+    ) async throws -> (handle: A2ADelegateInvocationHandle, events: AsyncStream<A2ADelegateStreamEvent>) {
+        guard let client = await resolveClient(for: toolCall) else {
+            throw A2AManagerError.agentNotFound(toolCall.name)
         }
-        
-        guard case .object(let argsDict) = toolCall.arguments,
-              case .string = argsDict["instructions"] else { return nil }
-        
-        let seconds = Self.resolvedToolCallTimeout(
+        guard let instructions = validateInstructions(in: toolCall) else {
+            throw A2AManagerError.invalidArguments
+        }
+
+        let handle = A2ADelegateInvocationHandle(
+            invocationID: invocationID,
+            toolCallID: toolCall.id,
+            agentName: toolCall.name
+        )
+        let timeout = Self.resolvedToolCallTimeout(
             client: await client.toolCallTimeout,
             configDefault: toolCallTimeout,
             orchestrator: orchestratorDefaultTimeout
         )
-        return try await withToolCallTimeout(seconds, toolName: toolCall.name) {
-            try await self.executeAgentCall(client: client, toolCall: toolCall)
+
+        registerInFlight(
+            invocationID: invocationID,
+            toolCallID: toolCall.id,
+            agentName: toolCall.name,
+            client: client
+        )
+
+        let events = AsyncStream(A2ADelegateStreamEvent.self) { continuation in
+            let streamTask = Task {
+                final class TerminalState: @unchecked Sendable {
+                    var terminalEmitted = false
+                }
+                let terminalState = TerminalState()
+                let yield: @Sendable (A2ADelegateStreamEvent) -> Void = { event in
+                    switch event {
+                    case .completed, .failed:
+                        terminalState.terminalEmitted = true
+                    default:
+                        break
+                    }
+                    continuation.yield(event)
+                }
+                defer {
+                    Task { await self.deregisterInFlight(invocationID: invocationID) }
+                }
+                do {
+                    try await withToolCallTimeout(timeout, toolName: toolCall.name) {
+                        _ = try await self.processAgentStream(
+                            client: client,
+                            toolCall: toolCall,
+                            instructions: instructions,
+                            agentName: toolCall.name,
+                            invocationID: invocationID,
+                            yield: yield
+                        )
+                    }
+                } catch is CancellationError {
+                    if !terminalState.terminalEmitted {
+                        let snapshot = await self.inFlightByInvocationID[invocationID]?.snapshot
+                        continuation.yield(.failed(A2ADelegateFailure(
+                            error: "Cancelled",
+                            taskID: snapshot?.taskID
+                        )))
+                    }
+                } catch {
+                    if !terminalState.terminalEmitted {
+                        let snapshot = await self.inFlightByInvocationID[invocationID]?.snapshot
+                        continuation.yield(.failed(A2ADelegateFailure(
+                            error: String(describing: error),
+                            taskID: snapshot?.taskID
+                        )))
+                    }
+                }
+                continuation.finish()
+            }
+            Task { await self.setStreamTask(invocationID: invocationID, task: streamTask) }
+        }
+        return (handle, events)
+    }
+
+    /// Cancels an in-flight A2A agent call by invocation ID, tool call ID, or A2A task ID.
+    ///
+    /// Cancels the local stream task and, when a task ID is known, calls `tasks/cancel` on the matching client.
+    /// - Returns: `true` if a matching in-flight invocation was found and cancellation was attempted.
+    public func cancelAgentCall(
+        invocationID: String? = nil,
+        toolCallID: String? = nil,
+        taskID: String? = nil
+    ) async -> Bool {
+        guard let resolvedInvocationID = resolveInFlightInvocationID(
+            invocationID: invocationID,
+            toolCallID: toolCallID,
+            taskID: taskID
+        ), let record = inFlightByInvocationID[resolvedInvocationID] else {
+            return false
+        }
+
+        record.streamTask?.cancel()
+
+        if let taskID = record.snapshot.taskID {
+            if let lifecycleClient = record.client as? any A2ATaskLifecycleClient {
+                do {
+                    _ = try await lifecycleClient.cancelTask(params: TaskIdParams(taskId: taskID))
+                } catch {
+                    logger.debug(
+                        "Remote A2A task cancel failed",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("taskID", .string(taskID)),
+                            ("error", .string(String(describing: error)))
+                        )
+                    )
+                }
+            } else {
+                logger.debug(
+                    "Skipping remote A2A task cancel; client does not conform to A2ATaskLifecycleClient",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("taskID", .string(taskID)),
+                        ("agentName", .string(record.snapshot.agentName))
+                    )
+                )
+            }
+        }
+
+        deregisterInFlight(invocationID: resolvedInvocationID)
+        return true
+    }
+
+    @available(*, deprecated, message: "Use cancelAgentCall(toolCallID:)")
+    public func cancelPendingHandle(_ handleID: String) async -> Bool {
+        await cancelAgentCall(invocationID: handleID, toolCallID: handleID, taskID: handleID)
+    }
+
+    /// - Parameter orchestratorDefaultTimeout: Used when neither per-server nor root A2A config sets a tool-call timeout.
+    public func agentCall(_ toolCall: ToolCall, orchestratorDefaultTimeout: TimeInterval = 300) async throws -> [LLMResponse]? {
+        do {
+            let (_, events) = try await streamAgentCall(
+                toolCall,
+                invocationID: toolCall.id ?? UUID().uuidString,
+                orchestratorDefaultTimeout: orchestratorDefaultTimeout
+            )
+            return await collectResponses(from: events)
+        } catch A2AManagerError.agentNotFound, A2AManagerError.invalidArguments {
+            return nil
         }
     }
-    
-    private func executeAgentCall(client: any A2AAgentStreamClient, toolCall: ToolCall) async throws -> [LLMResponse]? {
+
+    private func resolveClient(for toolCall: ToolCall) async -> (any A2AAgentStreamClient)? {
+        await client(forAgentNamed: toolCall.name)
+    }
+
+    private func validateInstructions(in toolCall: ToolCall) -> String? {
         guard case .object(let argsDict) = toolCall.arguments,
-              case .string(let instructions) = argsDict["instructions"] else { return nil }
-        
+              case .string(let instructions) = argsDict["instructions"] else {
+            return nil
+        }
+        return instructions
+    }
+
+    private func processAgentStream(
+        client: any A2AAgentStreamClient,
+        toolCall: ToolCall,
+        instructions: String,
+        agentName: String,
+        invocationID: String,
+        yield: (@Sendable (A2ADelegateStreamEvent) -> Void)?
+    ) async throws -> [LLMResponse] {
+        yield?(.connecting(agentName: agentName))
+
         let a2aMessage = A2AMessage(role: "user", parts: [.text(text: instructions)], messageId: UUID().uuidString)
         let params: MessageSendParams = .init(message: a2aMessage, metadata: try? .init(["toolCallId": toolCall.id]))
         let contents = try await client.streamMessage(params: params)
+
         var returnResponses: [LLMResponse] = []
         var responseText: String = ""
         var accumulatedImages: [Message.Image] = []
         var accumulatedFiles: [LLMResponseFile] = []
-        
+        var taskID: String?
+        var contextID: String?
+        var terminalEmitted = false
+
+        func updateTaskIdentity(taskID: String, contextID: String) {
+            self.updateInFlightTaskIdentity(
+                invocationID: invocationID,
+                taskID: taskID,
+                contextID: contextID
+            )
+        }
+
+        func emitFailed(_ error: String) {
+            guard !terminalEmitted else { return }
+            terminalEmitted = true
+            yield?(.failed(A2ADelegateFailure(error: error, taskID: taskID)))
+        }
+
+        func emitCompleted() {
+            guard !terminalEmitted else { return }
+            terminalEmitted = true
+            let metadata = createMetadata(images: accumulatedImages, files: accumulatedFiles)
+            yield?(.completed(A2ADelegateCompletion(
+                content: responseText,
+                metadata: metadata,
+                taskID: taskID,
+                contextID: contextID
+            )))
+        }
+
         for await content in contents {
+            try Task.checkCancellation()
+
             switch content.result {
             case .message(let aMessage):
                 let (text, images, files) = extractTextImagesAndFiles(from: aMessage.parts)
                 accumulatedImages.append(contentsOf: images)
                 accumulatedFiles.append(contentsOf: files)
+                yield?(.messageChunk(text: text, images: images, files: files))
                 let metadata = createMetadata(images: images, files: files)
                 returnResponses.append(LLMResponse.complete(content: text, metadata: metadata))
+
             case .task(let task):
+                taskID = task.id
+                contextID = task.contextId
+                updateTaskIdentity(taskID: task.id, contextID: task.contextId)
+                yield?(.taskStarted(taskID: task.id, contextID: task.contextId))
+
                 var text: String = ""
                 var taskImages: [Message.Image] = []
                 var taskFiles: [LLMResponseFile] = []
@@ -132,13 +337,27 @@ public actor A2AManager {
                 }
                 accumulatedImages.append(contentsOf: taskImages)
                 accumulatedFiles.append(contentsOf: taskFiles)
+                if !text.isEmpty || !taskImages.isEmpty || !taskFiles.isEmpty {
+                    yield?(.messageChunk(text: text, images: taskImages, files: taskFiles))
+                }
                 let metadata = createMetadata(images: taskImages, files: taskFiles)
                 returnResponses.append(LLMResponse.complete(content: text, metadata: metadata))
+
             case .taskArtifactUpdate(let event):
+                taskID = event.taskId
+                contextID = event.contextId
+                updateTaskIdentity(taskID: event.taskId, contextID: event.contextId)
                 let (artifactText, artifactImages, artifactFiles) = extractTextImagesAndFiles(from: event.artifact.parts, artifactName: event.artifact.name)
                 accumulatedImages.append(contentsOf: artifactImages)
                 accumulatedFiles.append(contentsOf: artifactFiles)
-                
+
+                yield?(.artifactChunk(
+                    taskID: event.taskId,
+                    text: artifactText,
+                    append: event.append ?? false,
+                    lastChunk: event.lastChunk ?? false
+                ))
+
                 if event.append == true {
                     responseText += artifactText
                 } else {
@@ -147,18 +366,60 @@ public actor A2AManager {
                 if event.lastChunk == true {
                     let metadata = createMetadata(images: accumulatedImages, files: accumulatedFiles)
                     returnResponses.append(LLMResponse.complete(content: responseText, metadata: metadata))
+                    yield?(.messageChunk(text: responseText, images: accumulatedImages, files: accumulatedFiles))
                     responseText = ""
                     accumulatedImages = []
                     accumulatedFiles = []
                 }
+
             case .taskStatusUpdate(let event):
-                if event.status.state == .completed, (!responseText.isEmpty || !accumulatedImages.isEmpty || !accumulatedFiles.isEmpty) {
-                    let metadata = createMetadata(images: accumulatedImages, files: accumulatedFiles)
-                    returnResponses.append(LLMResponse.complete(content: responseText, metadata: metadata))
-                    responseText = ""
-                    accumulatedImages = []
-                    accumulatedFiles = []
+                taskID = event.taskId
+                contextID = event.contextId
+                updateTaskIdentity(taskID: event.taskId, contextID: event.contextId)
+                yield?(.statusUpdate(taskID: event.taskId, state: event.status.state, final: event.final))
+
+                switch event.status.state {
+                case .failed, .rejected, .canceled:
+                    let errorMessage = event.status.message?.parts.compactMap { part -> String? in
+                        if case .text(let text) = part, !text.isEmpty { return text }
+                        return nil
+                    }.joined(separator: " ") ?? ""
+                    emitFailed(errorMessage.isEmpty ? "Task \(event.status.state.rawValue)" : errorMessage)
+                case .completed:
+                    if !responseText.isEmpty || !accumulatedImages.isEmpty || !accumulatedFiles.isEmpty {
+                        let metadata = createMetadata(images: accumulatedImages, files: accumulatedFiles)
+                        returnResponses.append(LLMResponse.complete(content: responseText, metadata: metadata))
+                        yield?(.messageChunk(text: responseText, images: accumulatedImages, files: accumulatedFiles))
+                        responseText = ""
+                        accumulatedImages = []
+                        accumulatedFiles = []
+                    }
+                    if event.final {
+                        emitCompleted()
+                    }
+                default:
+                    break
                 }
+            }
+        }
+
+        if !terminalEmitted {
+            if Task.isCancelled {
+                emitFailed("Cancelled")
+            } else {
+                emitCompleted()
+            }
+        }
+
+        return returnResponses
+    }
+
+    private func collectResponses(from events: AsyncStream<A2ADelegateStreamEvent>) async -> [LLMResponse] {
+        var returnResponses: [LLMResponse] = []
+        for await event in events {
+            if case .messageChunk(let text, let images, let files) = event {
+                let metadata = createMetadata(images: images, files: files)
+                returnResponses.append(LLMResponse.complete(content: text, metadata: metadata))
             }
         }
         return returnResponses
@@ -322,6 +583,7 @@ public actor A2AManager {
     
     /// Disconnects A2A clients and terminates any subprocess started for `boot` configuration.
     public func shutdown() async {
+        cancelAllInFlight()
         for client in clients {
             await client.shutdown()
         }
@@ -401,19 +663,93 @@ public actor A2AManager {
         return descriptors
     }
 
-    /// Placeholder cancellation seam for pending handle integration.
-    /// Current streaming implementation does not retain resumable handle tasks internally.
-    public func cancelPendingHandle(_ handleID: String) async -> Bool {
-        logger.debug(
-            "Pending handle cancellation requested",
-            metadata: SwiftAgentKitLogging.metadata(("handleID", .string(handleID)))
-        )
-        return false
-    }
-    
     // MARK: - Private
-    
+
+    private struct InFlightRecord {
+        var snapshot: A2AInFlightInvocation
+        let client: any A2AAgentStreamClient
+        var streamTask: Task<Void, Never>?
+    }
+
     private var clients: [any A2AAgentStreamClient] = []
+    private var inFlightByInvocationID: [String: InFlightRecord] = [:]
+    private var inFlightByToolCallID: [String: String] = [:]
+    private var inFlightByTaskID: [String: String] = [:]
+
+    private func registerInFlight(
+        invocationID: String,
+        toolCallID: String?,
+        agentName: String,
+        client: any A2AAgentStreamClient
+    ) {
+        let snapshot = A2AInFlightInvocation(
+            invocationID: invocationID,
+            toolCallID: toolCallID,
+            agentName: agentName
+        )
+        inFlightByInvocationID[invocationID] = InFlightRecord(snapshot: snapshot, client: client)
+        if let toolCallID {
+            inFlightByToolCallID[toolCallID] = invocationID
+        }
+    }
+
+    private func setStreamTask(invocationID: String, task: Task<Void, Never>) {
+        guard var record = inFlightByInvocationID[invocationID] else { return }
+        record.streamTask = task
+        inFlightByInvocationID[invocationID] = record
+    }
+
+    private func updateInFlightTaskIdentity(invocationID: String, taskID: String, contextID: String) {
+        guard var record = inFlightByInvocationID[invocationID] else { return }
+        if let previousTaskID = record.snapshot.taskID, previousTaskID != taskID {
+            inFlightByTaskID.removeValue(forKey: previousTaskID)
+        }
+        record.snapshot.taskID = taskID
+        record.snapshot.contextID = contextID
+        inFlightByInvocationID[invocationID] = record
+        inFlightByTaskID[taskID] = invocationID
+    }
+
+    private func resolveInFlightInvocationID(
+        invocationID: String?,
+        toolCallID: String?,
+        taskID: String?
+    ) -> String? {
+        if let invocationID, inFlightByInvocationID[invocationID] != nil {
+            return invocationID
+        }
+        if let toolCallID, let resolved = inFlightByToolCallID[toolCallID] {
+            return resolved
+        }
+        if let taskID, let resolved = inFlightByTaskID[taskID] {
+            return resolved
+        }
+        return nil
+    }
+
+    private func deregisterInFlight(invocationID: String) {
+        guard let record = inFlightByInvocationID.removeValue(forKey: invocationID) else { return }
+        if let toolCallID = record.snapshot.toolCallID {
+            if inFlightByToolCallID[toolCallID] == invocationID {
+                inFlightByToolCallID.removeValue(forKey: toolCallID)
+            }
+        }
+        if let taskID = record.snapshot.taskID {
+            if inFlightByTaskID[taskID] == invocationID {
+                inFlightByTaskID.removeValue(forKey: taskID)
+            }
+        }
+    }
+
+    private func cancelAllInFlight() {
+        let invocationIDs = Array(inFlightByInvocationID.keys)
+        for invocationID in invocationIDs {
+            inFlightByInvocationID[invocationID]?.streamTask?.cancel()
+        }
+        inFlightByInvocationID.removeAll()
+        inFlightByToolCallID.removeAll()
+        inFlightByTaskID.removeAll()
+    }
     
     private func loadA2AConfiguration(configFileURL: URL) async throws {
         do {
