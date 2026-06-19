@@ -513,6 +513,39 @@ import EasyJSON
         #expect(response.content == "queued-ok")
     }
 
+    @Test("StatefulLLM and QueuedLLM forward getRequestFeatures from the base LLM")
+    func testWrapperRequestFeaturesForwarding() throws {
+        struct FeaturefulLLM: LLMProtocol {
+            func getModelName() -> String { "featureful" }
+            func getCapabilities() -> [LLMCapability] { [.completion, .tools] }
+            func getRequestFeatures() -> ModelRequestFeatures {
+                ModelRequestFeatures(
+                    streaming: true,
+                    responseFormats: [.text, .jsonObject],
+                    parallelToolCalls: .capped(4),
+                    reasoningEfforts: [.low, .high],
+                    toolChoiceModes: [.auto, .required, .specific]
+                )
+            }
+            func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+                .complete(content: "ok")
+            }
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+                AsyncThrowingStream { $0.finish() }
+            }
+        }
+
+        let base = FeaturefulLLM()
+        let expected = base.getRequestFeatures()
+
+        let stateful = StatefulLLM(baseLLM: base)
+        #expect(stateful.getRequestFeatures() == expected)
+
+        let queued = QueuedLLM(baseLLM: stateful)
+        #expect(queued.getRequestFeatures() == expected)
+        #expect(queued.getRequestFeatures().toolChoiceModes == [.auto, .required, .specific])
+    }
+
     @Test("LLMError.imageGenerationError wraps ImageGenerationError")
     func testLLMErrorImageGenerationError() throws {
         let imageError = ImageGenerationError.noImagesGenerated

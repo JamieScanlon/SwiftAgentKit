@@ -119,6 +119,15 @@ private actor GatedState {
 struct FastLLM: LLMProtocol {
     func getModelName() -> String { "fast-llm" }
     func getCapabilities() -> [LLMCapability] { [.completion] }
+    func getRequestFeatures() -> ModelRequestFeatures {
+        ModelRequestFeatures(
+            streaming: true,
+            responseFormats: [.text, .jsonObject],
+            parallelToolCalls: .unsupported,
+            reasoningEfforts: [],
+            toolChoiceModes: [.auto, .required, .specific]
+        )
+    }
 
     func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         .complete(content: "fast-response")
@@ -434,13 +443,15 @@ struct FailingLLM: LLMProtocol {
 
     // MARK: - Delegation
 
-    @Test("QueuedLLM delegates getModelName and getCapabilities")
+    @Test("QueuedLLM delegates getModelName, getCapabilities, and getRequestFeatures")
     func testDelegation() throws {
         let fast = FastLLM()
         let queued = QueuedLLM(baseLLM: fast)
 
         #expect(queued.getModelName() == "fast-llm")
         #expect(queued.getCapabilities() == [.completion])
+        #expect(queued.getRequestFeatures() == fast.getRequestFeatures())
+        #expect(queued.getRequestFeatures().toolChoiceModes == [.auto, .required, .specific])
     }
 
     // MARK: - Pass-through for single request
