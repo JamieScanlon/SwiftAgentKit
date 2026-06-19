@@ -23,7 +23,7 @@ Living document for the [Agent Client Protocol (ACP)](https://agentclientprotoco
 | Primary transport | **stdio** (newline-delimited JSON-RPC 2.0) |
 | Roles | **Client** and **Agent** |
 | MCP overlap | `session/new` accepts `mcpServers[]`; stub empty array initially — future wiring to `SwiftAgentKitMCP` |
-| Remote transport | Deferred (Streamable HTTP draft) |
+| Remote transport | Streamable HTTP + WebSocket (draft RFD) + stdio |
 
 ## Phase checklist
 
@@ -64,23 +64,48 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 
 ### Client methods (Agent → Client)
 
-| Method | Agent | Client | Status |
-|--------|-------|--------|--------|
-| `fs/read_text_file` | calls | handles | ✅ |
-| `fs/write_text_file` | calls | handles | ✅ |
-| `session/request_permission` | calls | handles | ✅ |
-| `terminal/create` | calls | handles | ✅ capability-gated |
-| `terminal/output` | calls | handles | ✅ capability-gated |
-| `terminal/wait_for_exit` | calls | handles | ✅ capability-gated |
-| `terminal/kill` | calls | handles | ✅ capability-gated |
-| `terminal/release` | calls | handles | ✅ capability-gated |
+| Method | Agent calls | Client handles | Status |
+|--------|-------------|----------------|--------|
+| `fs/read_text_file` | `ACPAgentClient.readTextFile` | capability-gated delegate | ✅ |
+| `fs/write_text_file` | `ACPAgentClient.writeTextFile` | capability-gated delegate | ✅ |
+| `session/request_permission` | `ACPAgentClient.requestPermission` | delegate + cancel race | ✅ |
+| `terminal/create` | `ACPAgentClient.createTerminal` | capability-gated delegate | ✅ |
+| `terminal/output` | `ACPAgentClient.terminalOutput` | capability-gated delegate | ✅ |
+| `terminal/wait_for_exit` | `ACPAgentClient.waitForTerminalExit` | capability-gated delegate | ✅ |
+| `terminal/kill` | `ACPAgentClient.killTerminal` | capability-gated delegate | ✅ |
+| `terminal/release` | `ACPAgentClient.releaseTerminal` | capability-gated delegate | ✅ |
+
+Agent-side calls use **`ACPAgentClient`**, constructed by `ACPAgent` during `session/prompt` and passed to `ACPAgentAdapter.handlePrompt(sessionId:prompt:client:eventSink:)`. Each method checks negotiated `ACPClientCapabilities` and throws `ACPAgentClient.Error.capabilityUnavailable` when the client did not advertise support.
 
 ### Notifications
 
 | Method | Direction | Status |
 |--------|-----------|--------|
 | `session/update` | Agent → Client | ✅ |
-| `current_mode_update` / `config_option_update` (via `session/update`) | Agent → Client | ✅ decode |
+| `user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk` (via `session/update`) | Agent → Client | ✅ |
+| `tool_call` / `tool_call_update` (via `session/update`) | Agent → Client | ✅ spec `ToolCall` / `ToolCallUpdate` models |
+| `current_mode_update` / `config_option_update` (via `session/update`) | Agent → Client | ✅ decode + `ACPManager` stream |
+| `available_commands_update` (via `session/update`) | Agent → Client | ✅ slash command discovery |
+| Slash commands (prompt invocation via `/name`) | Client → Agent | ✅ `ACPSlashCommand` helpers |
+
+### Transports
+
+| Transport | Client | Agent server | Status |
+|-----------|--------|--------------|--------|
+| stdio (subprocess) | `ACPClient.boot` | `ACPAgent` + `ProcessStdioTransport` | ✅ |
+| WebSocket | `ACPClient.connectWebSocket` | `ACPAgentServer` WebSocket upgrade | ✅ |
+| Streamable HTTP | `ACPClient.connectStreamableHTTP` | `ACPAgentServer` POST/GET SSE/DELETE | ✅ |
+
+v2-deferred per RFD: SSE `Last-Event-ID` resumability, batch JSON-RPC (501), `Acp-Protocol-Version` header.
+
+### Extensibility
+
+| Mechanism | Client | Agent | Status |
+|-----------|--------|-------|--------|
+| `_meta` on protocol types | encode/decode | encode/decode | ✅ |
+| `_`-prefixed extension methods | `extMethod` / `registerExtensionMethod` | `ACPAgentAdapter.extMethod` | ✅ |
+| `_`-prefixed extension notifications | `extNotification` / `registerExtensionNotification` | `ACPAgentAdapter.extNotification` | ✅ |
+| Capability advertisement via `_meta` | `ACPExtensionSupport.withExtensionMeta` | `ACPExtensionSupport.withExtensionMeta` | ✅ |
 
 ## Auth and session configuration (Client → Agent)
 
@@ -93,12 +118,19 @@ Legend: ✅ implemented · 🚧 partial · ⬜ deferred
 
 `connect(autoAuthenticate:)` defaults to `true` (preserves `boot()` behavior). `session/new`, `session/load`, and `session/resume` return initial `mode` and `configOptions` from `ACPAgentAdapter.sessionSetup`.
 
-Cooperative `session/cancel` uses concurrent JSON-RPC dispatch (requests and notifications do not block the read loop) plus in-agent cancellation tracking.
+Cooperative `session/cancel` uses concurrent JSON-RPC dispatch (requests and notifications do not block the read loop) plus in-agent cancellation tracking. When the client sends `session/cancel` via `ACPClient.cancelPrompt()`, any in-flight `session/request_permission` RPC is resolved with `RequestPermissionOutcome.cancelled` before the notification is sent (spec requirement).
 
-## Open questions
+## Filesystem capability (Agent → Client)
 
-- **Auth methods**: Per-agent; `authenticate` / `logout` delegate to `ACPAgentAdapter`; no built-in OAuth flows yet.
-- **mcpServers wiring**: Wired via `ACPSessionMcpServersProvider` and `ACPConfig.mcpBootServers`; see `SwiftAgentKitAdapters` bridge from `MCPManager.localServerBootCalls()`.
+Filesystem RPCs require `clientCapabilities.fs.readTextFile` / `writeTextFile` (default **`true`** in `ACPClient.defaultClientCapabilities()`).
+
+**Handler gating:** When a capability is `false`, `ACPClient` does not register the corresponding `fs/*` handler. Incoming calls receive JSON-RPC `-32601 methodNotFound` without invoking the delegate.
+
+**Request models:** `ACPReadTextFileRequest` and `ACPWriteTextFileRequest` include required `sessionId` for per-session delegate policy.
+
+## Permission requests (Agent → Client)
+
+`session/request_permission` carries a spec **`ToolCallUpdate`** payload (`ACPToolCallUpdate`) rather than a reduced tool-call summary. The client handler races delegate UX against `cancelPrompt()` cancellation.
 
 ## Terminal capability (Agent → Client)
 
@@ -119,11 +151,16 @@ Terminal RPCs flow **agent → client**: during prompt turns the agent subproces
 - `ACPClient.boot(..., clientCapabilities:)` or `ACPClient.defaultClientCapabilities(advertiseTerminal: true)`
 - `ACPConfig.ServerBootCall.advertiseTerminal` (per agent boot entry; default `false`)
 
-**Delegate guidance:** Hosts supply an `ACPClientDelegate` at boot time or swap it later via ``ACPClient/setDelegate(_:)``. For per-session policy (cwd, sandbox scope), use a wrapper delegate keyed by `sessionId` (present on all terminal request params).
+**Delegate guidance:** Hosts supply an `ACPClientDelegate` at boot time or swap it later via ``ACPClient/setDelegate(_:)``. For per-session policy (cwd, sandbox scope), use a wrapper delegate keyed by `sessionId` (present on all terminal and filesystem request params).
 
 **`DefaultACPClientDelegate`:** Implements filesystem and permission methods only. It does not implement terminal methods; terminal stubs in the `ACPClientDelegate` protocol extension throw `methodNotFound` if a custom delegate opts into terminal at the capability level but forgets to implement a method.
 
 Host sandbox, tool allowlists, and permission UX are **out of scope** for SwiftAgentKit — hosts implement those inside `ACPClientDelegate`.
+
+## Open questions
+
+- **Auth methods**: Per-agent; `authenticate` / `logout` delegate to `ACPAgentAdapter`; no built-in OAuth flows yet.
+- **mcpServers wiring**: Wired via `ACPSessionMcpServersProvider` and `ACPConfig.mcpBootServers`; see `SwiftAgentKitAdapters` bridge from `MCPManager.localServerBootCalls()`.
 
 ## Notes
 
@@ -154,3 +191,6 @@ ACP does **not** replace the MCP SDK — MCP continues to use the external `MCP.
 | 2026-06-11 | Initial implementation: models, connection, client, agent, manager, tests, adapters, orchestrator |
 | 2026-06-13 | Session lifecycle: load, list, resume, close, delete; connect() split from session creation |
 | 2026-06-13 | Client→Agent completion: logout, set_mode, set_config_option, authenticate adapter hooks, cooperative session/cancel |
+| 2026-06-13 | Agent→Client v1 alignment: `ACPAgentClient`, fs capability gating, `ToolCallUpdate` permission payload, permission cancel on `session/cancel`, shared tool-call session update models |
+| 2026-06-13 | Remote transports (WebSocket + Streamable HTTP) and extension method API per draft RFD and extensibility spec |
+| 2026-06-13 | Session update chunks (`user_message_chunk`, `agent_thought_chunk`) and slash command discovery (`available_commands_update`) |

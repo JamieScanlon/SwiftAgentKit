@@ -251,6 +251,41 @@ struct ACPManagerTests {
 
     // MARK: - streamAgentCall() Tests
 
+    @Test("streamAgentCall excludes thought chunks from completed content")
+    func testStreamAgentCallExcludesThoughtFromCompleted() async throws {
+        let agentName = "ThoughtAgent"
+        let updates: [ACPSessionUpdate] = [
+            .agentThoughtChunk(messageId: "t1", content: .text("secret reasoning")),
+            .agentMessageChunk(messageId: "m1", content: .text("visible answer"))
+        ]
+
+        let manager = ACPManager()
+        let mock = MockACPStreamClient(name: agentName, updates: updates, sessionId: "s1")
+        try await manager.initialize(clients: [mock])
+
+        let toolCall = createToolCall(name: agentName, instructions: "think", id: "tool-call-thought")
+        let (_, events) = try await manager.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+        let collected = await collectEvents(from: events)
+
+        let thoughtEvents = collected.compactMap { event -> String? in
+            if case .thoughtChunk(_, let text) = event { return text }
+            return nil
+        }
+        #expect(thoughtEvents == ["secret reasoning"])
+
+        let terminalEvents = collected.filter {
+            if case .completed = $0 { return true }
+            return false
+        }
+        #expect(terminalEvents.count == 1)
+        if case .completed(let content, _, _) = terminalEvents[0] {
+            #expect(content == "visible answer")
+            #expect(!content.contains("secret reasoning"))
+        } else {
+            Issue.record("Expected completed terminal event")
+        }
+    }
+
     @Test("streamAgentCall emits expected event sequence")
     func testStreamAgentCallEventSequence() async throws {
         let agentName = "StreamAgent"
@@ -258,8 +293,8 @@ struct ACPManagerTests {
         let updates: [ACPSessionUpdate] = [
             .agentMessageChunk(messageId: "m1", content: .text("Hello ")),
             .plan(entries: [ACPPlanEntry(content: "Step 1", priority: "high", status: "pending")]),
-            .toolCall(toolCallId: "tc-1", title: "Run", kind: "shell", status: "pending"),
-            .toolCallUpdate(toolCallId: "tc-1", status: "running", content: [.text("working")]),
+            .toolCall(ACPToolCallUpdate(toolCallId: "tc-1", title: "Run", kind: .execute, status: .pending)),
+            .toolCallUpdate(ACPToolCallUpdate(toolCallId: "tc-1", status: .inProgress, content: [.content(.text("working"))])),
             .agentMessageChunk(messageId: "m2", content: .text("world"))
         ]
 
@@ -297,16 +332,16 @@ struct ACPManagerTests {
             Issue.record("Expected plan as third event")
         }
 
-        if case .toolCall(let toolCallId, let title, _, _) = collected[3] {
-            #expect(toolCallId == "tc-1")
-            #expect(title == "Run")
+        if case .toolCall(let toolCall) = collected[3] {
+            #expect(toolCall.toolCallId == "tc-1")
+            #expect(toolCall.title == "Run")
         } else {
             Issue.record("Expected toolCall as fourth event")
         }
 
-        if case .toolCallUpdate(let toolCallId, let status, _) = collected[4] {
-            #expect(toolCallId == "tc-1")
-            #expect(status == "running")
+        if case .toolCallUpdate(let toolCall) = collected[4] {
+            #expect(toolCall.toolCallId == "tc-1")
+            #expect(toolCall.status == .inProgress)
         } else {
             Issue.record("Expected toolCallUpdate as fifth event")
         }

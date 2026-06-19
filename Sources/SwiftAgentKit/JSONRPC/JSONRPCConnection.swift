@@ -10,19 +10,27 @@ import Logging
 public actor JSONRPCConnection {
     public typealias MethodHandler = @Sendable (Data) async throws -> Data
     public typealias NotificationHandler = @Sendable (Data) async -> Void
+    public typealias ExtensionMethodHandler = @Sendable (String, Data) async throws -> Data
+    public typealias ExtensionNotificationHandler = @Sendable (String, Data) async -> Void
 
     private let transport: any JSONRPCTransport
+    private let framing: JSONRPCFraming
     private let logger: Logging.Logger
     private var nextRequestID: Int = 1
     private var pendingContinuations: [String: CheckedContinuation<Data, Error>] = [:]
     private var methodHandlers: [String: MethodHandler] = [:]
     private var notificationHandlers: [String: NotificationHandler] = [:]
+    private var registeredExtensionMethods: [String: MethodHandler] = [:]
+    private var registeredExtensionNotifications: [String: NotificationHandler] = [:]
+    private var extensionMethodHandler: ExtensionMethodHandler?
+    private var extensionNotificationHandler: ExtensionNotificationHandler?
     private var readTask: Task<Void, Never>?
     private var isConnected = false
     private var isInitialized = false
 
     public init(transport: any JSONRPCTransport, logger: Logging.Logger? = nil) {
         self.transport = transport
+        self.framing = transport.jsonRPCFraming
         self.logger = logger ?? SwiftAgentKitLogging.logger(for: .core("JSONRPCConnection"))
     }
 
@@ -58,6 +66,55 @@ public actor JSONRPCConnection {
 
     public func registerNotification(_ method: String, handler: @escaping NotificationHandler) {
         notificationHandlers[method] = handler
+    }
+
+    public func setExtensionMethodHandler(_ handler: ExtensionMethodHandler?) {
+        extensionMethodHandler = handler
+    }
+
+    public func setExtensionNotificationHandler(_ handler: ExtensionNotificationHandler?) {
+        extensionNotificationHandler = handler
+    }
+
+    public func registerExtensionMethod(_ method: String, handler: @escaping MethodHandler) {
+        registeredExtensionMethods[method] = handler
+    }
+
+    public func registerExtensionNotification(_ method: String, handler: @escaping NotificationHandler) {
+        registeredExtensionNotifications[method] = handler
+    }
+
+    public func callRaw(_ method: String, params: Data) async throws -> Data {
+        guard isConnected else { throw JSONRPCConnectionError.notConnected }
+        let id = JSONRPCID.int(nextRequestID)
+        nextRequestID += 1
+        let requestObject: [String: Any] = [
+            "jsonrpc": "2.0",
+            "id": idValue(for: id),
+            "method": method,
+            "params": try JSONSerialization.jsonObject(with: params)
+        ]
+        let requestData = try JSONSerialization.data(withJSONObject: requestObject)
+        let responseData = try await sendRequest(requestData, id: idKey(for: id))
+        if let errorResponse = try? JSONDecoder().decode(JSONRPCErrorResponse.self, from: responseData) {
+            throw JSONRPCConnectionError.remoteError(errorResponse.error)
+        }
+        guard let object = try JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+              let resultObject = object["result"] else {
+            throw JSONRPCConnectionError.parseError
+        }
+        return try JSONSerialization.data(withJSONObject: resultObject)
+    }
+
+    public func notifyRaw(_ method: String, params: Data) async throws {
+        guard isConnected else { throw JSONRPCConnectionError.notConnected }
+        let notificationObject: [String: Any] = [
+            "jsonrpc": "2.0",
+            "method": method,
+            "params": try JSONSerialization.jsonObject(with: params)
+        ]
+        let data = try JSONSerialization.data(withJSONObject: notificationObject)
+        try await sendRaw(data)
     }
 
     public func call<P: Encodable & Sendable, R: Decodable & Sendable>(
@@ -105,19 +162,24 @@ public actor JSONRPCConnection {
         try await withCheckedThrowingContinuation { continuation in
             pendingContinuations[id] = continuation
             Task {
-                do {
-                    try await self.sendRaw(data)
-                } catch {
-                    self.pendingContinuations.removeValue(forKey: id)
-                    continuation.resume(throwing: error)
-                }
+                await self.dispatchOutboundRequest(data, id: id)
+            }
+        }
+    }
+
+    private func dispatchOutboundRequest(_ data: Data, id: String) async {
+        do {
+            try await sendRaw(data)
+        } catch {
+            if let continuation = pendingContinuations.removeValue(forKey: id) {
+                continuation.resume(throwing: error)
             }
         }
     }
 
     private func sendRaw(_ data: Data) async throws {
         var payload = data
-        if payload.last != UInt8(ascii: "\n") {
+        if framing == .newlineDelimited, payload.last != UInt8(ascii: "\n") {
             payload.append(UInt8(ascii: "\n"))
         }
         try await transport.send(payload)
@@ -127,7 +189,12 @@ public actor JSONRPCConnection {
         let stream = transport.receive()
         do {
             for try await data in stream {
-                await handleIncoming(data)
+                switch framing {
+                case .newlineDelimited:
+                    await handleIncoming(data)
+                case .rawFrame:
+                    await handleIncomingFrame(data)
+                }
             }
         } catch {
             logger.debug(
@@ -135,10 +202,24 @@ public actor JSONRPCConnection {
                 metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
             )
         }
-        for (_, continuation) in pendingContinuations {
+        let pending = pendingContinuations
+        pendingContinuations.removeAll()
+        for (_, continuation) in pending {
             continuation.resume(throwing: JSONRPCConnectionError.disconnected)
         }
-        pendingContinuations.removeAll()
+    }
+
+    private func handleIncomingFrame(_ data: Data) async {
+        guard !data.isEmpty else { return }
+        do {
+            let message = try JSONRPCParsing.parse(data)
+            await dispatch(message)
+        } catch {
+            logger.warning(
+                "Failed to parse JSON-RPC frame",
+                metadata: SwiftAgentKitLogging.metadata(("error", .string(String(describing: error))))
+            )
+        }
     }
 
     private func handleIncoming(_ data: Data) async {
@@ -186,7 +267,20 @@ public actor JSONRPCConnection {
     }
 
     private func handleRequest(id: JSONRPCID, method: String, params: Data) async {
-        guard let handler = methodHandlers[method] else {
+        let handler: MethodHandler?
+        if let registered = methodHandlers[method] {
+            handler = registered
+        } else if method.hasPrefix("_"), let registered = registeredExtensionMethods[method] {
+            handler = registered
+        } else if method.hasPrefix("_"), let extensionHandler = extensionMethodHandler {
+            handler = { paramsData in
+                try await extensionHandler(method, paramsData)
+            }
+        } else {
+            handler = nil
+        }
+
+        guard let handler else {
             try? await sendError(id: id, code: .methodNotFound, message: "Method not found: \(method)")
             return
         }
@@ -200,6 +294,8 @@ public actor JSONRPCConnection {
             switch error {
             case .remoteError(let rpcError):
                 try? await sendError(id: id, code: rpcError.code, message: rpcError.message)
+            case .methodNotFound(let unknownMethod):
+                try? await sendError(id: id, code: .methodNotFound, message: "Method not found: \(unknownMethod)")
             default:
                 try? await sendError(id: id, code: .internalError, message: error.localizedDescription)
             }
@@ -209,8 +305,17 @@ public actor JSONRPCConnection {
     }
 
     private func handleNotification(method: String, params: Data) async {
-        guard let handler = notificationHandlers[method] else { return }
-        await handler(params)
+        if let handler = notificationHandlers[method] {
+            await handler(params)
+            return
+        }
+        if method.hasPrefix("_"), let handler = registeredExtensionNotifications[method] {
+            await handler(params)
+            return
+        }
+        if method.hasPrefix("_"), let handler = extensionNotificationHandler {
+            await handler(method, params)
+        }
     }
 
     private func idKey(for id: JSONRPCID) -> String {

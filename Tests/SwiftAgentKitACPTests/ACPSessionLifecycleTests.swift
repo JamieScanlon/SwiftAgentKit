@@ -25,6 +25,7 @@ private struct SessionLifecycleTestAdapter: ACPAgentAdapter {
     func handlePrompt(
         sessionId: String,
         prompt: [ACPContentBlock],
+        client: ACPAgentClient,
         eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
     ) async throws -> ACPStopReason {
         let userText = prompt.compactMap { block -> String? in
@@ -97,7 +98,8 @@ struct ACPSessionLifecycleTests {
     @Test("Load session replays history")
     func loadSessionHistory() async throws {
         let history: [ACPSessionUpdate] = [
-            .agentMessageChunk(messageId: "h1", content: .text("prior message"))
+            .userMessageChunk(messageId: "u1", content: .text("prior user message")),
+            .agentMessageChunk(messageId: "h1", content: .text("prior agent message"))
         ]
         let adapter = SessionLifecycleTestAdapter(defaultHistory: history)
 
@@ -111,14 +113,20 @@ struct ACPSessionLifecycleTests {
         _ = try await client.closeSession()
 
         let (_, historyStream) = try await client.loadSession(sessionId: created.sessionId, cwd: "/project")
-        var replayed: [String] = []
+        var userReplayed: [String] = []
+        var agentReplayed: [String] = []
         for await update in historyStream {
-            if case .agentMessageChunk(_, let content) = update,
-               case .text(let text) = content {
-                replayed.append(text)
+            switch update {
+            case .userMessageChunk(_, let content):
+                if case .text(let text) = content { userReplayed.append(text) }
+            case .agentMessageChunk(_, let content):
+                if case .text(let text) = content { agentReplayed.append(text) }
+            default:
+                break
             }
         }
-        #expect(replayed.joined().contains("prior message"))
+        #expect(userReplayed.joined().contains("prior user message"))
+        #expect(agentReplayed.joined().contains("prior agent message"))
         #expect(await client.sessionId == created.sessionId)
         #expect(await client.state == .sessionReady)
 

@@ -35,6 +35,14 @@ enum ACPTestHelpers {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    static func dummyAgentClient(
+        capabilities: ACPClientCapabilities = ACPClient.defaultClientCapabilities()
+    ) -> ACPAgentClient {
+        let (transport, _) = JSONRPCMemoryTransport.paired()
+        let connection = JSONRPCConnection(transport: transport)
+        return ACPAgentClient(connection: connection, capabilities: capabilities)
+    }
+
     static func tempFileURL(prefix: String, extension ext: String = "json") -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("\(prefix)-\(UUID().uuidString).\(ext)")

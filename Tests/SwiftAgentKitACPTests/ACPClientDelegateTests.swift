@@ -17,7 +17,7 @@ struct DefaultACPClientDelegateTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let delegate = DefaultACPClientDelegate(allowedRoots: [url.deletingLastPathComponent()])
-        let response = try await delegate.readTextFile(ACPReadTextFileRequest(path: url.path))
+        let response = try await delegate.readTextFile(ACPReadTextFileRequest(sessionId: "s1", path: url.path))
         #expect(response.content.contains("line1"))
     }
 
@@ -29,7 +29,7 @@ struct DefaultACPClientDelegateTests {
 
         let delegate = DefaultACPClientDelegate(allowedRoots: [url.deletingLastPathComponent()])
         let response = try await delegate.readTextFile(
-            ACPReadTextFileRequest(path: url.path, line: 2, limit: 2)
+            ACPReadTextFileRequest(sessionId: "s1", path: url.path, line: 2, limit: 2)
         )
         #expect(response.content == "b\nc")
     }
@@ -40,7 +40,7 @@ struct DefaultACPClientDelegateTests {
         defer { try? FileManager.default.removeItem(at: url) }
 
         let delegate = DefaultACPClientDelegate(allowedRoots: [url.deletingLastPathComponent()])
-        _ = try await delegate.writeTextFile(ACPWriteTextFileRequest(path: url.path, content: "written"))
+        _ = try await delegate.writeTextFile(ACPWriteTextFileRequest(sessionId: "s1", path: url.path, content: "written"))
         let content = try String(contentsOf: url, encoding: .utf8)
         #expect(content == "written")
     }
@@ -49,7 +49,7 @@ struct DefaultACPClientDelegateTests {
     func readOutsideRoot() async throws {
         let delegate = DefaultACPClientDelegate(allowedRoots: [URL(fileURLWithPath: "/nonexistent-root")])
         do {
-            _ = try await delegate.readTextFile(ACPReadTextFileRequest(path: "/etc/hosts"))
+            _ = try await delegate.readTextFile(ACPReadTextFileRequest(sessionId: "s1", path: "/etc/hosts"))
             Issue.record("Expected invalidRequest")
         } catch let error as JSONRPCConnectionError {
             #expect(ACPTestHelpers.connectionErrorsEqual(error, .invalidRequest))
@@ -62,7 +62,7 @@ struct DefaultACPClientDelegateTests {
         let response = try await delegate.requestPermission(
             ACPRequestPermissionRequest(
                 sessionId: "s1",
-                toolCall: ACPToolCallInfo(toolCallId: "tc1"),
+                toolCall: ACPToolCallUpdate(toolCallId: "tc1"),
                 options: [
                     ACPPermissionOption(optionId: "allow-once", name: "Allow Once", kind: "allow"),
                     ACPPermissionOption(optionId: "deny", name: "Deny", kind: "deny")
@@ -82,7 +82,7 @@ struct DefaultACPClientDelegateTests {
         let response = try await delegate.requestPermission(
             ACPRequestPermissionRequest(
                 sessionId: "s1",
-                toolCall: ACPToolCallInfo(toolCallId: "tc1"),
+                toolCall: ACPToolCallUpdate(toolCallId: "tc1"),
                 options: [ACPPermissionOption(optionId: "allow", name: "Allow", kind: "allow")]
             )
         )

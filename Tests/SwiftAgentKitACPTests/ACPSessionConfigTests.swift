@@ -48,6 +48,7 @@ private struct ConfigurableTestACPAgentAdapter: ACPAgentAdapter {
     func handlePrompt(
         sessionId: String,
         prompt: [ACPContentBlock],
+        client: ACPAgentClient,
         eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
     ) async throws -> ACPStopReason {
         let userText = prompt.compactMap { block -> String? in

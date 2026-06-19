@@ -93,6 +93,7 @@ public actor ACPAgent {
     private static let defaultPageSize = 50
 
     private let adapter: any ACPAgentAdapter
+    private let transport: any JSONRPCTransport
     private let connection: JSONRPCConnection
     private let stateBox: ACPAgentState
     private let logger: Logging.Logger
@@ -100,6 +101,7 @@ public actor ACPAgent {
 
     public init(adapter: any ACPAgentAdapter, transport: any JSONRPCTransport, logger: Logging.Logger? = nil) {
         self.adapter = adapter
+        self.transport = transport
         self.stateBox = ACPAgentState()
         self.connection = JSONRPCConnection(transport: transport, logger: logger)
         self.logger = logger ?? SwiftAgentKitLogging.logger(for: .acp("ACPAgent"))
@@ -138,6 +140,7 @@ public actor ACPAgent {
         let adapter = self.adapter
         let stateBox = self.stateBox
         let connection = self.connection
+        let transport = self.transport
 
         await connection.registerMethod("initialize") { paramsData in
             let decoder = JSONDecoder()
@@ -147,11 +150,18 @@ public actor ACPAgent {
                 stateBox.isAuthenticated = adapter.authMethods.isEmpty
                 stateBox.lastClientCapabilities = request.clientCapabilities
             }
+            let remoteConnectionId: String?
+            if let remote = transport as? any ACPRemoteTransportContext {
+                remoteConnectionId = await remote.connectionId()
+            } else {
+                remoteConnectionId = nil
+            }
             let response = ACPInitializeResponse(
                 protocolVersion: stateBox.negotiatedProtocolVersion,
                 agentCapabilities: adapter.agentCapabilities,
                 agentInfo: adapter.agentInfo,
-                authMethods: adapter.authMethods
+                authMethods: adapter.authMethods,
+                connectionId: remoteConnectionId
             )
             await connection.markInitialized()
             return try JSONEncoder().encode(response)
@@ -202,6 +212,11 @@ public actor ACPAgent {
                     configOptions: setup.configOptions
                 )
             }
+            Self.scheduleAvailableCommandsPublication(
+                sessionId: sessionId,
+                adapter: adapter,
+                connection: connection
+            )
             return try JSONEncoder().encode(
                 ACPNewSessionResponse(
                     sessionId: sessionId,
@@ -281,6 +296,12 @@ public actor ACPAgent {
                     )
                 }
 
+                Self.scheduleAvailableCommandsPublication(
+                    sessionId: sessionId,
+                    adapter: adapter,
+                    connection: connection
+                )
+
                 let sessionState = stateBox.withLock { stateBox.sessions[sessionId] }
                 return try JSONEncoder().encode(
                     ACPLoadSessionResponse(
@@ -319,6 +340,12 @@ public actor ACPAgent {
                     if let configOptions = setup.configOptions { session.configOptions = configOptions }
                     stateBox.sessions[request.sessionId] = session
                 }
+
+                Self.scheduleAvailableCommandsPublication(
+                    sessionId: request.sessionId,
+                    adapter: adapter,
+                    connection: connection
+                )
 
                 let sessionState = stateBox.withLock { stateBox.sessions[request.sessionId] }
                 return try JSONEncoder().encode(
@@ -448,8 +475,13 @@ public actor ACPAgent {
             }
 
             let sessionId = request.sessionId
+            let caps = stateBox.withLock { stateBox.lastClientCapabilities }
+            let client = ACPAgentClient(
+                connection: connection,
+                capabilities: caps ?? ACPClientCapabilities()
+            )
             let promptTask = Task {
-                try await adapter.handlePrompt(sessionId: sessionId, prompt: request.prompt) { update in
+                try await adapter.handlePrompt(sessionId: sessionId, prompt: request.prompt, client: client) { update in
                     try await connection.notify(
                         "session/update",
                         params: ACPSessionUpdateNotification(sessionId: sessionId, update: update)
@@ -485,6 +517,16 @@ public actor ACPAgent {
             task?.cancel()
             await adapter.cancelPrompt(sessionId: params.sessionId)
         }
+
+        await connection.setExtensionMethodHandler { method, paramsData in
+            let params = try ACPExtensionSupport.decodeParams(paramsData)
+            let result = try await adapter.extMethod(method: method, params: params)
+            return try ACPExtensionSupport.encodeResult(result)
+        }
+        await connection.setExtensionNotificationHandler { method, paramsData in
+            let params = (try? ACPExtensionSupport.decodeParams(paramsData)) ?? .object([:])
+            await adapter.extNotification(method: method, params: params)
+        }
     }
 
     private static func runCancellablePrompt(
@@ -514,6 +556,36 @@ public actor ACPAgent {
             }
             group.cancelAll()
             return result
+        }
+    }
+
+    private static func publishAvailableCommands(
+        sessionId: String,
+        adapter: any ACPAgentAdapter,
+        connection: JSONRPCConnection
+    ) async throws {
+        let commands = try await adapter.availableCommands(sessionId: sessionId)
+        guard !commands.isEmpty else { return }
+        try await connection.notify(
+            "session/update",
+            params: ACPSessionUpdateNotification(
+                sessionId: sessionId,
+                update: .availableCommandsUpdate(commands: commands)
+            )
+        )
+    }
+
+    private static func scheduleAvailableCommandsPublication(
+        sessionId: String,
+        adapter: any ACPAgentAdapter,
+        connection: JSONRPCConnection
+    ) {
+        Task {
+            try? await publishAvailableCommands(
+                sessionId: sessionId,
+                adapter: adapter,
+                connection: connection
+            )
         }
     }
 

@@ -406,7 +406,9 @@ actor RecordingACPStreamClient: ACPAgentStreamClient {
             continuation.yield(.agentMessageChunk(messageId: "1", content: .text(responseText)))
             continuation.finish()
         }
-        let response = Task<ACPPromptResponse, Error> { ACPPromptResponse(stopReason: .endTurn) }
+        let response = Task<ACPPromptResponse, Error> {
+            ACPPromptResponse(stopReason: .endTurn)
+        }
         return (updates, response)
     }
 

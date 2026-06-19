@@ -563,26 +563,36 @@ public actor ACPManager {
                     try Task.checkCancellation()
 
                     switch update {
+                    case .userMessageChunk(let messageId, let content):
+                        if case .text(let chunk) = content {
+                            yield?(.userMessageChunk(messageId: messageId, text: chunk))
+                        }
                     case .agentMessageChunk(_, let content):
                         if case .text(let chunk) = content {
                             responseText += chunk
                             yield?(.messageChunk(text: chunk))
                             returnResponses.append(LLMResponse.complete(content: chunk))
                         }
+                    case .agentThoughtChunk(let messageId, let content):
+                        if case .text(let chunk) = content {
+                            yield?(.thoughtChunk(messageId: messageId, text: chunk))
+                        }
+                    case .availableCommandsUpdate(let commands):
+                        yield?(.availableCommandsUpdate(commands: commands))
                     case .plan(let entries):
                         yield?(.plan(entries: entries))
-                    case .toolCall(let toolCallId, let title, let kind, let status):
-                        yield?(.toolCall(toolCallId: toolCallId, title: title, kind: kind, status: status))
-                    case .toolCallUpdate(let toolCallId, let status, let content):
-                        yield?(.toolCallUpdate(toolCallId: toolCallId, status: status, content: content))
-                    case .usageUpdate:
-                        break
-                    case .sessionInfoUpdate:
-                        break
-                    case .currentModeUpdate:
-                        break
-                    case .configOptionUpdate:
-                        break
+                    case .toolCall(let update):
+                        yield?(.toolCall(update))
+                    case .toolCallUpdate(let update):
+                        yield?(.toolCallUpdate(update))
+                    case .usageUpdate(let used, let size, let cost):
+                        yield?(.usageUpdate(used: used, size: size, cost: cost))
+                    case .sessionInfoUpdate(let update):
+                        yield?(.sessionInfoUpdate(update))
+                    case .currentModeUpdate(let modeId):
+                        yield?(.currentModeUpdate(modeId: modeId))
+                    case .configOptionUpdate(let configOptions):
+                        yield?(.configOptionUpdate(configOptions: configOptions))
                     }
                 }
             } onCancel: {
@@ -707,20 +717,56 @@ public actor ACPManager {
         for bootCall in config.agentBootCalls {
             var environment = config.globalEnvironment.acpEnvironment
             environment.merge(bootCall.environment.acpEnvironment, uniquingKeysWith: { _, new in new })
+            let clientCapabilities = ACPClient.defaultClientCapabilities(
+                advertiseTerminal: bootCall.advertiseTerminal
+            )
+            let timeout = bootCall.toolCallTimeout ?? config.toolCallTimeout
             do {
-                let client = try await ACPClient.boot(
-                    name: bootCall.name,
-                    command: bootCall.command,
-                    arguments: bootCall.arguments,
-                    environment: environment,
-                    useShell: bootCall.useShell,
-                    clientCapabilities: ACPClient.defaultClientCapabilities(
-                        advertiseTerminal: bootCall.advertiseTerminal
-                    ),
-                    toolCallTimeout: bootCall.toolCallTimeout ?? config.toolCallTimeout,
-                    staticMcpBootServers: config.mcpBootServers,
-                    sessionMcpServersProvider: mcpProvider
-                )
+                let client: ACPClient
+                if let urlString = bootCall.url, let url = URL(string: urlString) {
+                    var headers: [String: String] = [:]
+                    if let token = bootCall.auth?.bearerToken {
+                        headers["Authorization"] = "Bearer \(token)"
+                    }
+                    switch bootCall.transport ?? .websocket {
+                    case .websocket:
+                        client = try await ACPClient.connectWebSocket(
+                            name: bootCall.name,
+                            url: url,
+                            clientCapabilities: clientCapabilities,
+                            additionalHeaders: headers,
+                            toolCallTimeout: timeout,
+                            staticMcpBootServers: config.mcpBootServers,
+                            sessionMcpServersProvider: mcpProvider
+                        )
+                    case .streamableHTTP:
+                        client = try await ACPClient.connectStreamableHTTP(
+                            name: bootCall.name,
+                            url: url,
+                            clientCapabilities: clientCapabilities,
+                            additionalHeaders: headers,
+                            toolCallTimeout: timeout,
+                            staticMcpBootServers: config.mcpBootServers,
+                            sessionMcpServersProvider: mcpProvider
+                        )
+                    }
+                    _ = try await client.newSession(cwd: FileManager.default.currentDirectoryPath)
+                } else {
+                    guard let command = bootCall.command else {
+                        throw ACPClient.ACPClientError.bootFailed("Missing command or url for agent \(bootCall.name)")
+                    }
+                    client = try await ACPClient.boot(
+                        name: bootCall.name,
+                        command: command,
+                        arguments: bootCall.arguments,
+                        environment: environment,
+                        useShell: bootCall.useShell,
+                        clientCapabilities: clientCapabilities,
+                        toolCallTimeout: timeout,
+                        staticMcpBootServers: config.mcpBootServers,
+                        sessionMcpServersProvider: mcpProvider
+                    )
+                }
                 bootedClients.append(client)
             } catch {
                 ingestionDiagnostics.append(ToolIngestionDiagnostic(

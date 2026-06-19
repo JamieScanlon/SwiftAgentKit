@@ -73,6 +73,7 @@ struct ACPAgentTests {
             func handlePrompt(
                 sessionId: String,
                 prompt: [ACPContentBlock],
+                client: ACPAgentClient,
                 eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
             ) async throws -> ACPStopReason { .endTurn }
         }
@@ -183,6 +184,7 @@ struct ACPAgentTests {
             func handlePrompt(
                 sessionId: String,
                 prompt: [ACPContentBlock],
+                client: ACPAgentClient,
                 eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
             ) async throws -> ACPStopReason { .endTurn }
         }
@@ -226,6 +228,7 @@ struct ACPAgentTests {
             func handlePrompt(
                 sessionId: String,
                 prompt: [ACPContentBlock],
+                client: ACPAgentClient,
                 eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
             ) async throws -> ACPStopReason {
                 while !Task.isCancelled {

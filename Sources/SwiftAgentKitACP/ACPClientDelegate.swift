@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftAgentKit
+import EasyJSON
 
 /// Handles Client-side ACP methods invoked by an Agent.
 public protocol ACPClientDelegate: Sendable {
@@ -17,6 +18,12 @@ public protocol ACPClientDelegate: Sendable {
     func waitForTerminalExit(_ request: ACPWaitForExitRequest) async throws -> ACPWaitForExitResponse
     func killTerminal(_ request: ACPKillTerminalRequest) async throws -> ACPKillTerminalResponse
     func releaseTerminal(_ request: ACPReleaseTerminalRequest) async throws -> ACPReleaseTerminalResponse
+
+    /// Handles custom `_`-prefixed extension requests from the agent.
+    func extMethod(method: String, params: JSON) async throws -> JSON
+
+    /// Handles custom `_`-prefixed extension notifications from the agent.
+    func extNotification(method: String, params: JSON) async
 }
 
 public extension ACPClientDelegate {
@@ -35,6 +42,12 @@ public extension ACPClientDelegate {
     func releaseTerminal(_ request: ACPReleaseTerminalRequest) async throws -> ACPReleaseTerminalResponse {
         throw JSONRPCConnectionError.methodNotFound("terminal/release")
     }
+
+    func extMethod(method: String, params: JSON) async throws -> JSON {
+        throw JSONRPCConnectionError.methodNotFound(method)
+    }
+
+    func extNotification(method: String, params: JSON) async {}
 }
 
 /// Default delegate with filesystem access and auto-approve permissions.

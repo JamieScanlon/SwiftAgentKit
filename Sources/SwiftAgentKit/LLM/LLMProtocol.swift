@@ -269,31 +269,65 @@ public struct ModelRequestFeatures: Sendable, Hashable, Codable {
     public var responseFormats: Set<ResponseFormatKind> // Which response_format values can I send it?"
     public var parallelToolCalls: ParallelToolCallSupport // If I ask for parallel tool calls, will it accept it, and is there a cap?
     public var reasoningEfforts: Set<ReasoningEffort>     // If reasoning is opt‑in, which reasoning_effort levels does it accept? empty when no opt-in reasoning
+    public var toolChoiceModes: Set<ToolChoiceMode>       // Which ``ToolInvocationPolicy`` modes can this model honor? Used to clamp unsupported forced tool choice.
 
     public static let unknown = ModelRequestFeatures(
         streaming: false,
         responseFormats: [.text],
         parallelToolCalls: .unsupported,
-        reasoningEfforts: []
+        reasoningEfforts: [],
+        toolChoiceModes: [.auto]
     )
 
     public static let chatBaseline = ModelRequestFeatures(
         streaming: true,
         responseFormats: [.text],
         parallelToolCalls: .unsupported,
-        reasoningEfforts: []
+        reasoningEfforts: [],
+        toolChoiceModes: [.auto]
     )
 
     public init(
         streaming: Bool,
         responseFormats: Set<ResponseFormatKind>,
         parallelToolCalls: ParallelToolCallSupport,
-        reasoningEfforts: Set<ReasoningEffort>
+        reasoningEfforts: Set<ReasoningEffort>,
+        toolChoiceModes: Set<ToolChoiceMode> = [.auto]
     ) {
         self.streaming = streaming
         self.responseFormats = responseFormats
         self.parallelToolCalls = parallelToolCalls
         self.reasoningEfforts = reasoningEfforts
+        self.toolChoiceModes = toolChoiceModes
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case streaming
+        case responseFormats
+        case parallelToolCalls
+        case reasoningEfforts
+        case toolChoiceModes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.streaming = try container.decode(Bool.self, forKey: .streaming)
+        self.responseFormats = try container.decode(Set<ResponseFormatKind>.self, forKey: .responseFormats)
+        self.parallelToolCalls = try container.decode(ParallelToolCallSupport.self, forKey: .parallelToolCalls)
+        self.reasoningEfforts = try container.decode(Set<ReasoningEffort>.self, forKey: .reasoningEfforts)
+        // Default to `[.auto]` so payloads encoded before this field was added stay decodable.
+        self.toolChoiceModes = try container.decodeIfPresent(Set<ToolChoiceMode>.self, forKey: .toolChoiceModes) ?? [.auto]
+    }
+
+    /// Clamp a requested ``ToolInvocationPolicy`` to a mode this model can honor. Never throws.
+    ///
+    /// - Returns: The effective policy and whether a clamp occurred. When the requested mode is
+    ///   unsupported the policy is clamped to ``ToolInvocationPolicy/automatic`` (the nearest safe fallback).
+    public func resolve(_ requested: ToolInvocationPolicy) -> (effective: ToolInvocationPolicy, clamped: Bool) {
+        if toolChoiceModes.contains(requested.mode) {
+            return (requested, false)
+        }
+        return (.automatic, true)
     }
 }
 

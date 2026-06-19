@@ -28,7 +28,7 @@
 | `toolCallTimeout` | Maximum wall-clock time (**seconds**) for a single tool dispatch (MCP, A2A, or `ToolManager`). Default **300** (5 minutes). On expiry, the model receives a tool-role error via `ToolCallTimeoutError` (see **Tool dispatch** below). |
 | `maxTokens`, `temperature`, `topP`, `additionalParameters` | Passed through to `LLMRequestConfig` for every LLM call |
 | `maxAgenticStepsPerUpdate` | Optional cap on LLM invocations (including tool follow-ups) per `updateConversation`; exceed → `OrchestratorError.agenticStepLimitReached` and `AgenticLoopState.maxIterationsReached` |
-| `toolInvocationPolicy` | Forwarded on each `LLMRequestConfig` (see ``ToolInvocationPolicy``); map in your `LLMProtocol` implementation |
+| `toolInvocationPolicy` | Forwarded on each `LLMRequestConfig` (see ``ToolInvocationPolicy``, including `.specific(toolName:)` to force a single tool); map it in your `LLMProtocol` implementation. Adapters advertise honored modes via `ModelRequestFeatures.toolChoiceModes` and should clamp unsupported requests to the nearest supported mode (default `.automatic`) rather than dropping them silently. |
 | `rejectAssistantTurnWithNoToolCallsWhenToolsAvailable` | When true and tools are non-empty, reject assistant turns with no tool calls **before any tool output exists in the working transcript**; append a correction message and retry (see `maxCorrectionRetries`) |
 | `maxCorrectionRetries` | Maximum correction passes after a rejected prose turn; `0` means a rejected turn throws `OrchestratorError.assistantTurnCorrectionRetriesExhausted` |
 | `correctionMessage` / `correctionRole` | Correction appended after rejection |

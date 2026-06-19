@@ -48,8 +48,11 @@ public actor ACPClient {
     public private(set) var authMethods: [ACPAuthMethod] = []
     public private(set) var isAuthenticated: Bool = false
     public private(set) var sessionId: String?
+    public private(set) var connectionId: String?
+    public private(set) var availableCommands: [ACPAvailableCommand] = []
     public private(set) var toolCallTimeout: TimeInterval?
 
+    private let transport: any JSONRPCTransport
     private let connection: JSONRPCConnection
     private let delegateBox: ACPClientDelegateBox
     private let clientInfo: ACPImplementation
@@ -57,9 +60,14 @@ public actor ACPClient {
     private let logger: Logger
     private var bootProcess: Process?
     private var sessionUpdateContinuation: AsyncStream<ACPSessionUpdate>.Continuation?
+    private var sessionUpdateHandlerRegistered = false
+    private var pendingAvailableCommandsBySessionId: [String: [ACPAvailableCommand]] = [:]
+    private let pendingPermissions = PendingPermissionTracker()
     private var name: String
     private let staticMcpBootServers: [ACPMcpServer]
     private let sessionMcpServersProvider: ACPSessionMcpServersProvider
+    private var registeredExtensionMethods: [String: @Sendable (JSON) async throws -> JSON] = [:]
+    private var registeredExtensionNotifications: [String: @Sendable (JSON) async -> Void] = [:]
 
     /// Default client capabilities advertised during `initialize`.
     public static func defaultClientCapabilities(advertiseTerminal: Bool = false) -> ACPClientCapabilities {
@@ -87,6 +95,7 @@ public actor ACPClient {
         self.toolCallTimeout = toolCallTimeout
         self.staticMcpBootServers = staticMcpBootServers
         self.sessionMcpServersProvider = sessionMcpServersProvider ?? { _ in [] }
+        self.transport = transport
         self.connection = JSONRPCConnection(transport: transport, logger: logger)
         self.logger = logger ?? SwiftAgentKitLogging.logger(
             for: .acp("ACPClient"),
@@ -136,6 +145,68 @@ public actor ACPClient {
         return client
     }
 
+    /// Connects to a remote ACP agent over WebSocket.
+    public static func connectWebSocket(
+        name: String,
+        url: URL,
+        delegate: any ACPClientDelegate = DefaultACPClientDelegate(),
+        clientCapabilities: ACPClientCapabilities = ACPClient.defaultClientCapabilities(),
+        additionalHeaders: [String: String] = [:],
+        toolCallTimeout: TimeInterval? = nil,
+        staticMcpBootServers: [ACPMcpServer] = [],
+        sessionMcpServersProvider: ACPSessionMcpServersProvider? = nil,
+        logger: Logger? = nil
+    ) async throws -> ACPClient {
+        let transport = ACPWebSocketClientTransport(
+            endpointURL: url,
+            additionalHeaders: additionalHeaders,
+            logger: logger
+        )
+        let client = ACPClient(
+            name: name,
+            transport: transport,
+            delegate: delegate,
+            clientCapabilities: clientCapabilities,
+            toolCallTimeout: toolCallTimeout,
+            staticMcpBootServers: staticMcpBootServers,
+            sessionMcpServersProvider: sessionMcpServersProvider,
+            logger: logger
+        )
+        try await client.connect()
+        return client
+    }
+
+    /// Connects to a remote ACP agent over Streamable HTTP.
+    public static func connectStreamableHTTP(
+        name: String,
+        url: URL,
+        delegate: any ACPClientDelegate = DefaultACPClientDelegate(),
+        clientCapabilities: ACPClientCapabilities = ACPClient.defaultClientCapabilities(),
+        additionalHeaders: [String: String] = [:],
+        toolCallTimeout: TimeInterval? = nil,
+        staticMcpBootServers: [ACPMcpServer] = [],
+        sessionMcpServersProvider: ACPSessionMcpServersProvider? = nil,
+        logger: Logger? = nil
+    ) async throws -> ACPClient {
+        let transport = ACPStreamableHTTPClientTransport(
+            endpointURL: url,
+            additionalHeaders: additionalHeaders,
+            logger: logger
+        )
+        let client = ACPClient(
+            name: name,
+            transport: transport,
+            delegate: delegate,
+            clientCapabilities: clientCapabilities,
+            toolCallTimeout: toolCallTimeout,
+            staticMcpBootServers: staticMcpBootServers,
+            sessionMcpServersProvider: sessionMcpServersProvider,
+            logger: logger
+        )
+        try await client.connect()
+        return client
+    }
+
     func setBootProcess(_ process: Process) {
         bootProcess = process
     }
@@ -145,6 +216,41 @@ public actor ACPClient {
     /// Takes effect immediately for subsequent inbound calls. Safe to call before or after ``connect()``.
     public func setDelegate(_ delegate: any ACPClientDelegate) {
         delegateBox.setDelegate(delegate)
+    }
+
+    /// Registers a handler for a specific `_`-prefixed extension method (takes precedence over delegate catch-all).
+    public func registerExtensionMethod(
+        _ method: String,
+        handler: @escaping @Sendable (JSON) async throws -> JSON
+    ) throws {
+        try ACPExtensionSupport.validateExtensionMethod(method)
+        registeredExtensionMethods[method] = handler
+    }
+
+    /// Registers a handler for a specific `_`-prefixed extension notification (takes precedence over delegate catch-all).
+    public func registerExtensionNotification(
+        _ method: String,
+        handler: @escaping @Sendable (JSON) async -> Void
+    ) throws {
+        try ACPExtensionSupport.validateExtensionMethod(method)
+        registeredExtensionNotifications[method] = handler
+    }
+
+    /// Sends a custom `_`-prefixed extension request to the agent.
+    public func extMethod(method: String, params: JSON = .object([:])) async throws -> JSON {
+        try ACPExtensionSupport.validateExtensionMethod(method)
+        guard state != .disconnected else { throw ACPClientError.notInitialized }
+        let paramsData = try JSONEncoder().encode(params)
+        let resultData = try await connection.callRaw(method, params: paramsData)
+        return try JSONDecoder().decode(JSON.self, from: resultData)
+    }
+
+    /// Sends a custom `_`-prefixed extension notification to the agent.
+    public func extNotification(method: String, params: JSON = .object([:])) async throws {
+        try ACPExtensionSupport.validateExtensionMethod(method)
+        guard state != .disconnected else { throw ACPClientError.notInitialized }
+        let paramsData = try JSONEncoder().encode(params)
+        try await connection.notifyRaw(method, params: paramsData)
     }
 
     /// Connects transport and completes the initialize handshake (and auth when required).
@@ -166,12 +272,16 @@ public actor ACPClient {
         agentCapabilities = initResponse.agentCapabilities
         authMethods = initResponse.authMethods
         isAuthenticated = initResponse.authMethods.isEmpty
+        connectionId = initResponse.connectionId
+        await updateRemoteTransportContext(connectionId: initResponse.connectionId)
 
         if autoAuthenticate, let first = initResponse.authMethods.first {
             try await authenticate(methodId: first.id)
         }
 
         state = .initialized
+
+        await ensureSessionUpdateHandlerRegistered()
 
         logger.info(
             "ACP client initialized",
@@ -215,6 +325,8 @@ public actor ACPClient {
             params: ACPNewSessionRequest(cwd: cwd, mcpServers: mcpServers, additionalRoots: additionalRoots)
         )
         sessionId = response.sessionId
+        await updateRemoteTransportContext(sessionId: response.sessionId)
+        applyPendingAvailableCommands(for: response.sessionId)
         state = .sessionReady
 
         logger.info(
@@ -234,6 +346,9 @@ public actor ACPClient {
         try requireInitialized()
 
         let mcpServers = await resolvedMcpServers(for: cwd)
+        self.sessionId = sessionId
+        await updateRemoteTransportContext(sessionId: sessionId)
+        applyPendingAvailableCommands(for: sessionId)
         let (updates, _) = try await beginSessionUpdateStream(for: sessionId)
         let historyBox = HistoryCollector()
         let collectTask = Task {
@@ -263,7 +378,6 @@ public actor ACPClient {
         sessionUpdateContinuation = nil
         await collectTask.value
 
-        self.sessionId = sessionId
         state = .sessionReady
 
         let history = AsyncStream<ACPSessionUpdate> { continuation in
@@ -295,6 +409,8 @@ public actor ACPClient {
             )
         )
         self.sessionId = sessionId
+        await updateRemoteTransportContext(sessionId: sessionId)
+        applyPendingAvailableCommands(for: sessionId)
         state = .sessionReady
         return response
     }
@@ -318,6 +434,7 @@ public actor ACPClient {
             params: ACPCloseSessionRequest(sessionId: sessionId)
         )
         self.sessionId = nil
+        availableCommands = []
         state = .initialized
         return response
     }
@@ -332,6 +449,7 @@ public actor ACPClient {
         )
         if self.sessionId == sessionId {
             self.sessionId = nil
+            availableCommands = []
             state = .initialized
         }
         return response
@@ -421,6 +539,7 @@ public actor ACPClient {
 
     public func cancelPrompt() async throws {
         guard let sessionId else { throw ACPClientError.noSession }
+        await pendingPermissions.cancelAll()
         try await connection.notify("session/cancel", params: ACPSessionCancelParams(sessionId: sessionId))
     }
 
@@ -434,6 +553,11 @@ public actor ACPClient {
         }
         state = .disconnected
         sessionId = nil
+        connectionId = nil
+        availableCommands = []
+        sessionUpdateHandlerRegistered = false
+        pendingAvailableCommandsBySessionId = [:]
+        await updateRemoteTransportContext(connectionId: nil, sessionId: nil)
         agentInfo = nil
         agentCapabilities = nil
         authMethods = []
@@ -459,6 +583,16 @@ public actor ACPClient {
         return mcpServers
     }
 
+    private func updateRemoteTransportContext(connectionId: String? = nil, sessionId: String? = nil) async {
+        guard let remote = transport as? any ACPRemoteTransportContext else { return }
+        if connectionId != nil {
+            await remote.setConnectionId(connectionId)
+        }
+        if sessionId != nil {
+            await remote.setSessionId(sessionId)
+        }
+    }
+
     private func beginSessionUpdateStream(for sessionId: String) async throws -> (
         updates: AsyncStream<ACPSessionUpdate>,
         registration: Void
@@ -470,14 +604,42 @@ public actor ACPClient {
         let updates = AsyncStream<ACPSessionUpdate> { continuation = $0 }
         sessionUpdateContinuation = continuation
 
-        await connection.registerNotification("session/update") { paramsData in
-            let decoder = JSONDecoder()
-            guard let notification = try? decoder.decode(ACPSessionUpdateNotification.self, from: paramsData),
-                  notification.sessionId == sessionId else { return }
-            await self.emitUpdate(notification.update)
-        }
+        await ensureSessionUpdateHandlerRegistered()
 
         return (updates, ())
+    }
+
+    private func ensureSessionUpdateHandlerRegistered() async {
+        guard !sessionUpdateHandlerRegistered else { return }
+        sessionUpdateHandlerRegistered = true
+        await connection.registerNotification("session/update") { paramsData in
+            let decoder = JSONDecoder()
+            guard let notification = try? decoder.decode(ACPSessionUpdateNotification.self, from: paramsData) else { return }
+            await self.dispatchSessionUpdate(notification.update, sessionId: notification.sessionId)
+        }
+    }
+
+    private func applyPendingAvailableCommands(for sessionId: String) {
+        if let pending = pendingAvailableCommandsBySessionId.removeValue(forKey: sessionId) {
+            availableCommands = pending
+        }
+    }
+
+    private func dispatchSessionUpdate(_ update: ACPSessionUpdate, sessionId: String) {
+        if case .availableCommandsUpdate(let commands) = update {
+            if self.sessionId == sessionId {
+                availableCommands = commands
+            } else {
+                pendingAvailableCommandsBySessionId[sessionId] = commands
+            }
+        }
+        guard self.sessionId == sessionId else { return }
+        sessionUpdateContinuation?.yield(update)
+    }
+
+    private func dispatchSessionUpdate(_ update: ACPSessionUpdate) {
+        guard let sessionId else { return }
+        dispatchSessionUpdate(update, sessionId: sessionId)
     }
 
     private func finishSessionUpdateStream() {
@@ -487,23 +649,51 @@ public actor ACPClient {
 
     private func registerClientHandlers() async {
         let delegateBox = self.delegateBox
-        await connection.registerMethod("fs/read_text_file") { paramsData in
-            let decoder = JSONDecoder()
-            let request = try decoder.decode(ACPReadTextFileRequest.self, from: paramsData)
-            let response = try await delegateBox.readTextFile(request)
-            return try JSONEncoder().encode(response)
+        let pendingPermissions = self.pendingPermissions
+        if clientCapabilities.fs.readTextFile {
+            await connection.registerMethod("fs/read_text_file") { paramsData in
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPReadTextFileRequest.self, from: paramsData)
+                let response = try await delegateBox.readTextFile(request)
+                return try JSONEncoder().encode(response)
+            }
         }
-        await connection.registerMethod("fs/write_text_file") { paramsData in
-            let decoder = JSONDecoder()
-            let request = try decoder.decode(ACPWriteTextFileRequest.self, from: paramsData)
-            let response = try await delegateBox.writeTextFile(request)
-            return try JSONEncoder().encode(response)
+        if clientCapabilities.fs.writeTextFile {
+            await connection.registerMethod("fs/write_text_file") { paramsData in
+                let decoder = JSONDecoder()
+                let request = try decoder.decode(ACPWriteTextFileRequest.self, from: paramsData)
+                let response = try await delegateBox.writeTextFile(request)
+                return try JSONEncoder().encode(response)
+            }
         }
         await connection.registerMethod("session/request_permission") { paramsData in
             let decoder = JSONDecoder()
             let request = try decoder.decode(ACPRequestPermissionRequest.self, from: paramsData)
-            let response = try await delegateBox.requestPermission(request)
-            return try JSONEncoder().encode(response)
+            let waitID = UUID()
+
+            let outcome: ACPPermissionOutcome
+            do {
+                outcome = try await withThrowingTaskGroup(of: ACPPermissionOutcome.self) { group in
+                    group.addTask {
+                        await pendingPermissions.waitForCancellation(id: waitID)
+                    }
+                    group.addTask {
+                        let response = try await delegateBox.requestPermission(request)
+                        return response.outcome
+                    }
+                    guard let first = try await group.next() else {
+                        return ACPPermissionOutcome.cancelled
+                    }
+                    await pendingPermissions.abandonWait(id: waitID)
+                    group.cancelAll()
+                    return first
+                }
+            } catch {
+                await pendingPermissions.abandonWait(id: waitID)
+                throw error
+            }
+            await pendingPermissions.removeWait(id: waitID)
+            return try JSONEncoder().encode(ACPRequestPermissionResponse(outcome: outcome))
         }
         if clientCapabilities.terminal {
             await connection.registerMethod("terminal/create") { paramsData in
@@ -537,16 +727,78 @@ public actor ACPClient {
                 return try JSONEncoder().encode(response)
             }
         }
+
+        for (method, handler) in registeredExtensionMethods {
+            await connection.registerExtensionMethod(method) { paramsData in
+                let params = try ACPExtensionSupport.decodeParams(paramsData)
+                let result = try await handler(params)
+                return try ACPExtensionSupport.encodeResult(result)
+            }
+        }
+        for (method, handler) in registeredExtensionNotifications {
+            await connection.registerExtensionNotification(method) { paramsData in
+                let params = (try? ACPExtensionSupport.decodeParams(paramsData)) ?? .object([:])
+                await handler(params)
+            }
+        }
+        await connection.setExtensionMethodHandler { method, paramsData in
+            let params = try ACPExtensionSupport.decodeParams(paramsData)
+            let result = try await delegateBox.extMethod(method: method, params: params)
+            return try ACPExtensionSupport.encodeResult(result)
+        }
+        await connection.setExtensionNotificationHandler { method, paramsData in
+            let params = (try? ACPExtensionSupport.decodeParams(paramsData)) ?? .object([:])
+            await delegateBox.extNotification(method: method, params: params)
+        }
     }
 
     private func emitUpdate(_ update: ACPSessionUpdate) {
-        sessionUpdateContinuation?.yield(update)
+        dispatchSessionUpdate(update)
     }
 
     private func finishPromptSession() {
         sessionUpdateContinuation?.finish()
         sessionUpdateContinuation = nil
         state = .sessionReady
+    }
+}
+
+private actor PendingPermissionTracker {
+    private var continuations: [UUID: CheckedContinuation<ACPPermissionOutcome, Never>] = [:]
+    private var cancelled = false
+
+    func waitForCancellation(id: UUID) async -> ACPPermissionOutcome {
+        if cancelled {
+            return .cancelled
+        }
+        return await withCheckedContinuation { continuation in
+            if cancelled {
+                continuation.resume(returning: .cancelled)
+                return
+            }
+            continuations[id] = continuation
+        }
+    }
+
+    func cancelAll() {
+        cancelled = true
+        for (_, continuation) in continuations {
+            continuation.resume(returning: .cancelled)
+        }
+        continuations.removeAll()
+    }
+
+    func abandonWait(id: UUID) {
+        if let continuation = continuations.removeValue(forKey: id) {
+            continuation.resume(returning: .cancelled)
+        }
+    }
+
+    func removeWait(id: UUID) {
+        continuations.removeValue(forKey: id)
+        if continuations.isEmpty {
+            cancelled = false
+        }
     }
 }
 
@@ -602,6 +854,16 @@ private final class ACPClientDelegateBox: @unchecked Sendable {
     func releaseTerminal(_ request: ACPReleaseTerminalRequest) async throws -> ACPReleaseTerminalResponse {
         let delegate = currentDelegate()
         return try await delegate.releaseTerminal(request)
+    }
+
+    func extMethod(method: String, params: JSON) async throws -> JSON {
+        let delegate = currentDelegate()
+        return try await delegate.extMethod(method: method, params: params)
+    }
+
+    func extNotification(method: String, params: JSON) async {
+        let delegate = currentDelegate()
+        await delegate.extNotification(method: method, params: params)
     }
 
     private func currentDelegate() -> any ACPClientDelegate {

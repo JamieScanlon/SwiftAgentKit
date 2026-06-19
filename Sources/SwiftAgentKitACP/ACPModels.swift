@@ -188,35 +188,71 @@ extension ACPAuthCapabilities: Equatable {
     }
 }
 
-public struct ACPClientCapabilities: Codable, Sendable, Equatable {
+public struct ACPClientCapabilities: Codable, Sendable {
     public var fs: ACPFilesystemCapabilities
     public var terminal: Bool
+    public var meta: JSON?
 
-    public init(fs: ACPFilesystemCapabilities = ACPFilesystemCapabilities(), terminal: Bool = false) {
+    enum CodingKeys: String, CodingKey {
+        case fs, terminal
+        case meta = "_meta"
+    }
+
+    public init(
+        fs: ACPFilesystemCapabilities = ACPFilesystemCapabilities(),
+        terminal: Bool = false,
+        meta: JSON? = nil
+    ) {
         self.fs = fs
         self.terminal = terminal
+        self.meta = meta
     }
 }
 
-public struct ACPAgentCapabilities: Codable, Sendable, Equatable {
+extension ACPClientCapabilities: Equatable {
+    public static func == (lhs: ACPClientCapabilities, rhs: ACPClientCapabilities) -> Bool {
+        lhs.fs == rhs.fs && lhs.terminal == rhs.terminal && acpJSONEqual(lhs.meta, rhs.meta)
+    }
+}
+
+public struct ACPAgentCapabilities: Codable, Sendable {
     public var loadSession: Bool
     public var promptCapabilities: ACPPromptCapabilities
     public var mcpCapabilities: ACPMcpCapabilities
     public var sessionCapabilities: ACPSessionCapabilities
     public var auth: ACPAuthCapabilities
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case loadSession, promptCapabilities, mcpCapabilities, sessionCapabilities, auth
+        case meta = "_meta"
+    }
 
     public init(
         loadSession: Bool = false,
         promptCapabilities: ACPPromptCapabilities = ACPPromptCapabilities(),
         mcpCapabilities: ACPMcpCapabilities = ACPMcpCapabilities(),
         sessionCapabilities: ACPSessionCapabilities = ACPSessionCapabilities(),
-        auth: ACPAuthCapabilities = ACPAuthCapabilities()
+        auth: ACPAuthCapabilities = ACPAuthCapabilities(),
+        meta: JSON? = nil
     ) {
         self.loadSession = loadSession
         self.promptCapabilities = promptCapabilities
         self.mcpCapabilities = mcpCapabilities
         self.sessionCapabilities = sessionCapabilities
         self.auth = auth
+        self.meta = meta
+    }
+}
+
+extension ACPAgentCapabilities: Equatable {
+    public static func == (lhs: ACPAgentCapabilities, rhs: ACPAgentCapabilities) -> Bool {
+        lhs.loadSession == rhs.loadSession
+            && lhs.promptCapabilities == rhs.promptCapabilities
+            && lhs.mcpCapabilities == rhs.mcpCapabilities
+            && lhs.sessionCapabilities == rhs.sessionCapabilities
+            && lhs.auth == rhs.auth
+            && acpJSONEqual(lhs.meta, rhs.meta)
     }
 }
 
@@ -263,10 +299,11 @@ public struct ACPInitializeResponse: Codable, Sendable {
     public var agentCapabilities: ACPAgentCapabilities
     public var agentInfo: ACPImplementation?
     public var authMethods: [ACPAuthMethod]
+    public var connectionId: String?
     public var meta: JSON?
 
     enum CodingKeys: String, CodingKey {
-        case protocolVersion, agentCapabilities, agentInfo, authMethods
+        case protocolVersion, agentCapabilities, agentInfo, authMethods, connectionId
         case meta = "_meta"
     }
 
@@ -275,12 +312,14 @@ public struct ACPInitializeResponse: Codable, Sendable {
         agentCapabilities: ACPAgentCapabilities = ACPAgentCapabilities(),
         agentInfo: ACPImplementation? = nil,
         authMethods: [ACPAuthMethod] = [],
+        connectionId: String? = nil,
         meta: JSON? = nil
     ) {
         self.protocolVersion = protocolVersion
         self.agentCapabilities = agentCapabilities
         self.agentInfo = agentInfo
         self.authMethods = authMethods
+        self.connectionId = connectionId
         self.meta = meta
     }
 }
@@ -918,6 +957,171 @@ public struct ACPAudioContent: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Tool calls
+
+public enum ACPToolCallStatus: String, Codable, Sendable, Equatable {
+    case pending
+    case inProgress = "in_progress"
+    case completed
+    case failed
+}
+
+public enum ACPToolKind: String, Codable, Sendable, Equatable {
+    case read
+    case edit
+    case delete
+    case move
+    case search
+    case execute
+    case think
+    case fetch
+    case switchMode = "switch_mode"
+    case other
+}
+
+public struct ACPToolCallLocation: Codable, Sendable {
+    public var path: String
+    public var line: Int?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case path, line
+        case meta = "_meta"
+    }
+
+    public init(path: String, line: Int? = nil, meta: JSON? = nil) {
+        self.path = path
+        self.line = line
+        self.meta = meta
+    }
+}
+
+public enum ACPToolCallContent: Codable, Sendable, Equatable {
+    case content(ACPContentBlock)
+    case diff(path: String, oldText: String?, newText: String)
+    case terminal(terminalId: String)
+
+    enum CodingKeys: String, CodingKey {
+        case type, content, path, oldText, newText, terminalId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "content":
+            self = .content(try container.decode(ACPContentBlock.self, forKey: .content))
+        case "diff":
+            self = .diff(
+                path: try container.decode(String.self, forKey: .path),
+                oldText: try container.decodeIfPresent(String.self, forKey: .oldText),
+                newText: try container.decode(String.self, forKey: .newText)
+            )
+        case "terminal":
+            self = .terminal(terminalId: try container.decode(String.self, forKey: .terminalId))
+        default:
+            throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown tool call content type: \(type)")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .content(let block):
+            try container.encode("content", forKey: .type)
+            try container.encode(block, forKey: .content)
+        case .diff(let path, let oldText, let newText):
+            try container.encode("diff", forKey: .type)
+            try container.encode(path, forKey: .path)
+            try container.encodeIfPresent(oldText, forKey: .oldText)
+            try container.encode(newText, forKey: .newText)
+        case .terminal(let terminalId):
+            try container.encode("terminal", forKey: .type)
+            try container.encode(terminalId, forKey: .terminalId)
+        }
+    }
+}
+
+public struct ACPToolCallUpdate: Codable, Sendable {
+    public var toolCallId: String
+    public var title: String?
+    public var kind: ACPToolKind?
+    public var status: ACPToolCallStatus?
+    public var content: [ACPToolCallContent]?
+    public var locations: [ACPToolCallLocation]?
+    public var rawInput: JSON?
+    public var rawOutput: JSON?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case toolCallId, title, kind, status, content, locations, rawInput, rawOutput
+        case meta = "_meta"
+    }
+
+    public init(
+        toolCallId: String,
+        title: String? = nil,
+        kind: ACPToolKind? = nil,
+        status: ACPToolCallStatus? = nil,
+        content: [ACPToolCallContent]? = nil,
+        locations: [ACPToolCallLocation]? = nil,
+        rawInput: JSON? = nil,
+        rawOutput: JSON? = nil,
+        meta: JSON? = nil
+    ) {
+        self.toolCallId = toolCallId
+        self.title = title
+        self.kind = kind
+        self.status = status
+        self.content = content
+        self.locations = locations
+        self.rawInput = rawInput
+        self.rawOutput = rawOutput
+        self.meta = meta
+    }
+}
+
+// MARK: - Slash commands
+
+public struct ACPAvailableCommandInput: Codable, Sendable {
+    public var hint: String
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case hint
+        case meta = "_meta"
+    }
+
+    public init(hint: String, meta: JSON? = nil) {
+        self.hint = hint
+        self.meta = meta
+    }
+}
+
+public struct ACPAvailableCommand: Codable, Sendable {
+    public var name: String
+    public var description: String
+    public var input: ACPAvailableCommandInput?
+    public var meta: JSON?
+
+    enum CodingKeys: String, CodingKey {
+        case name, description, input
+        case meta = "_meta"
+    }
+
+    public init(
+        name: String,
+        description: String,
+        input: ACPAvailableCommandInput? = nil,
+        meta: JSON? = nil
+    ) {
+        self.name = name
+        self.description = description
+        self.input = input
+        self.meta = meta
+    }
+}
+
 // MARK: - Session updates
 
 public struct ACPSessionUpdateNotification: Codable, Sendable {
@@ -937,18 +1141,23 @@ public struct ACPSessionUpdateNotification: Codable, Sendable {
     }
 }
 
-public enum ACPSessionUpdate: Codable, Sendable, Equatable {
+public enum ACPSessionUpdate: Codable, Sendable {
+    case userMessageChunk(messageId: String?, content: ACPContentBlock)
     case agentMessageChunk(messageId: String?, content: ACPContentBlock)
+    case agentThoughtChunk(messageId: String?, content: ACPContentBlock)
+    case availableCommandsUpdate(commands: [ACPAvailableCommand])
     case plan(entries: [ACPPlanEntry])
-    case toolCall(toolCallId: String, title: String?, kind: String?, status: String?)
-    case toolCallUpdate(toolCallId: String, status: String?, content: [ACPContentBlock]?)
+    case toolCall(ACPToolCallUpdate)
+    case toolCallUpdate(ACPToolCallUpdate)
     case usageUpdate(used: Int, size: Int, cost: ACPUsageCost?)
     case sessionInfoUpdate(ACPSessionInfoUpdate)
     case currentModeUpdate(modeId: String)
     case configOptionUpdate(configOptions: [ACPSessionConfigOption])
 
     enum CodingKeys: String, CodingKey {
-        case sessionUpdate, messageId, content, entries, toolCallId, title, kind, status, used, size, cost, updatedAt
+        case sessionUpdate, messageId, content, availableCommands, entries, toolCallId, title, kind, status
+        case locations, rawInput, rawOutput
+        case used, size, cost, updatedAt
         case modeId, configOptions
     }
 
@@ -956,26 +1165,31 @@ public enum ACPSessionUpdate: Codable, Sendable, Equatable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let kind = try container.decode(String.self, forKey: .sessionUpdate)
         switch kind {
+        case "user_message_chunk":
+            self = .userMessageChunk(
+                messageId: try container.decodeIfPresent(String.self, forKey: .messageId),
+                content: try container.decode(ACPContentBlock.self, forKey: .content)
+            )
         case "agent_message_chunk":
             self = .agentMessageChunk(
                 messageId: try container.decodeIfPresent(String.self, forKey: .messageId),
                 content: try container.decode(ACPContentBlock.self, forKey: .content)
             )
+        case "agent_thought_chunk":
+            self = .agentThoughtChunk(
+                messageId: try container.decodeIfPresent(String.self, forKey: .messageId),
+                content: try container.decode(ACPContentBlock.self, forKey: .content)
+            )
+        case "available_commands_update":
+            self = .availableCommandsUpdate(
+                commands: try container.decode([ACPAvailableCommand].self, forKey: .availableCommands)
+            )
         case "plan":
             self = .plan(entries: try container.decode([ACPPlanEntry].self, forKey: .entries))
         case "tool_call":
-            self = .toolCall(
-                toolCallId: try container.decode(String.self, forKey: .toolCallId),
-                title: try container.decodeIfPresent(String.self, forKey: .title),
-                kind: try container.decodeIfPresent(String.self, forKey: .kind),
-                status: try container.decodeIfPresent(String.self, forKey: .status)
-            )
+            self = .toolCall(try ACPToolCallUpdate(from: decoder))
         case "tool_call_update":
-            self = .toolCallUpdate(
-                toolCallId: try container.decode(String.self, forKey: .toolCallId),
-                status: try container.decodeIfPresent(String.self, forKey: .status),
-                content: try container.decodeIfPresent([ACPContentBlock].self, forKey: .content)
-            )
+            self = .toolCallUpdate(try ACPToolCallUpdate(from: decoder))
         case "usage_update":
             self = .usageUpdate(
                 used: try container.decode(Int.self, forKey: .used),
@@ -1000,24 +1214,30 @@ public enum ACPSessionUpdate: Codable, Sendable, Equatable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .userMessageChunk(let messageId, let content):
+            try container.encode("user_message_chunk", forKey: .sessionUpdate)
+            try container.encodeIfPresent(messageId, forKey: .messageId)
+            try container.encode(content, forKey: .content)
         case .agentMessageChunk(let messageId, let content):
             try container.encode("agent_message_chunk", forKey: .sessionUpdate)
             try container.encodeIfPresent(messageId, forKey: .messageId)
             try container.encode(content, forKey: .content)
+        case .agentThoughtChunk(let messageId, let content):
+            try container.encode("agent_thought_chunk", forKey: .sessionUpdate)
+            try container.encodeIfPresent(messageId, forKey: .messageId)
+            try container.encode(content, forKey: .content)
+        case .availableCommandsUpdate(let commands):
+            try container.encode("available_commands_update", forKey: .sessionUpdate)
+            try container.encode(commands, forKey: .availableCommands)
         case .plan(let entries):
             try container.encode("plan", forKey: .sessionUpdate)
             try container.encode(entries, forKey: .entries)
-        case .toolCall(let toolCallId, let title, let kind, let status):
+        case .toolCall(let update):
             try container.encode("tool_call", forKey: .sessionUpdate)
-            try container.encode(toolCallId, forKey: .toolCallId)
-            try container.encodeIfPresent(title, forKey: .title)
-            try container.encodeIfPresent(kind, forKey: .kind)
-            try container.encodeIfPresent(status, forKey: .status)
-        case .toolCallUpdate(let toolCallId, let status, let content):
+            try update.encode(to: encoder)
+        case .toolCallUpdate(let update):
             try container.encode("tool_call_update", forKey: .sessionUpdate)
-            try container.encode(toolCallId, forKey: .toolCallId)
-            try container.encodeIfPresent(status, forKey: .status)
-            try container.encodeIfPresent(content, forKey: .content)
+            try update.encode(to: encoder)
         case .usageUpdate(let used, let size, let cost):
             try container.encode("usage_update", forKey: .sessionUpdate)
             try container.encode(used, forKey: .used)
@@ -1061,17 +1281,19 @@ public struct ACPUsageCost: Codable, Sendable, Equatable {
 // MARK: - Client-side methods (Agent → Client)
 
 public struct ACPReadTextFileRequest: Codable, Sendable {
+    public var sessionId: String
     public var path: String
     public var line: Int?
     public var limit: Int?
     public var meta: JSON?
 
     enum CodingKeys: String, CodingKey {
-        case path, line, limit
+        case sessionId, path, line, limit
         case meta = "_meta"
     }
 
-    public init(path: String, line: Int? = nil, limit: Int? = nil, meta: JSON? = nil) {
+    public init(sessionId: String, path: String, line: Int? = nil, limit: Int? = nil, meta: JSON? = nil) {
+        self.sessionId = sessionId
         self.path = path
         self.line = line
         self.limit = limit
@@ -1095,16 +1317,18 @@ public struct ACPReadTextFileResponse: Codable, Sendable {
 }
 
 public struct ACPWriteTextFileRequest: Codable, Sendable {
+    public var sessionId: String
     public var path: String
     public var content: String
     public var meta: JSON?
 
     enum CodingKeys: String, CodingKey {
-        case path, content
+        case sessionId, path, content
         case meta = "_meta"
     }
 
-    public init(path: String, content: String, meta: JSON? = nil) {
+    public init(sessionId: String, path: String, content: String, meta: JSON? = nil) {
+        self.sessionId = sessionId
         self.path = path
         self.content = content
         self.meta = meta
@@ -1125,7 +1349,7 @@ public struct ACPWriteTextFileResponse: Codable, Sendable {
 
 public struct ACPRequestPermissionRequest: Codable, Sendable {
     public var sessionId: String
-    public var toolCall: ACPToolCallInfo
+    public var toolCall: ACPToolCallUpdate
     public var options: [ACPPermissionOption]
     public var meta: JSON?
 
@@ -1134,21 +1358,11 @@ public struct ACPRequestPermissionRequest: Codable, Sendable {
         case meta = "_meta"
     }
 
-    public init(sessionId: String, toolCall: ACPToolCallInfo, options: [ACPPermissionOption], meta: JSON? = nil) {
+    public init(sessionId: String, toolCall: ACPToolCallUpdate, options: [ACPPermissionOption], meta: JSON? = nil) {
         self.sessionId = sessionId
         self.toolCall = toolCall
         self.options = options
         self.meta = meta
-    }
-}
-
-public struct ACPToolCallInfo: Codable, Sendable, Equatable {
-    public var toolCallId: String
-    public var title: String?
-
-    public init(toolCallId: String, title: String? = nil) {
-        self.toolCallId = toolCallId
-        self.title = title
     }
 }
 
@@ -1314,4 +1528,32 @@ public struct ACPReleaseTerminalRequest: Codable, Sendable {
 
 public struct ACPReleaseTerminalResponse: Codable, Sendable {
     public init() {}
+}
+
+extension ACPAvailableCommandInput: Equatable {
+    public static func == (lhs: ACPAvailableCommandInput, rhs: ACPAvailableCommandInput) -> Bool {
+        lhs.hint == rhs.hint && acpJSONEqual(lhs.meta, rhs.meta)
+    }
+}
+
+extension ACPAvailableCommand: Equatable {
+    public static func == (lhs: ACPAvailableCommand, rhs: ACPAvailableCommand) -> Bool {
+        lhs.name == rhs.name
+            && lhs.description == rhs.description
+            && lhs.input == rhs.input
+            && acpJSONEqual(lhs.meta, rhs.meta)
+    }
+}
+
+func acpJSONEqual(_ lhs: JSON?, _ rhs: JSON?) -> Bool {
+    switch (lhs, rhs) {
+    case (nil, nil): return true
+    case (nil, _), (_, nil): return false
+    case let (left?, right?):
+        guard let leftData = try? JSONEncoder().encode(left),
+              let rightData = try? JSONEncoder().encode(right) else {
+            return false
+        }
+        return leftData == rightData
+    }
 }

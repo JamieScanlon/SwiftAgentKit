@@ -24,7 +24,8 @@ struct EchoACPAgentAdapterTests {
         let chunks = LockBox([String]())
         let reason = try await adapter.handlePrompt(
             sessionId: "s1",
-            prompt: [.text("hello"), .text("world")]
+            prompt: [.text("hello"), .text("world")],
+            client: ACPTestHelpers.dummyAgentClient()
         ) { update in
             if case .agentMessageChunk(_, let content) = update,
                case .text(let text) = content {
@@ -39,7 +40,7 @@ struct EchoACPAgentAdapterTests {
     func fallbackText() async throws {
         let adapter = EchoACPAgentAdapter(responseText: "default response")
         let chunk = LockBox("")
-        _ = try await adapter.handlePrompt(sessionId: "s1", prompt: []) { update in
+        _ = try await adapter.handlePrompt(sessionId: "s1", prompt: [], client: ACPTestHelpers.dummyAgentClient()) { update in
             if case .agentMessageChunk(_, let content) = update,
                case .text(let text) = content {
                 chunk.value = text
@@ -59,6 +60,7 @@ struct ACPAgentAdapterDefaultsTests {
             func handlePrompt(
                 sessionId: String,
                 prompt: [ACPContentBlock],
+                client: ACPAgentClient,
                 eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
             ) async throws -> ACPStopReason { .endTurn }
         }
@@ -73,6 +75,7 @@ struct ACPAgentAdapterDefaultsTests {
             func handlePrompt(
                 sessionId: String,
                 prompt: [ACPContentBlock],
+                client: ACPAgentClient,
                 eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
             ) async throws -> ACPStopReason { .endTurn }
         }
@@ -91,5 +94,6 @@ struct ACPAgentAdapterDefaultsTests {
                 #expect(method == "session/set_mode")
             }
         }
+        #expect(try await adapter.availableCommands(sessionId: "s1").isEmpty)
     }
 }

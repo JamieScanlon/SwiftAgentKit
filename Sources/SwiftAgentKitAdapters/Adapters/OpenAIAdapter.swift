@@ -800,7 +800,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             // Add the Tool calls the LLM identified automatically
             let myToolCalls = choice.message.toolCalls?.map({ $0.toToolCall() }) ?? []
             llmResponse = llmResponse.appending(toolCalls: myToolCalls)
-            llmResponse = llmResponse.updatingMetadata(with: llmMetadata(from: usage, finishReason: choice.finishReason))
+            llmResponse = llmResponse.updatingMetadata(with: llmMetadata(from: usage, finishReason: choice.finishReason, effectiveToolChoice: resolvedToolChoice().effective))
             
             // Build message parts from response content and tool calls
             // Add the non tool call content
@@ -1088,7 +1088,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             // Add the Tool calls the LLM identified automatically
             let myToolCalls = accumulatedTools.compactMap({ $0.toToolCall() })
             llmResponse = llmResponse.appending(toolCalls: myToolCalls)
-            llmResponse = llmResponse.updatingMetadata(with: llmMetadata(from: streamUsage, finishReason: streamFinishReason))
+            llmResponse = llmResponse.updatingMetadata(with: llmMetadata(from: streamUsage, finishReason: streamFinishReason, effectiveToolChoice: resolvedToolChoice().effective))
             
             // Build message parts from response content and tool calls
             // Add the non tool call content
@@ -1253,13 +1253,39 @@ public struct OpenAIAdapter: ToolAwareAdapter {
     
     // MARK: - Private Helper Methods for Tools
     
+    /// Tool-choice modes OpenAI Chat Completions can honor (it supports the full set).
+    static let supportedToolChoiceModes: Set<ToolChoiceMode> = [.auto, .none, .required, .specific]
+
     /// Maps ``ToolInvocationPolicy`` to OpenAI `tool_choice` when the tools array is non-empty.
-    private static func toolChoiceForOpenAI(policy: ToolInvocationPolicy, toolsNonEmpty: Bool) -> ChatQuery.ChatCompletionFunctionCallOptionParam? {
+    static func toolChoiceForOpenAI(policy: ToolInvocationPolicy, toolsNonEmpty: Bool) -> ChatQuery.ChatCompletionFunctionCallOptionParam? {
         guard toolsNonEmpty else { return nil }
         switch policy {
         case .automatic: return .auto
         case .required: return .required
         case .none: return ChatQuery.ChatCompletionFunctionCallOptionParam.none
+        case .specific(let toolName): return .function(toolName)
+        }
+    }
+
+    /// Clamps the configured ``ToolInvocationPolicy`` to a mode OpenAI supports. Never throws.
+    /// - Returns: The effective policy and whether a clamp occurred. OpenAI supports every mode,
+    ///   so a clamp only happens if a future unsupported mode is requested.
+    func resolvedToolChoice() -> (effective: ToolInvocationPolicy, clamped: Bool) {
+        let requested = config.toolInvocationPolicy
+        if Self.supportedToolChoiceModes.contains(requested.mode) {
+            return (requested, false)
+        }
+        return (.automatic, true)
+    }
+
+    /// A short, stable description of the effective tool-choice for response metadata
+    /// (e.g. `"auto"`, `"required"`, `"none"`, `"specific:get_weather"`).
+    static func effectiveToolChoiceDescription(_ policy: ToolInvocationPolicy) -> String {
+        switch policy {
+        case .automatic: return "auto"
+        case .required: return "required"
+        case .none: return "none"
+        case .specific(let toolName): return "specific:\(toolName)"
         }
     }
     
@@ -1285,6 +1311,10 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             messages.append(userMessage)
         }
         
+        let resolved = resolvedToolChoice()
+        if resolved.clamped {
+            warnToolChoiceClamped(requested: config.toolInvocationPolicy, effective: resolved.effective)
+        }
         let query = ChatQuery(
             messages: messages,
             model: .init(stringLiteral: config.model),
@@ -1292,7 +1322,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             presencePenalty: config.presencePenalty,
             stop: config.stopSequences.map { .init(stringList: $0) },
             temperature: config.temperature,
-            toolChoice: Self.toolChoiceForOpenAI(policy: config.toolInvocationPolicy, toolsNonEmpty: !tools.isEmpty),
+            toolChoice: Self.toolChoiceForOpenAI(policy: resolved.effective, toolsNonEmpty: !tools.isEmpty),
             tools: tools,
             topP: config.topP,
             user: config.user
@@ -1307,12 +1337,29 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         return (firstChoice, response.usage)
     }
     
-    private func llmMetadata(from usage: ChatResult.CompletionUsage?, finishReason: String?) -> LLMMetadata? {
-        guard let usage else { return nil }
+    /// Warns once (per request) when a requested tool-choice mode is clamped to a supported one.
+    private func warnToolChoiceClamped(requested: ToolInvocationPolicy, effective: ToolInvocationPolicy) {
+        logger.warning(
+            "Requested tool-choice mode unsupported by provider; clamping",
+            metadata: SwiftAgentKitLogging.metadata(
+                ("model", .string(config.model)),
+                ("requested", .string(Self.effectiveToolChoiceDescription(requested))),
+                ("effective", .string(Self.effectiveToolChoiceDescription(effective)))
+            )
+        )
+    }
+
+    private func llmMetadata(from usage: ChatResult.CompletionUsage?, finishReason: String?, effectiveToolChoice: ToolInvocationPolicy? = nil) -> LLMMetadata? {
+        var modelMetadata: JSON? = nil
+        if let effectiveToolChoice {
+            modelMetadata = try? JSON(["effectiveToolChoice": Self.effectiveToolChoiceDescription(effectiveToolChoice)])
+        }
+        guard usage != nil || modelMetadata != nil else { return nil }
         return LLMMetadata(
-            promptTokens: usage.promptTokens,
-            completionTokens: usage.completionTokens,
-            totalTokens: usage.totalTokens,
+            promptTokens: usage?.promptTokens,
+            completionTokens: usage?.completionTokens,
+            totalTokens: usage?.totalTokens,
+            modelMetadata: modelMetadata,
             finishReason: finishReason
         )
     }
@@ -1438,6 +1485,10 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             messages.append(userMessage)
         }
         
+        let resolved = resolvedToolChoice()
+        if resolved.clamped {
+            warnToolChoiceClamped(requested: config.toolInvocationPolicy, effective: resolved.effective)
+        }
         let query = ChatQuery(
             messages: messages,
             model: .init(stringLiteral: config.model),
@@ -1445,7 +1496,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
             presencePenalty: config.presencePenalty,
             stop: config.stopSequences.map { .init(stringList: $0) },
             temperature: config.temperature,
-            toolChoice: Self.toolChoiceForOpenAI(policy: config.toolInvocationPolicy, toolsNonEmpty: !tools.isEmpty),
+            toolChoice: Self.toolChoiceForOpenAI(policy: resolved.effective, toolsNonEmpty: !tools.isEmpty),
             tools: tools,
             topP: config.topP,
             user: config.user,

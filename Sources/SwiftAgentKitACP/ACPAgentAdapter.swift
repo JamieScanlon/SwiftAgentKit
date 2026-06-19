@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftAgentKit
+import EasyJSON
 
 /// Pluggable behavior for an ACP Agent process.
 public protocol ACPAgentAdapter: Sendable {
@@ -15,6 +16,7 @@ public protocol ACPAgentAdapter: Sendable {
     func handlePrompt(
         sessionId: String,
         prompt: [ACPContentBlock],
+        client: ACPAgentClient,
         eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
     ) async throws -> ACPStopReason
 
@@ -23,6 +25,9 @@ public protocol ACPAgentAdapter: Sendable {
         sessionId: String,
         eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
     ) async throws
+
+    /// Supplies slash commands advertised to the client after session setup.
+    func availableCommands(sessionId: String) async throws -> [ACPAvailableCommand]
 
     /// Called when a session is closed via `session/close`.
     func onSessionClosed(sessionId: String) async throws
@@ -62,6 +67,12 @@ public protocol ACPAgentAdapter: Sendable {
 
     /// Called when the client sends a `session/cancel` notification.
     func cancelPrompt(sessionId: String) async
+
+    /// Handles custom `_`-prefixed extension requests from the client.
+    func extMethod(method: String, params: JSON) async throws -> JSON
+
+    /// Handles custom `_`-prefixed extension notifications from the client.
+    func extNotification(method: String, params: JSON) async
 }
 
 public enum ACPAgentAdapterError: Error, LocalizedError, Sendable {
@@ -82,6 +93,8 @@ public extension ACPAgentAdapter {
         sessionId: String,
         eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
     ) async throws {}
+
+    func availableCommands(sessionId: String) async throws -> [ACPAvailableCommand] { [] }
 
     func onSessionClosed(sessionId: String) async throws {}
 
@@ -120,6 +133,12 @@ public extension ACPAgentAdapter {
     }
 
     func cancelPrompt(sessionId: String) async {}
+
+    func extMethod(method: String, params: JSON) async throws -> JSON {
+        throw JSONRPCConnectionError.methodNotFound(method)
+    }
+
+    func extNotification(method: String, params: JSON) async {}
 }
 
 /// Simple echo adapter for tests and examples.
@@ -127,26 +146,37 @@ public struct EchoACPAgentAdapter: ACPAgentAdapter {
     public let agentInfo: ACPImplementation
     public let agentCapabilities: ACPAgentCapabilities
     private let responseText: String
+    private let emitThought: Bool
 
     public init(
         name: String = "echo-acp-agent",
         version: String = "1.0.0",
-        responseText: String = "Echo response"
+        responseText: String = "Echo response",
+        emitThought: Bool = false
     ) {
         self.agentInfo = ACPImplementation(name: name, title: "Echo ACP Agent", version: version)
         self.agentCapabilities = ACPAgentCapabilities()
         self.responseText = responseText
+        self.emitThought = emitThought
     }
 
     public func handlePrompt(
         sessionId: String,
         prompt: [ACPContentBlock],
+        client: ACPAgentClient,
         eventSink: @escaping @Sendable (ACPSessionUpdate) async throws -> Void
     ) async throws -> ACPStopReason {
         let userText = prompt.compactMap { block -> String? in
             if case .text(let text) = block { return text }
             return nil
         }.joined(separator: " ")
+
+        if emitThought {
+            try await eventSink(.agentThoughtChunk(
+                messageId: UUID().uuidString,
+                content: .text("Considering: \(userText)")
+            ))
+        }
 
         try await eventSink(.agentMessageChunk(
             messageId: UUID().uuidString,
