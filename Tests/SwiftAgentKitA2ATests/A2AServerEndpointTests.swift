@@ -67,7 +67,7 @@ struct A2AServerEndpointTests {
         
         // Then - Verify structure
         #expect(rpcRequest.jsonrpc == "2.0")
-        #expect(rpcRequest.id == 42)
+        #expect(rpcRequest.id == .int(42))
         #expect(rpcRequest.params.message.role == "user")
         #expect(rpcRequest.params.message.messageId == message.messageId)
     }
@@ -153,7 +153,7 @@ struct A2AServerEndpointTests {
         
         // Then
         #expect(rpcRequest.jsonrpc == "2.0")
-        #expect(rpcRequest.id == 10)
+        #expect(rpcRequest.id == .int(10))
         #expect(rpcRequest.params.taskId == "task-123")
         #expect(rpcRequest.params.historyLength == 5)
     }
@@ -203,7 +203,7 @@ struct A2AServerEndpointTests {
         
         // Then
         #expect(rpcRequest.jsonrpc == "2.0")
-        #expect(rpcRequest.id == 20)
+        #expect(rpcRequest.id == .int(20))
         #expect(rpcRequest.params.taskId == "task-789")
     }
     
@@ -233,7 +233,7 @@ struct A2AServerEndpointTests {
         
         // Then
         #expect(rpcRequest.jsonrpc == "2.0")
-        #expect(rpcRequest.id == 30)
+        #expect(rpcRequest.id == .int(30))
         #expect(rpcRequest.params.taskId == "task-abc")
         #expect(rpcRequest.params.pushNotificationConfig.url == "https://example.com/webhook")
     }
@@ -258,7 +258,7 @@ struct A2AServerEndpointTests {
         
         // Then
         #expect(rpcRequest.jsonrpc == "2.0")
-        #expect(rpcRequest.id == 31)
+        #expect(rpcRequest.id == .int(31))
         #expect(rpcRequest.params.taskId == "task-def")
     }
     
@@ -284,7 +284,7 @@ struct A2AServerEndpointTests {
         
         // Then
         #expect(rpcRequest.jsonrpc == "2.0")
-        #expect(rpcRequest.id == 40)
+        #expect(rpcRequest.id == .int(40))
         #expect(rpcRequest.params.taskId == "task-ghi")
     }
     
@@ -300,13 +300,13 @@ struct A2AServerEndpointTests {
         // When - Creating error response structure
         let errorResponse = JSONRPCErrorResponse(
             jsonrpc: "2.0",
-            id: requestId,
+            id: .int(requestId),
             error: JSONRPCError(code: errorCode, message: errorMessage)
         )
         
         // Then
         #expect(errorResponse.jsonrpc == "2.0")
-        #expect(errorResponse.id == requestId)
+        #expect(errorResponse.id == .int(requestId))
         #expect(errorResponse.error.code == errorCode)
         #expect(errorResponse.error.message == errorMessage)
     }
@@ -316,7 +316,7 @@ struct A2AServerEndpointTests {
         // Given
         let errorResponse = JSONRPCErrorResponse(
             jsonrpc: "2.0",
-            id: 100,
+            id: .int(100),
             error: JSONRPCError(code: -32600, message: "Invalid Request")
         )
         
@@ -357,7 +357,7 @@ struct A2AServerEndpointTests {
             // When - Creating response with same ID
             let responseBody = [
                 "jsonrpc": "2.0",
-                "id": rpcRequest.id,
+                "id": testID,
                 "result": ["status": "ok"]
             ] as [String : Any]
             
@@ -365,7 +365,8 @@ struct A2AServerEndpointTests {
             let responseJson = try JSONSerialization.jsonObject(with: responseData) as? [String: Any]
             
             // Then
-            #expect(responseJson?["id"] as? Int == testID, "ID \(testID) should be preserved")
+            #expect(rpcRequest.id == .int(testID), "ID \(testID) should be preserved in decoded request")
+            #expect(responseJson?["id"] as? Int == testID, "ID \(testID) should be preserved in response")
         }
     }
     

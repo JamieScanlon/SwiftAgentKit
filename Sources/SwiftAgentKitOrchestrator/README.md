@@ -4,6 +4,7 @@ Building blocks for LLM orchestrators that can:
 
 - Use tools through **MCP** (Model Context Protocol)
 - Communicate with other agents through **A2A** (Agent-to-Agent)
+- Connect to coding agents through **ACP** (Agent Client Protocol)
 - Execute local function tools via **`ToolManager`**
 - Observe **instance**, **per-call**, and **agentic** state (see full doc below)
 
@@ -14,6 +15,7 @@ Building blocks for LLM orchestrators that can:
 - `SwiftAgentKit`
 - `SwiftAgentKitA2A`
 - `SwiftAgentKitMCP`
+- `SwiftAgentKitACP`
 - `SwiftAgentKitAdapters`
 - `swift-log`
 
@@ -26,7 +28,7 @@ import SwiftAgentKit
 let config = OrchestratorConfig(
     streamingEnabled: true,
     mcpEnabled: false,
-    a2aEnabled: false
+    a2aIntegration: .disabled
 )
 
 let orchestrator = SwiftAgentKitOrchestrator(llm: myLLM, config: config)
@@ -67,7 +69,7 @@ try await orchestrator.updateConversation(messages, availableTools: [])
 | Flag / field | Meaning |
 |----------------|--------|
 | `streamingEnabled` | `stream` vs `send` for LLM calls |
-| `mcpEnabled` / `a2aEnabled` | Enable those subsystems |
+| `mcpEnabled` / `a2aIntegration` | Enable MCP; control A2A catalog merge vs inline execution (`.disabled`, `.registrationOnly`, `.inlineExecution`) |
 | `mcpConnectionTimeout` | When the orchestrator creates `MCPManager` |
 | `toolCallTimeout` | Per-tool-call wall-clock limit (seconds); default **300**. See [`docs/SwiftAgentKitOrchestrator.md`](../../docs/SwiftAgentKitOrchestrator.md#tool-dispatch-order). |
 | `maxTokens`, `temperature`, `topP`, `additionalParameters` | Passed to each `LLMRequestConfig` |

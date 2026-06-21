@@ -184,7 +184,11 @@ public actor A2AClient {
             throw A2AClientError.notInitialized
         }
         
-        let jsonRPCRequest = JSONRPCRequest<MessageSendParams>(id: requestId, params: params)
+        let jsonRPCRequest = JSONRPCRequest(
+            id: .int(requestId),
+            method: "message/stream",
+            params: params
+        )
         requestId += 1
 //        let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(params)) as? [String: Sendable] ?? [:]
         let jsonParams = try JSONSerialization.jsonObject(with: encoder.encode(jsonRPCRequest)) as? [String: Sendable] ?? [:]
@@ -291,7 +295,7 @@ public actor A2AClient {
     
     /// Gets the current status and results of a task
     /// Implements the tasks/get RPC method from A2A spec
-    func getTask(params: TaskQueryParams) async throws -> A2ATask {
+    public func getTask(params: TaskQueryParams) async throws -> A2ATask {
         
         guard let apiManager else {
             throw A2AClientError.notInitialized
@@ -304,7 +308,7 @@ public actor A2AClient {
     
     /// Cancels a running task
     /// Implements the tasks/cancel RPC method from A2A spec
-    func cancelTask(params: TaskIdParams) async throws -> A2ATask {
+    public func cancelTask(params: TaskIdParams) async throws -> A2ATask {
         
         guard let apiManager else {
             throw A2AClientError.notInitialized
@@ -630,6 +634,8 @@ extension A2AClient: A2AAgentStreamClient {
         get async { server.toolCallTimeout }
     }
 }
+
+extension A2AClient: A2ATaskLifecycleClient {}
 
 // MARK: - Custom Errors
 

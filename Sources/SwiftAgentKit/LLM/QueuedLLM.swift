@@ -65,6 +65,10 @@ public struct QueuedLLM: LLMProtocol {
         baseLLM.getCapabilities()
     }
 
+    public func getRequestFeatures() -> ModelRequestFeatures {
+        baseLLM.getRequestFeatures()
+    }
+
     // MARK: - Queued operations
 
     public func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {

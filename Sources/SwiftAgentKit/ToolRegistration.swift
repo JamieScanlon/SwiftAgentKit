@@ -6,6 +6,7 @@ public enum ToolRegistrationSource: String, Sendable, Codable, Equatable {
     case local
     case mcp
     case a2a
+    case acp
     case unknown
 }
 

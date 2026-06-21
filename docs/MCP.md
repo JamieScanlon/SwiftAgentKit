@@ -15,6 +15,12 @@ The MCP module provides support for the [Model Context Protocol (MCP)](https://m
 > ```
 > The snippets below continue to use `print` for CLI output, but internal diagnostics (server boot, transport events, tool calls) now flow through `SwiftAgentKitLogging`.
 
+## Shared JSON-RPC infrastructure
+
+JSON-RPC envelopes, message validation, log-line filtering, and stdio transport primitives live in the core **SwiftAgentKit** module (`JSONRPCMessageFilter`, `JSONRPCMessageValidator`, `PipeStdioTransport`, etc.). The MCP module composes these with the external MCP SDK — it does not duplicate JSON-RPC wire types.
+
+The legacy name `MessageFilter` remains available in SwiftAgentKitMCP as a deprecated typealias for `JSONRPCMessageFilter`.
+
 ## Architecture Overview
 
 The MCP module follows a **separation of concerns** architecture:

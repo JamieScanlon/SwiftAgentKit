@@ -2,8 +2,9 @@ import Foundation
 import Logging
 import EasyJSON
 
-/// URLSession delegate for handling SSE streaming
-final class SSEDelegate: NSObject, URLSessionDataDelegate {
+/// URLSession delegate for handling SSE streaming.
+/// `@unchecked Sendable`: delegate callbacks are serialized on the session's delegate queue; `session` is retained for lifetime only.
+final class SSEDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let continuation: AsyncStream<[String: Sendable]>.Continuation
     private let parser = SSEParser()
     private let logger: Logger
@@ -182,8 +183,9 @@ final class SSEDelegate: NSObject, URLSessionDataDelegate {
     }
 }
 
-/// URLSession delegate for handling SSE streaming with EasyJSON
-final class SSEJSONDelegate: NSObject, URLSessionDataDelegate {
+/// URLSession delegate for handling SSE streaming with EasyJSON.
+/// `@unchecked Sendable`: delegate callbacks are serialized on the session's delegate queue; `session` is retained for lifetime only.
+final class SSEJSONDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let continuation: AsyncStream<JSON>.Continuation
     private let parser = SSEJSONParser()
     private let logger: Logger

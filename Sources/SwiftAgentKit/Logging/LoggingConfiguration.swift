@@ -192,6 +192,7 @@ public enum SwiftAgentKitLogging {
         case networking(String)
         case a2a(String)
         case mcp(String)
+        case acp(String)
         case adapters(String)
         case orchestrator
         case examples(String)
@@ -220,6 +221,8 @@ public enum SwiftAgentKitLogging {
                 return "swiftagentkit.a2a"
             case .mcp:
                 return "swiftagentkit.mcp"
+            case .acp:
+                return "swiftagentkit.acp"
             case .adapters:
                 return "swiftagentkit.adapters"
             case .orchestrator:
@@ -240,6 +243,7 @@ public enum SwiftAgentKitLogging {
                     .networking(let component),
                     .a2a(let component),
                     .mcp(let component),
+                    .acp(let component),
                     .adapters(let component),
                     .examples(let component),
                     .tests(let component):
@@ -649,6 +653,15 @@ struct FilteringLogHandler: LogHandler {
                 metadata: metadata,
                 matchMode: filter.matchMode
             ))
+        }
+
+        if criterionResults.isEmpty {
+            switch (filter.matchMode, filter.disposition) {
+            case (.all, .allow), (.any, .deny):
+                return true
+            case (.all, .deny), (.any, .allow):
+                return false
+            }
         }
 
         let isMatch: Bool

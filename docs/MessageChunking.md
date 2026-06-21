@@ -124,6 +124,17 @@ Don't use chunked stdio when:
 
 ## Implementation Details
 
+### Shared stdio infrastructure (SwiftAgentKit)
+
+Stdio framing, log-line filtering, and JSON-RPC validation live in the core **SwiftAgentKit** module:
+
+- **`PipeStdioTransport`** — newline-delimited read/write over pipes; accepts a `JSONRPCMessageFilter` and optional `MessageProcessor` hooks
+- **`ProcessStdioTransport`** — stdin/stdout variant for subprocess agents
+- **`MessageProcessor`** — protocol for outbound/inbound transforms; MCP's `MessageChunker` implements this for large-message chunking
+- **`NewlineDelimitedFraming`** — shared line buffering and splitting
+
+MCP's `ClientTransport` and `ChunkedStdioTransport` compose these primitives with MCP SDK types. ACP uses the same transport types directly via `JSONRPCConnection`.
+
 ### MessageChunker
 
 The `MessageChunker` actor handles chunking and reassembly:
@@ -161,7 +172,7 @@ Client-side transport with built-in chunking:
 actor ClientTransport: Transport {
     /// Uses MessageChunker for transparent chunking
     /// Maintains buffer for frame reassembly
-    /// Filters out non-JSON-RPC messages
+    /// Filters non-JSON-RPC lines via JSONRPCMessageFilter (SwiftAgentKit)
 }
 ```
 

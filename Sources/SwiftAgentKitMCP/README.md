@@ -7,7 +7,8 @@ This module provides tools for building MCP (Model Context Protocol) servers in 
 - **MCPServer**: Main server class that handles JSON-RPC parsing and routing
 - **MCPClient**: Client for connecting to MCP servers with built-in message filtering
 - **ToolRegistry**: Server-side tool management and execution
-- **MessageFilter**: Utility for filtering log messages from MCP protocol communication
+- **MessageChunker**: Transparent chunking for large stdio messages (MCP-specific)
+- **JSONRPCMessageFilter**: Shared log-line filter from SwiftAgentKit (legacy alias: `MessageFilter`)
 
 - **Automatic MCP Protocol Handling**: Built-in support for MCP methods (initialize, tools/list, tools/call)
 - **Message Filtering**: Prevents log interference by filtering non-JSON-RPC messages
@@ -330,7 +331,7 @@ let unfilteredClient = MCPClient(
 ### Message Filter Configuration
 
 ```swift
-let config = MessageFilter.Configuration(
+let config = JSONRPCMessageFilter.Configuration(
     enabled: true,                    // Enable/disable filtering
     logFilteredMessages: false,      // Log filtered messages for debugging
     filteredMessageLogLevel: .debug  // Log level for filtered messages

@@ -13,6 +13,10 @@ The A2A module provides support for the [Agent-to-Agent (A2A) protocol](https://
 > ```
 > All A2A types request scoped loggers from `SwiftAgentKitLogging`, so they automatically inherit the level and metadata you configure. The `print` statements in this guide are for CLI output only.
 
+## Shared JSON-RPC infrastructure
+
+JSON-RPC 2.0 envelope types (`JSONRPCRequest`, `JSONRPCError`, `JSONRPCErrorResponse`, `JSONRPCID`) are defined in the core **SwiftAgentKit** module. SwiftAgentKitA2A re-exports the old names as deprecated typealiases for backward compatibility. A2A-specific error codes (e.g. `taskNotFound`) remain in SwiftAgentKitA2A.
+
 ## Key Types
 - **A2AManager**: Manages multiple A2A clients and agent calls. Now requires a config file URL provided by the consumer.
 - **A2AClient**: Connects to and communicates with A2A servers

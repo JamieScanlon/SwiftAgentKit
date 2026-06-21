@@ -412,7 +412,8 @@ public actor MCPClient {
         }
         
         do {
-            let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe, logger: logger)
+            let filter = JSONRPCMessageFilter(configuration: messageFilterConfig, logger: logger)
+            let transport = ClientTransport(inPipe: inPipe, outPipe: outPipe, messageFilter: filter, logger: logger)
             try await connect(transport: transport)
             try await getTools()
         } catch {

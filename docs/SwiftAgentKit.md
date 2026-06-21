@@ -187,7 +187,8 @@ This modular design allows for:
 ## Related Modules
 
 For higher-level orchestration capabilities, see:
-- **SwiftAgentKitOrchestrator**: LLM orchestrator with MCP and A2A support
+- **SwiftAgentKitOrchestrator**: LLM orchestrator with MCP, A2A, and ACP support
 - **SwiftAgentKitMCP**: Model Context Protocol support
 - **SwiftAgentKitA2A**: Agent-to-Agent communication
+- **SwiftAgentKitACP**: Agent Client Protocol support
 - **SwiftAgentKitAdapters**: AI provider adapters and tool-aware architecture 

@@ -59,6 +59,7 @@ public extension ToolProvider {
         case .function: return .local
         case .mcpTool: return .mcp
         case .a2aAgent: return .a2a
+        case .acpAgent: return .acp
         }
     }
 

@@ -513,6 +513,39 @@ import EasyJSON
         #expect(response.content == "queued-ok")
     }
 
+    @Test("StatefulLLM and QueuedLLM forward getRequestFeatures from the base LLM")
+    func testWrapperRequestFeaturesForwarding() throws {
+        struct FeaturefulLLM: LLMProtocol {
+            func getModelName() -> String { "featureful" }
+            func getCapabilities() -> [LLMCapability] { [.completion, .tools] }
+            func getRequestFeatures() -> ModelRequestFeatures {
+                ModelRequestFeatures(
+                    streaming: true,
+                    responseFormats: [.text, .jsonObject],
+                    parallelToolCalls: .capped(4),
+                    reasoningEfforts: [.low, .high],
+                    toolChoiceModes: [.auto, .required, .specific]
+                )
+            }
+            func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+                .complete(content: "ok")
+            }
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+                AsyncThrowingStream { $0.finish() }
+            }
+        }
+
+        let base = FeaturefulLLM()
+        let expected = base.getRequestFeatures()
+
+        let stateful = StatefulLLM(baseLLM: base)
+        #expect(stateful.getRequestFeatures() == expected)
+
+        let queued = QueuedLLM(baseLLM: stateful)
+        #expect(queued.getRequestFeatures() == expected)
+        #expect(queued.getRequestFeatures().toolChoiceModes == [.auto, .required, .specific])
+    }
+
     @Test("LLMError.imageGenerationError wraps ImageGenerationError")
     func testLLMErrorImageGenerationError() throws {
         let imageError = ImageGenerationError.noImagesGenerated
@@ -550,16 +583,85 @@ import EasyJSON
         )
         #expect(baseline == ModelRequestFeatures.chatBaseline)
 
+        // Presets advertise the baseline tool-choice capability.
+        #expect(ModelRequestFeatures.unknown.toolChoiceModes == [.auto])
+        #expect(ModelRequestFeatures.chatBaseline.toolChoiceModes == [.auto])
+
         let full = ModelRequestFeatures(
             streaming: true,
             responseFormats: [.text, .jsonObject],
             parallelToolCalls: .capped(4),
-            reasoningEfforts: [.low, .high]
+            reasoningEfforts: [.low, .high],
+            toolChoiceModes: [.auto, .required, .specific]
         )
         #expect(full.streaming)
         #expect(full.responseFormats == [.text, .jsonObject])
         #expect(full.parallelToolCalls == .capped(4))
         #expect(full.reasoningEfforts == [.low, .high])
+        #expect(full.toolChoiceModes == [.auto, .required, .specific])
+    }
+
+    @Test("ModelRequestFeatures.resolve clamps unsupported policies to automatic")
+    func testModelRequestFeaturesResolveClamp() throws {
+        let features = ModelRequestFeatures(
+            streaming: true,
+            responseFormats: [.text],
+            parallelToolCalls: .unsupported,
+            reasoningEfforts: [],
+            toolChoiceModes: [.auto, .required]
+        )
+
+        // Supported modes pass through unchanged.
+        let auto = features.resolve(.automatic)
+        #expect(auto.effective == .automatic)
+        #expect(auto.clamped == false)
+
+        let required = features.resolve(.required)
+        #expect(required.effective == .required)
+        #expect(required.clamped == false)
+
+        // Unsupported modes clamp to automatic.
+        let specific = features.resolve(.specific(toolName: "get_weather"))
+        #expect(specific.effective == .automatic)
+        #expect(specific.clamped == true)
+
+        let none = features.resolve(.none)
+        #expect(none.effective == .automatic)
+        #expect(none.clamped == true)
+    }
+
+    @Test("ToolInvocationPolicy mode mapping")
+    func testToolInvocationPolicyModeMapping() throws {
+        #expect(ToolInvocationPolicy.automatic.mode == .auto)
+        #expect(ToolInvocationPolicy.required.mode == .required)
+        #expect(ToolInvocationPolicy.none.mode == .none)
+        #expect(ToolInvocationPolicy.specific(toolName: "x").mode == .specific)
+    }
+
+    @Test("ToolInvocationPolicy Codable round-trip including specific")
+    func testToolInvocationPolicyCodableRoundTrip() throws {
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let cases: [ToolInvocationPolicy] = [.automatic, .required, .none, .specific(toolName: "get_weather")]
+        for policy in cases {
+            let data = try encoder.encode(policy)
+            let decoded = try decoder.decode(ToolInvocationPolicy.self, from: data)
+            #expect(decoded == policy)
+        }
+    }
+
+    @Test("ToolInvocationPolicy decodes legacy plain-string payloads")
+    func testToolInvocationPolicyLegacyDecoding() throws {
+        let decoder = JSONDecoder()
+        let mapping: [(String, ToolInvocationPolicy)] = [
+            ("\"automatic\"", .automatic),
+            ("\"required\"", .required),
+            ("\"none\"", .none)
+        ]
+        for (json, expected) in mapping {
+            let decoded = try decoder.decode(ToolInvocationPolicy.self, from: Data(json.utf8))
+            #expect(decoded == expected)
+        }
     }
 
     @Test("LLMCapability Codable round-trip")
@@ -597,6 +699,44 @@ import EasyJSON
         let data = try encoder.encode(original)
         let decoded = try decoder.decode(ModelRequestFeatures.self, from: data)
         #expect(decoded == original)
+    }
+
+    @Test("ModelRequestFeatures Codable round-trip preserves toolChoiceModes")
+    func testModelRequestFeaturesToolChoiceModesCodableRoundTrip() throws {
+        let original = ModelRequestFeatures(
+            streaming: true,
+            responseFormats: [.text],
+            parallelToolCalls: .unsupported,
+            reasoningEfforts: [],
+            toolChoiceModes: [.auto, .none, .required, .specific]
+        )
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+        let data = try encoder.encode(original)
+        let decoded = try decoder.decode(ModelRequestFeatures.self, from: data)
+        #expect(decoded == original)
+        #expect(decoded.toolChoiceModes == [.auto, .none, .required, .specific])
+    }
+
+    @Test("ModelRequestFeatures decodes legacy payloads without toolChoiceModes")
+    func testModelRequestFeaturesLegacyDecoding() throws {
+        // Simulate a payload encoded before toolChoiceModes existed by stripping the key.
+        let current = ModelRequestFeatures(
+            streaming: true,
+            responseFormats: [.text],
+            parallelToolCalls: .unsupported,
+            reasoningEfforts: [],
+            toolChoiceModes: [.required]
+        )
+        let encoded = try JSONEncoder().encode(current)
+        var object = try #require(
+            try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        object.removeValue(forKey: "toolChoiceModes")
+        let legacy = try JSONSerialization.data(withJSONObject: object)
+
+        let decoded = try JSONDecoder().decode(ModelRequestFeatures.self, from: legacy)
+        #expect(decoded.toolChoiceModes == [.auto])
     }
 
     @Test("createStreamingConfig forwards request knobs and sets stream true")

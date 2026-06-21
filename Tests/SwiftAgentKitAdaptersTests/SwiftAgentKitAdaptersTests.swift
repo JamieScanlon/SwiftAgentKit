@@ -10,6 +10,7 @@ import Testing
 import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
 import SwiftAgentKit
+import SwiftAgentKitACP
 import SwiftAgentKitMCP
 import EasyJSON
 import MCP
@@ -1020,6 +1021,37 @@ import MCP
         #expect(settingsParam.description == "Settings object")
         #expect(settingsParam.type == "object")
         #expect(settingsParam.required == false)
+    }
+
+    @Test("ServerBootCall converts to ACPMcpServer")
+    func serverBootCallToACPMcpServer() {
+        let boot = MCPConfig.ServerBootCall(
+            name: "local-tools",
+            command: "mcp-server",
+            arguments: ["--stdio"],
+            environment: .object(["API_KEY": .string("secret")])
+        )
+
+        let acpServer = boot.toACPMcpServer()
+        #expect(acpServer.name == "local-tools")
+        #expect(acpServer.command == "mcp-server")
+        #expect(acpServer.args == ["--stdio"])
+        #expect(acpServer.env?["API_KEY"] == "secret")
+    }
+
+    @Test("acpSessionMcpServersProvider fromLocalBootCalls maps boot calls")
+    func sessionMcpProviderFromLocalBootCalls() async {
+        let boot = MCPConfig.ServerBootCall(
+            name: "tools",
+            command: "cmd",
+            arguments: [],
+            environment: .object([:])
+        )
+        let provider = acpSessionMcpServersProvider(fromLocalBootCalls: [boot])
+        let servers = await provider("/any/cwd")
+        #expect(servers.count == 1)
+        #expect(servers[0].name == "tools")
+        #expect(servers[0].command == "cmd")
     }
 }
 

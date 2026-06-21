@@ -7,6 +7,7 @@
 
 import Testing
 import Foundation
+import SwiftAgentKit
 @testable import SwiftAgentKitMCP
 
 struct MessageFilterTests {
@@ -156,5 +157,12 @@ struct MessageFilterTests {
         let mixedWhitespaceData = mixedWhitespace.data(using: .utf8)!
         let filteredMixedWhitespace = filter.filterMessage(mixedWhitespaceData)
         #expect(filteredMixedWhitespace != nil)
+    }
+
+    @Test("Deprecated MessageFilter alias matches JSONRPCMessageFilter")
+    func deprecatedAlias() {
+        let viaAlias: MessageFilter = JSONRPCMessageFilter()
+        let json = #"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#.data(using: .utf8)!
+        #expect(viaAlias.filterMessage(json) != nil)
     }
 }

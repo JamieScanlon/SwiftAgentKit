@@ -4,6 +4,7 @@ import SwiftAgentKitOrchestrator
 import SwiftAgentKit
 import SwiftAgentKitMCP
 import SwiftAgentKitA2A
+import SwiftAgentKitACP
 import Logging
 import EasyJSON
 
@@ -333,6 +334,172 @@ actor MockA2AStreamClientForOrchestrator: A2AAgentStreamClient {
     }
 }
 
+/// Records whether inline A2A execution invoked `streamMessage`.
+actor RecordingA2AStreamClient: A2AAgentStreamClient {
+    var agentCard: AgentCard?
+    private(set) var streamMessageCallCount = 0
+    private let events: [SendStreamingMessageSuccessResponse<MessageResult>]
+
+    init(agentCard: AgentCard?, events: [SendStreamingMessageSuccessResponse<MessageResult>] = []) {
+        self.agentCard = agentCard
+        self.events = events
+    }
+
+    func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>> {
+        streamMessageCallCount += 1
+        let events = self.events
+        return AsyncStream { continuation in
+            for event in events {
+                continuation.yield(event)
+            }
+            continuation.finish()
+        }
+    }
+}
+
+func makeOrchestratorWithRecordingA2AClient(
+    integration: A2AOrchestratorIntegration,
+    agentName: String,
+    events: [SendStreamingMessageSuccessResponse<MessageResult>] = []
+) async throws -> (SwiftAgentKitOrchestrator, RecordingA2AStreamClient) {
+    let card = AgentCard(
+        name: agentName,
+        description: "Test agent",
+        url: "https://example.com/\(agentName)",
+        version: "1.0",
+        capabilities: AgentCard.AgentCapabilities(streaming: true),
+        defaultInputModes: ["text/plain"],
+        defaultOutputModes: ["text/plain"],
+        skills: []
+    )
+    let client = RecordingA2AStreamClient(agentCard: card, events: events)
+    let a2aManager = A2AManager(logger: Logger(label: "TestA2A"))
+    try await a2aManager.initialize(clients: [client])
+    let orchestrator = SwiftAgentKitOrchestrator(
+        llm: MockLLM(model: "test-model", logger: Logger(label: "MockLLM")),
+        config: OrchestratorConfig(a2aIntegration: integration),
+        a2aManager: a2aManager
+    )
+    return (orchestrator, client)
+}
+
+/// Records whether inline ACP execution invoked `promptStream`.
+actor RecordingACPStreamClient: ACPAgentStreamClient {
+    let info: ACPImplementation
+    private(set) var promptStreamCallCount = 0
+    private let responseText: String
+
+    init(name: String, responseText: String = "done") {
+        self.info = ACPImplementation(name: name, version: "1.0.0")
+        self.responseText = responseText
+    }
+
+    var agentInfo: ACPImplementation? { info }
+
+    func promptStream(_ instructions: String) async throws -> (
+        updates: AsyncStream<ACPSessionUpdate>,
+        response: Task<ACPPromptResponse, Error>
+    ) {
+        promptStreamCallCount += 1
+        let responseText = self.responseText
+        let updates = AsyncStream<ACPSessionUpdate> { continuation in
+            continuation.yield(.agentMessageChunk(messageId: "1", content: .text(responseText)))
+            continuation.finish()
+        }
+        let response = Task<ACPPromptResponse, Error> {
+            ACPPromptResponse(stopReason: .endTurn)
+        }
+        return (updates, response)
+    }
+
+    func shutdown() async {}
+}
+
+func makeOrchestratorWithRecordingACPClient(
+    integration: ACPOrchestratorIntegration,
+    agentName: String,
+    responseText: String = "done"
+) async throws -> (SwiftAgentKitOrchestrator, RecordingACPStreamClient) {
+    let client = RecordingACPStreamClient(name: agentName, responseText: responseText)
+    let acpManager = ACPManager(logger: Logger(label: "TestACP"))
+    try await acpManager.initialize(clients: [client])
+    let orchestrator = SwiftAgentKitOrchestrator(
+        llm: MockLLM(model: "test-model", logger: Logger(label: "MockLLM")),
+        config: OrchestratorConfig(acpIntegration: integration),
+        acpManager: acpManager
+    )
+    return (orchestrator, client)
+}
+
+actor MockCancellableA2AStreamClientForOrchestrator: A2ATaskLifecycleClient {
+    var agentCard: AgentCard?
+    private let initialEvents: [SendStreamingMessageSuccessResponse<MessageResult>]
+    private(set) var cancelTaskCallCount = 0
+    private(set) var lastCancelledTaskID: String?
+
+    init(agentCard: AgentCard?, initialEvents: [SendStreamingMessageSuccessResponse<MessageResult>] = []) {
+        self.agentCard = agentCard
+        self.initialEvents = initialEvents
+    }
+
+    func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>> {
+        let initialEvents = self.initialEvents
+        return AsyncStream { continuation in
+            Task {
+                for event in initialEvents {
+                    continuation.yield(event)
+                }
+                while !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: 50_000_000)
+                }
+                continuation.finish()
+            }
+        }
+    }
+
+    func cancelTask(params: TaskIdParams) async throws -> A2ATask {
+        cancelTaskCallCount += 1
+        lastCancelledTaskID = params.taskId
+        return A2ATask(
+            id: params.taskId,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .canceled,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            )
+        )
+    }
+
+    func getTask(params: TaskQueryParams) async throws -> A2ATask {
+        A2ATask(
+            id: params.taskId,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .working,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            )
+        )
+    }
+}
+
+struct PendingToolProviderMatchingHandleID: ToolProvider {
+    var name: String { "PendingMatchingHandle" }
+    let toolName: String
+
+    func availableTools() async -> [ToolDefinition] {
+        [ToolDefinition(name: toolName, description: "pending tool", parameters: [], type: .function)]
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        ToolResult(success: true, content: "pending", toolCallId: toolCall.id)
+    }
+
+    func executeToolOutcome(_ toolCall: ToolCall) async throws -> ToolExecutionOutcome {
+        let id = toolCall.id ?? UUID().uuidString
+        return .pending(PendingToolHandle(handleID: id, toolCallID: id, provider: name))
+    }
+}
+
 func wrapMessageResult(_ result: MessageResult) -> SendStreamingMessageSuccessResponse<MessageResult> {
     SendStreamingMessageSuccessResponse(jsonrpc: "2.0", id: 1, result: result)
 }
@@ -506,7 +673,10 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
         
         #expect(config.streamingEnabled == false)
         #expect(config.mcpEnabled == false)
+        #expect(config.a2aIntegration == .disabled)
         #expect(config.a2aEnabled == false)
+        #expect(config.acpIntegration == .disabled)
+        #expect(config.acpEnabled == false)
         #expect(config.maxTokens == nil)
         #expect(config.temperature == nil)
         #expect(config.topP == nil)
@@ -527,7 +697,202 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
         
         #expect(config.streamingEnabled == true)
         #expect(config.mcpEnabled == true)
+        #expect(config.a2aIntegration == .inlineExecution)
         #expect(config.a2aEnabled == true)
+    }
+
+    @Test("OrchestratorConfig a2aIntegration primary init accepts registrationOnly")
+    func testOrchestratorConfigA2AIntegrationPrimaryInit() throws {
+        let config = OrchestratorConfig(a2aIntegration: .registrationOnly)
+        #expect(config.a2aIntegration == .registrationOnly)
+        #expect(config.a2aEnabled == false)
+    }
+
+    @Test("Deprecated a2aEnabled init maps to a2aIntegration")
+    func testDeprecatedA2aEnabledInitMapsToIntegration() throws {
+        let enabled = OrchestratorConfig(a2aEnabled: true)
+        #expect(enabled.a2aIntegration == .inlineExecution)
+        #expect(enabled.a2aEnabled == true)
+
+        let disabled = OrchestratorConfig(a2aEnabled: false)
+        #expect(disabled.a2aIntegration == .disabled)
+        #expect(disabled.a2aEnabled == false)
+    }
+
+    @Test("OrchestratorConfig acpIntegration primary init accepts registrationOnly")
+    func testOrchestratorConfigACPIntegrationPrimaryInit() throws {
+        let config = OrchestratorConfig(acpIntegration: .registrationOnly)
+        #expect(config.acpIntegration == .registrationOnly)
+        #expect(config.acpEnabled == false)
+    }
+
+    @Test("Deprecated acpEnabled init maps to acpIntegration")
+    func testDeprecatedAcpEnabledInitMapsToIntegration() throws {
+        let enabled = OrchestratorConfig(acpEnabled: true)
+        #expect(enabled.acpIntegration == .inlineExecution)
+        #expect(enabled.acpEnabled == true)
+
+        let disabled = OrchestratorConfig(acpEnabled: false)
+        #expect(disabled.acpIntegration == .disabled)
+        #expect(disabled.acpEnabled == false)
+    }
+
+    // MARK: - A2A integration mode tests
+
+    @Test("A2A integration disabled excludes agents from catalog")
+    func testA2AIntegrationDisabledExcludesCatalog() async throws {
+        let agentName = "DisabledCatalogAgent"
+        let (orchestrator, _) = try await makeOrchestratorWithRecordingA2AClient(
+            integration: .disabled,
+            agentName: agentName
+        )
+
+        let tools = await orchestrator.allAvailableTools
+        let descriptors = await orchestrator.allRegisteredTools
+        #expect(tools.contains { $0.name == agentName } == false)
+        #expect(descriptors.contains { $0.definition.name == agentName } == false)
+    }
+
+    @Test("A2A integration registrationOnly merges catalog without inline agentCall")
+    func testA2AIntegrationRegistrationOnlyCatalogWithoutInlineExecution() async throws {
+        let agentName = "RegOnlyAgent"
+        let (orchestrator, client) = try await makeOrchestratorWithRecordingA2AClient(
+            integration: .registrationOnly,
+            agentName: agentName
+        )
+
+        let tools = await orchestrator.allAvailableTools
+        let descriptors = await orchestrator.allRegisteredTools
+        #expect(tools.contains { $0.name == agentName })
+        #expect(descriptors.contains { $0.definition.name == agentName && $0.definition.type == .a2aAgent && $0.source == .a2a })
+
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: agentName,
+                argumentsPayload: .object(["instructions": .string("Run task")]),
+                source: .direct,
+                callerProvenance: "registration-only-test"
+            )
+        )
+
+        switch outcome {
+        case .completed(let result, _):
+            #expect(result.success == false)
+            #expect(result.error?.contains("No provider handled tool") == true)
+        default:
+            Issue.record("Expected completed fallback outcome")
+        }
+        #expect(await client.streamMessageCallCount == 0)
+    }
+
+    @Test("A2A integration inlineExecution invokes agentCall")
+    func testA2AIntegrationInlineExecutionInvokesAgentCall() async throws {
+        let agentName = "InlineExecAgent"
+        let message = A2AMessage(
+            role: "agent",
+            parts: [.text(text: "done")],
+            messageId: UUID().uuidString
+        )
+        let events = [wrapMessageResult(.message(message))]
+        let (orchestrator, client) = try await makeOrchestratorWithRecordingA2AClient(
+            integration: .inlineExecution,
+            agentName: agentName,
+            events: events
+        )
+
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: agentName,
+                argumentsPayload: .object(["instructions": .string("Run task")]),
+                source: .direct,
+                callerProvenance: "inline-exec-test"
+            )
+        )
+
+        switch outcome {
+        case .completed(let result, _):
+            #expect(result.success == true)
+            #expect(result.content == "done")
+        default:
+            Issue.record("Expected completed outcome from inline A2A execution")
+        }
+        #expect(await client.streamMessageCallCount == 1)
+    }
+
+    // MARK: - ACP integration mode tests
+
+    @Test("ACP integration disabled excludes agents from catalog")
+    func testACPIntegrationDisabledExcludesCatalog() async throws {
+        let agentName = "DisabledACPAgent"
+        let (orchestrator, _) = try await makeOrchestratorWithRecordingACPClient(
+            integration: .disabled,
+            agentName: agentName
+        )
+
+        let tools = await orchestrator.allAvailableTools
+        let descriptors = await orchestrator.allRegisteredTools
+        #expect(tools.contains { $0.name == agentName } == false)
+        #expect(descriptors.contains { $0.definition.name == agentName } == false)
+    }
+
+    @Test("ACP integration registrationOnly merges catalog without inline agentCall")
+    func testACPIntegrationRegistrationOnlyCatalogWithoutInlineExecution() async throws {
+        let agentName = "RegOnlyACPAgent"
+        let (orchestrator, client) = try await makeOrchestratorWithRecordingACPClient(
+            integration: .registrationOnly,
+            agentName: agentName
+        )
+
+        let tools = await orchestrator.allAvailableTools
+        let descriptors = await orchestrator.allRegisteredTools
+        #expect(tools.contains { $0.name == agentName })
+        #expect(descriptors.contains { $0.definition.name == agentName && $0.definition.type == .acpAgent && $0.source == .acp })
+
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: agentName,
+                argumentsPayload: .object(["instructions": .string("Run task")]),
+                source: .direct,
+                callerProvenance: "acp-registration-only-test"
+            )
+        )
+
+        switch outcome {
+        case .completed(let result, _):
+            #expect(result.success == false)
+            #expect(result.error?.contains("No provider handled tool") == true)
+        default:
+            Issue.record("Expected completed fallback outcome")
+        }
+        #expect(await client.promptStreamCallCount == 0)
+    }
+
+    @Test("ACP integration inlineExecution invokes agentCall")
+    func testACPIntegrationInlineExecutionInvokesAgentCall() async throws {
+        let agentName = "InlineExecACPAgent"
+        let (orchestrator, client) = try await makeOrchestratorWithRecordingACPClient(
+            integration: .inlineExecution,
+            agentName: agentName,
+            responseText: "done"
+        )
+
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: agentName,
+                argumentsPayload: .object(["instructions": .string("Run task")]),
+                source: .direct,
+                callerProvenance: "acp-inline-exec-test"
+            )
+        )
+
+        switch outcome {
+        case .completed(let result, _):
+            #expect(result.success == true)
+            #expect(result.content == "done")
+        default:
+            Issue.record("Expected completed outcome from inline ACP execution")
+        }
+        #expect(await client.promptStreamCallCount == 1)
     }
     
     @Test("OrchestratorConfig can be initialized with LLM request params")
@@ -702,6 +1067,7 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
         #expect(await orchestrator.llm is MockLLM)
         #expect(await orchestrator.config.streamingEnabled == true)
         #expect(await orchestrator.config.mcpEnabled == true)
+        #expect(await orchestrator.config.a2aIntegration == .disabled)
         #expect(await orchestrator.config.a2aEnabled == false)
     }
     
@@ -2183,6 +2549,70 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
         let events = await collector.snapshot().filter { $0.toolCallID == "pending_timeout_call" }
         #expect(events.contains(where: { $0.state == .pending }))
         #expect(events.contains(where: { $0.state == .cancelled }))
+    }
+
+    @Test("cancelPendingTool cancels in-flight A2A stream when handleID matches toolCallID")
+    func testCancelPendingToolCancelsInFlightA2AStream() async throws {
+        let toolCallID = "pending_a2a_call"
+        let taskID = "a2a-task-for-cancel"
+        let agentName = "PendingCancelAgent"
+        let pendingToolName = "pending_cancel_tool"
+
+        let card = makeAgentCard(name: agentName)
+        let mockClient = MockCancellableA2AStreamClientForOrchestrator(
+            agentCard: card,
+            initialEvents: [
+                wrapMessageResult(.task(A2ATask(
+                    id: taskID,
+                    contextId: UUID().uuidString,
+                    status: TaskStatus(
+                        state: .working,
+                        timestamp: ISO8601DateFormatter().string(from: Date())
+                    )
+                )))
+            ]
+        )
+        let a2aManager = A2AManager()
+        try await a2aManager.initialize(clients: [mockClient])
+
+        let a2aToolCall = ToolCall(
+            name: agentName,
+            arguments: .object(["instructions": .string("Long running")]),
+            id: toolCallID
+        )
+
+        let (_, events) = try await a2aManager.streamAgentCall(a2aToolCall, invocationID: "bg-invocation")
+        let collectTask = Task { for await _ in events { } }
+
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let pendingToolCall = ToolCall(name: pendingToolName, arguments: .object([:]), id: toolCallID)
+        let llm = CapturingMockLLM(
+            logger: Logger(label: "pending-a2a-cancel"),
+            toolCallsToReturn: [pendingToolCall]
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(streamingEnabled: false, pendingToolTimeout: nil),
+            a2aManager: a2aManager,
+            toolManager: ToolManager(providers: [PendingToolProviderMatchingHandleID(toolName: pendingToolName)])
+        )
+
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "start pending cancel tool")],
+                availableTools: []
+            )
+        }
+
+        await orchestrator.cancelPendingTool(handleID: toolCallID)
+
+        await collectTask.value
+        #expect(await mockClient.cancelTaskCallCount == 1)
+        #expect(await mockClient.lastCancelledTaskID == taskID)
+        #expect(await mockClient.cancelTaskCallCount == 1)
+        #expect(await mockClient.lastCancelledTaskID == taskID)
     }
 
     @Test("staged assistant persistence commits exactly once on natural completion")

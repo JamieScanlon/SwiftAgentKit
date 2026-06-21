@@ -24,6 +24,9 @@ let package = Package(
             name: "SwiftAgentKitMCP",
             targets: ["SwiftAgentKitMCP"]),
         .library(
+            name: "SwiftAgentKitACP",
+            targets: ["SwiftAgentKitACP"]),
+        .library(
             name: "SwiftAgentKitAdapters",
             targets: ["SwiftAgentKitAdapters"]),
         .library(
@@ -43,6 +46,9 @@ let package = Package(
         .executable(
             name: "A2AExample",
             targets: ["A2AExample"]),
+        .executable(
+            name: "ACPExample",
+            targets: ["ACPExample"]),
         .executable(
             name: "AdaptersExample",
             targets: ["AdaptersExample"]),
@@ -133,6 +139,17 @@ let package = Package(
             ],
             exclude: ["README.md"]),
         
+        // ACP (Agent Client Protocol) module
+        .target(
+            name: "SwiftAgentKitACP",
+            dependencies: [
+                "SwiftAgentKit",
+                .product(name: "EasyJSON", package: "EasyJSON"),
+                .product(name: "Logging", package: "swift-log"),
+                .product(name: "Vapor", package: "vapor"),
+            ],
+            exclude: ["README.md"]),
+        
         // Adapters module - Standard agent adapters
         .target(
             name: "SwiftAgentKitAdapters",
@@ -140,6 +157,7 @@ let package = Package(
                 "SwiftAgentKit",
                 "SwiftAgentKitA2A",
                 "SwiftAgentKitMCP",
+                "SwiftAgentKitACP",
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "OpenAI", package: "OpenAI"),
             ],
@@ -153,6 +171,7 @@ let package = Package(
                 "SwiftAgentKit",
                 "SwiftAgentKitA2A",
                 "SwiftAgentKitMCP",
+                "SwiftAgentKitACP",
                 "SwiftAgentKitAdapters",
                 .product(name: "Logging", package: "swift-log"),
             ],
@@ -203,6 +222,15 @@ let package = Package(
                 .product(name: "Logging", package: "swift-log"),
             ],
             path: "Examples/A2AExample"),
+        
+        .executableTarget(
+            name: "ACPExample",
+            dependencies: [
+                "SwiftAgentKit",
+                "SwiftAgentKitACP",
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Examples/ACPExample"),
         
         .executableTarget(
             name: "AdaptersExample",
@@ -311,6 +339,10 @@ let package = Package(
                 "SwiftAgentKit",
                 .product(name: "EasyJSON", package: "EasyJSON"),
             ]
+        ),
+        .testTarget(
+            name: "SwiftAgentKitACPTests",
+            dependencies: ["SwiftAgentKitACP", "SwiftAgentKit"]
         ),
         .testTarget(
             name: "SwiftAgentKitAdaptersTests",

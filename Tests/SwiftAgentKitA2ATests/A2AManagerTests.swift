@@ -49,20 +49,91 @@ struct A2AManagerTests {
     actor MockA2AStreamClient: A2AAgentStreamClient {
         var agentCard: AgentCard?
         private var eventsToYield: [SendStreamingMessageSuccessResponse<MessageResult>] = []
-        
-        init(agentCard: AgentCard?, events: [SendStreamingMessageSuccessResponse<MessageResult>]) {
+        private let hangsAfterEvents: Bool
+
+        init(
+            agentCard: AgentCard?,
+            events: [SendStreamingMessageSuccessResponse<MessageResult>],
+            hangsAfterEvents: Bool = false
+        ) {
             self.agentCard = agentCard
             self.eventsToYield = events
+            self.hangsAfterEvents = hangsAfterEvents
         }
-        
+
         func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>> {
             let events = eventsToYield
+            let hangsAfterEvents = hangsAfterEvents
             return AsyncStream { continuation in
-                for event in events {
-                    continuation.yield(event)
+                if hangsAfterEvents {
+                    Task {
+                        for event in events {
+                            continuation.yield(event)
+                        }
+                        while !Task.isCancelled {
+                            try? await Task.sleep(nanoseconds: 50_000_000)
+                        }
+                        continuation.finish()
+                    }
+                } else {
+                    for event in events {
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
                 }
-                continuation.finish()
             }
+        }
+    }
+
+    /// Hanging mock client that supports remote task cancellation for cancellation tests.
+    actor MockCancellableA2AStreamClient: A2ATaskLifecycleClient {
+        var agentCard: AgentCard?
+        private let initialEvents: [SendStreamingMessageSuccessResponse<MessageResult>]
+        private(set) var cancelTaskCallCount = 0
+        private(set) var lastCancelledTaskID: String?
+
+        init(agentCard: AgentCard?, initialEvents: [SendStreamingMessageSuccessResponse<MessageResult>] = []) {
+            self.agentCard = agentCard
+            self.initialEvents = initialEvents
+        }
+
+        func streamMessage(params: MessageSendParams) async throws -> AsyncStream<SendStreamingMessageSuccessResponse<MessageResult>> {
+            let initialEvents = self.initialEvents
+            return AsyncStream { continuation in
+                Task {
+                    for event in initialEvents {
+                        continuation.yield(event)
+                    }
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 50_000_000)
+                    }
+                    continuation.finish()
+                }
+            }
+        }
+
+        func cancelTask(params: TaskIdParams) async throws -> A2ATask {
+            cancelTaskCallCount += 1
+            lastCancelledTaskID = params.taskId
+            return A2ATask(
+                id: params.taskId,
+                contextId: UUID().uuidString,
+                status: TaskStatus(
+                    state: .canceled,
+                    timestamp: ISO8601DateFormatter().string(from: Date())
+                )
+            )
+        }
+
+        func getTask(params: TaskQueryParams) async throws -> A2ATask {
+            A2ATask(
+                id: params.taskId,
+                contextId: UUID().uuidString,
+                status: TaskStatus(
+                    state: .working,
+                    timestamp: ISO8601DateFormatter().string(from: Date())
+                )
+            )
         }
     }
     
@@ -1194,6 +1265,495 @@ struct A2AManagerTests {
         
         #expect(reconstructedImage.name == image.name)
         #expect(reconstructedImage.imageData == image.imageData)
+    }
+
+    // MARK: - streamAgentCall() Tests
+
+    /// Collects all events from a delegate stream into an array.
+    private func collectEvents(from stream: AsyncStream<A2ADelegateStreamEvent>) async -> [A2ADelegateStreamEvent] {
+        var events: [A2ADelegateStreamEvent] = []
+        for await event in stream {
+            events.append(event)
+        }
+        return events
+    }
+
+    @Test("streamAgentCall emits expected event sequence for task streaming lifecycle")
+    func testStreamAgentCallEventSequence() async throws {
+        let taskId = UUID().uuidString
+        let contextId = UUID().uuidString
+        let agentName = "StreamAgent"
+
+        let task = A2ATask(
+            id: taskId,
+            contextId: contextId,
+            status: TaskStatus(
+                state: .working,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            ),
+            artifacts: nil
+        )
+
+        let artifactUpdate = TaskArtifactUpdateEvent(
+            taskId: taskId,
+            contextId: contextId,
+            artifact: Artifact(
+                artifactId: UUID().uuidString,
+                parts: [.text(text: "Partial ")]
+            ),
+            append: true,
+            lastChunk: false
+        )
+
+        let statusUpdate = TaskStatusUpdateEvent(
+            taskId: taskId,
+            contextId: contextId,
+            status: TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            ),
+            final: true
+        )
+
+        let manager = A2AManager()
+        let card = createMockAgentCard(name: agentName)
+        let mock = MockA2AStreamClient(agentCard: card, events: [
+            wrap(.task(task)),
+            wrap(.taskArtifactUpdate(artifactUpdate)),
+            wrap(.taskStatusUpdate(statusUpdate))
+        ])
+        try await manager.initialize(clients: [mock])
+
+        let invocationID = UUID().uuidString
+        let toolCall = createToolCall(name: agentName, instructions: "Stream task", id: "tool-call-1")
+        let (handle, events) = try await manager.streamAgentCall(toolCall, invocationID: invocationID)
+        let collected = await collectEvents(from: events)
+
+        #expect(handle.invocationID == invocationID)
+        #expect(handle.toolCallID == "tool-call-1")
+        #expect(handle.agentName == agentName)
+
+        #expect(collected.count >= 5)
+
+        if case .connecting(let name) = collected[0] {
+            #expect(name == agentName)
+        } else {
+            Issue.record("Expected connecting as first event")
+        }
+
+        if case .taskStarted(let id, let ctx) = collected[1] {
+            #expect(id == taskId)
+            #expect(ctx == contextId)
+        } else {
+            Issue.record("Expected taskStarted as second event")
+        }
+
+        if case .artifactChunk(let id, let text, let append, let lastChunk) = collected[2] {
+            #expect(id == taskId)
+            #expect(text == "Partial ")
+            #expect(append == true)
+            #expect(lastChunk == false)
+        } else {
+            Issue.record("Expected artifactChunk as third event")
+        }
+
+        if case .statusUpdate(let id, let state, let final) = collected[3] {
+            #expect(id == taskId)
+            #expect(state == .completed)
+            #expect(final == true)
+        } else {
+            Issue.record("Expected statusUpdate as fourth event")
+        }
+
+        let terminalEvents = collected.filter {
+            if case .completed = $0 { return true }
+            if case .failed = $0 { return true }
+            return false
+        }
+        #expect(terminalEvents.count == 1)
+        if case .completed(let completion) = terminalEvents[0] {
+            #expect(completion.taskID == taskId)
+            #expect(completion.contextID == contextId)
+        } else {
+            Issue.record("Expected completed as terminal event")
+        }
+    }
+
+    @Test("streamAgentCall emits failed terminal event on task failure")
+    func testStreamAgentCallTerminalFailure() async throws {
+        let taskId = UUID().uuidString
+        let contextId = UUID().uuidString
+        let agentName = "FailAgent"
+
+        let statusUpdate = TaskStatusUpdateEvent(
+            taskId: taskId,
+            contextId: contextId,
+            status: TaskStatus(
+                state: .failed,
+                message: A2AMessage(role: "agent", parts: [.text(text: "Something went wrong")], messageId: UUID().uuidString),
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            ),
+            final: true
+        )
+
+        let manager = A2AManager()
+        let card = createMockAgentCard(name: agentName)
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskStatusUpdate(statusUpdate))])
+        try await manager.initialize(clients: [mock])
+
+        let toolCall = createToolCall(name: agentName, instructions: "Fail", id: UUID().uuidString)
+        let (_, events) = try await manager.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+        let collected = await collectEvents(from: events)
+
+        let terminalEvents = collected.filter {
+            if case .completed = $0 { return true }
+            if case .failed = $0 { return true }
+            return false
+        }
+        #expect(terminalEvents.count == 1)
+        if case .failed(let failure) = terminalEvents[0] {
+            #expect(failure.error == "Something went wrong")
+            #expect(failure.taskID == taskId)
+        } else {
+            Issue.record("Expected failed as terminal event")
+        }
+    }
+
+    @Test("streamAgentCall throws agentNotFound for unknown agent")
+    func testStreamAgentCallThrowsAgentNotFound() async throws {
+        let manager = A2AManager()
+        try await manager.initialize(clients: [])
+
+        let toolCall = createToolCall(name: "MissingAgent", instructions: "Do work", id: UUID().uuidString)
+
+        await #expect(throws: A2AManagerError.agentNotFound("MissingAgent")) {
+            _ = try await manager.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+        }
+    }
+
+    @Test("streamAgentCall throws invalidArguments for bad tool call args")
+    func testStreamAgentCallThrowsInvalidArguments() async throws {
+        let manager = A2AManager()
+        let card = createMockAgentCard(name: "ValidAgent")
+        let mock = MockA2AStreamClient(agentCard: card, events: [])
+        try await manager.initialize(clients: [mock])
+
+        let toolCall = ToolCall(
+            name: "ValidAgent",
+            arguments: .object([:]),
+            id: UUID().uuidString
+        )
+
+        await #expect(throws: A2AManagerError.invalidArguments) {
+            _ = try await manager.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+        }
+    }
+
+    @Test("agentCall and streamAgentCall produce equivalent responses for multi-chunk artifact stream")
+    func testAgentCallMatchesStreamAgentCallForMultiChunkArtifacts() async throws {
+        let taskId = UUID().uuidString
+        let contextId = UUID().uuidString
+        let agentName = "ChunkAgent"
+
+        let events: [SendStreamingMessageSuccessResponse<MessageResult>] = [
+            wrap(.taskArtifactUpdate(TaskArtifactUpdateEvent(
+                taskId: taskId,
+                contextId: contextId,
+                artifact: Artifact(artifactId: UUID().uuidString, parts: [.text(text: "First ")]),
+                append: false,
+                lastChunk: false
+            ))),
+            wrap(.taskArtifactUpdate(TaskArtifactUpdateEvent(
+                taskId: taskId,
+                contextId: contextId,
+                artifact: Artifact(artifactId: UUID().uuidString, parts: [.text(text: "second ")]),
+                append: true,
+                lastChunk: false
+            ))),
+            wrap(.taskArtifactUpdate(TaskArtifactUpdateEvent(
+                taskId: taskId,
+                contextId: contextId,
+                artifact: Artifact(artifactId: UUID().uuidString, parts: [.text(text: "third")]),
+                append: true,
+                lastChunk: true
+            )))
+        ]
+
+        let managerDirect = A2AManager()
+        let managerStream = A2AManager()
+        let card = createMockAgentCard(name: agentName)
+        try await managerDirect.initialize(clients: [MockA2AStreamClient(agentCard: card, events: events)])
+        try await managerStream.initialize(clients: [MockA2AStreamClient(agentCard: card, events: events)])
+
+        let toolCall = createToolCall(name: agentName, instructions: "Chunk", id: UUID().uuidString)
+
+        let directResponses = try await managerDirect.agentCall(toolCall)
+        let (_, stream) = try await managerStream.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+        var streamResponses: [LLMResponse] = []
+        for await event in stream {
+            if case .messageChunk(let text, let images, let files) = event {
+                var entries: [String: JSON] = [:]
+                if !images.isEmpty {
+                    entries["images"] = .array(images.map { $0.toEasyJSON(includeImageData: true, includeThumbData: false) })
+                }
+                if !files.isEmpty {
+                    entries["files"] = .array(files.map { $0.toJSON() })
+                }
+                let metadata: LLMMetadata? = entries.isEmpty ? nil : LLMMetadata(modelMetadata: .object(entries))
+                streamResponses.append(LLMResponse.complete(content: text, metadata: metadata))
+            }
+        }
+
+        #expect(directResponses?[0].content == streamResponses[0].content)
+        #expect(directResponses?[0].content == "First second third")
+    }
+
+    // MARK: - cancelAgentCall() Tests
+
+    private func makeHangingTask(taskID: String) -> A2ATask {
+        A2ATask(
+            id: taskID,
+            contextId: UUID().uuidString,
+            status: TaskStatus(
+                state: .working,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            ),
+            artifacts: nil
+        )
+    }
+
+    private func setupCancellableManager(
+        agentName: String,
+        taskID: String
+    ) async throws -> (A2AManager, MockCancellableA2AStreamClient) {
+        let manager = A2AManager()
+        let card = createMockAgentCard(name: agentName)
+        let mock = MockCancellableA2AStreamClient(
+            agentCard: card,
+            initialEvents: [wrap(.task(makeHangingTask(taskID: taskID)))]
+        )
+        try await manager.initialize(clients: [mock])
+        return (manager, mock)
+    }
+
+    @Test("cancelAgentCall by invocationID cancels stream and remote task")
+    func testCancelAgentCallByInvocationID() async throws {
+        let taskID = "task-cancel-invocation"
+        let agentName = "CancelAgent"
+        let invocationID = "inv-cancel-1"
+        let toolCallID = "tool-cancel-1"
+
+        let (manager, mock) = try await setupCancellableManager(agentName: agentName, taskID: taskID)
+        let toolCall = createToolCall(name: agentName, instructions: "Hang", id: toolCallID)
+        let (_, events) = try await manager.streamAgentCall(toolCall, invocationID: invocationID)
+
+        let collectTask = Task { await collectEvents(from: events) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        let cancelled = await manager.cancelAgentCall(invocationID: invocationID)
+        #expect(cancelled == true)
+
+        let collected = await collectTask.value
+        let terminalEvents = collected.filter {
+            if case .completed = $0 { return true }
+            if case .failed = $0 { return true }
+            return false
+        }
+        #expect(terminalEvents.count == 1)
+        if case .failed(let failure) = terminalEvents[0] {
+            #expect(failure.error == "Cancelled")
+            #expect(failure.taskID == taskID)
+        } else {
+            Issue.record("Expected failed terminal event after cancellation")
+        }
+
+        #expect(await mock.cancelTaskCallCount == 1)
+        #expect(await mock.lastCancelledTaskID == taskID)
+        #expect(await manager.cancelAgentCall(invocationID: invocationID) == false)
+    }
+
+    @Test("cancelAgentCall by toolCallID cancels in-flight stream")
+    func testCancelAgentCallByToolCallID() async throws {
+        let taskID = "task-cancel-tool-call"
+        let agentName = "CancelByToolCallAgent"
+        let toolCallID = "tool-cancel-by-id"
+
+        let (manager, mock) = try await setupCancellableManager(agentName: agentName, taskID: taskID)
+        let toolCall = createToolCall(name: agentName, instructions: "Hang", id: toolCallID)
+        let (_, events) = try await manager.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+
+        let collectTask = Task { await collectEvents(from: events) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await manager.cancelAgentCall(toolCallID: toolCallID) == true)
+        _ = await collectTask.value
+        #expect(await mock.cancelTaskCallCount == 1)
+    }
+
+    @Test("cancelAgentCall by taskID cancels in-flight stream")
+    func testCancelAgentCallByTaskID() async throws {
+        let taskID = "task-cancel-by-task-id"
+        let agentName = "CancelByTaskIDAgent"
+        let toolCallID = "tool-cancel-task-id"
+
+        let (manager, mock) = try await setupCancellableManager(agentName: agentName, taskID: taskID)
+        let toolCall = createToolCall(name: agentName, instructions: "Hang", id: toolCallID)
+        let (_, events) = try await manager.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+
+        let collectTask = Task { await collectEvents(from: events) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await manager.cancelAgentCall(taskID: taskID) == true)
+        _ = await collectTask.value
+        #expect(await mock.cancelTaskCallCount == 1)
+    }
+
+    @Test("cancelPendingHandle forwards to cancelAgentCall")
+    func testCancelPendingHandleAlias() async throws {
+        let taskID = "task-cancel-alias"
+        let agentName = "CancelAliasAgent"
+        let toolCallID = "tool-cancel-alias"
+
+        let (manager, mock) = try await setupCancellableManager(agentName: agentName, taskID: taskID)
+        let toolCall = createToolCall(name: agentName, instructions: "Hang", id: toolCallID)
+        let (_, events) = try await manager.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+
+        let collectTask = Task { await collectEvents(from: events) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await manager.cancelPendingHandle(toolCallID) == true)
+        _ = await collectTask.value
+        #expect(await mock.cancelTaskCallCount == 1)
+    }
+
+    @Test("cancelAgentCall returns false for unknown invocation")
+    func testCancelAgentCallUnknownID() async throws {
+        let manager = A2AManager()
+        try await manager.initialize(clients: [])
+        #expect(await manager.cancelAgentCall(invocationID: "missing") == false)
+    }
+
+    @Test("in-flight registry deregisters after terminal stream event")
+    func testInFlightDeregistersAfterTerminalEvent() async throws {
+        let taskID = UUID().uuidString
+        let contextID = UUID().uuidString
+        let agentName = "CompleteAgent"
+
+        let statusUpdate = TaskStatusUpdateEvent(
+            taskId: taskID,
+            contextId: contextID,
+            status: TaskStatus(
+                state: .completed,
+                timestamp: ISO8601DateFormatter().string(from: Date())
+            ),
+            final: true
+        )
+
+        let manager = A2AManager()
+        let card = createMockAgentCard(name: agentName)
+        let mock = MockA2AStreamClient(agentCard: card, events: [wrap(.taskStatusUpdate(statusUpdate))])
+        try await manager.initialize(clients: [mock])
+
+        let toolCall = createToolCall(name: agentName, instructions: "Complete", id: "complete-tool-call")
+        let (_, events) = try await manager.streamAgentCall(toolCall, invocationID: "complete-invocation")
+        _ = await collectEvents(from: events)
+
+        #expect(await manager.cancelAgentCall(invocationID: "complete-invocation") == false)
+        #expect(await manager.cancelAgentCall(toolCallID: "complete-tool-call") == false)
+    }
+
+    @Test("cancelAgentCall cancels local stream only when client lacks A2ATaskLifecycleClient")
+    func testCancelAgentCallLocalOnlyWithoutLifecycleClient() async throws {
+        let taskID = "task-local-only-cancel"
+        let agentName = "StreamOnlyCancelAgent"
+        let toolCallID = "tool-local-only-cancel"
+
+        let manager = A2AManager()
+        let card = createMockAgentCard(name: agentName)
+        let mock = MockA2AStreamClient(
+            agentCard: card,
+            events: [wrap(.task(makeHangingTask(taskID: taskID)))],
+            hangsAfterEvents: true
+        )
+        try await manager.initialize(clients: [mock])
+
+        let toolCall = createToolCall(name: agentName, instructions: "Hang", id: toolCallID)
+        let (_, events) = try await manager.streamAgentCall(toolCall, invocationID: UUID().uuidString)
+
+        let collectTask = Task { await collectEvents(from: events) }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(await manager.cancelAgentCall(toolCallID: toolCallID) == true)
+
+        let collected = await collectTask.value
+        let terminalEvents = collected.filter {
+            if case .completed = $0 { return true }
+            if case .failed = $0 { return true }
+            return false
+        }
+        #expect(terminalEvents.count == 1)
+        if case .failed(let failure) = terminalEvents[0] {
+            #expect(failure.error == "Cancelled")
+        } else {
+            Issue.record("Expected failed terminal event after local-only cancellation")
+        }
+    }
+
+    // MARK: - Client lookup tests
+
+    @Test("client(forAgentNamed:) returns matching client")
+    func testClientForAgentNamedReturnsMatchingClient() async throws {
+        let manager = A2AManager()
+        let cardA = createMockAgentCard(name: "AgentA")
+        let cardB = createMockAgentCard(name: "AgentB")
+        let clientA = MockA2AStreamClient(agentCard: cardA, events: [])
+        let clientB = MockA2AStreamClient(agentCard: cardB, events: [])
+        try await manager.initialize(clients: [clientA, clientB])
+
+        let resolvedA = await manager.client(forAgentNamed: "AgentA")
+        let resolvedB = await manager.client(forAgentNamed: "AgentB")
+
+        #expect(resolvedA != nil)
+        #expect(resolvedB != nil)
+        #expect(await resolvedA?.agentCard?.name == "AgentA")
+        #expect(await resolvedB?.agentCard?.name == "AgentB")
+    }
+
+    @Test("agentCard(forAgentNamed:) returns matching card")
+    func testAgentCardForAgentNamedReturnsMatchingCard() async throws {
+        let manager = A2AManager()
+        let cardA = createMockAgentCard(name: "AgentA")
+        let cardB = createMockAgentCard(name: "AgentB")
+        try await manager.initialize(clients: [
+            MockA2AStreamClient(agentCard: cardA, events: []),
+            MockA2AStreamClient(agentCard: cardB, events: [])
+        ])
+
+        #expect(await manager.agentCard(forAgentNamed: "AgentA")?.name == "AgentA")
+        #expect(await manager.agentCard(forAgentNamed: "AgentB")?.name == "AgentB")
+    }
+
+    @Test("client(forAgentNamed:) returns nil for unknown name")
+    func testClientForAgentNamedReturnsNilForUnknownName() async throws {
+        let manager = A2AManager()
+        try await manager.initialize(clients: [
+            MockA2AStreamClient(agentCard: createMockAgentCard(name: "AgentA"), events: [])
+        ])
+
+        #expect(await manager.client(forAgentNamed: "Missing") == nil)
+        #expect(await manager.agentCard(forAgentNamed: "Missing") == nil)
+    }
+
+    @Test("client(forAgentNamed:) is case-sensitive")
+    func testClientForAgentNamedIsCaseSensitive() async throws {
+        let manager = A2AManager()
+        try await manager.initialize(clients: [
+            MockA2AStreamClient(agentCard: createMockAgentCard(name: "AgentA"), events: [])
+        ])
+
+        #expect(await manager.client(forAgentNamed: "AgentA") != nil)
+        #expect(await manager.client(forAgentNamed: "agenta") == nil)
+        #expect(await manager.agentCard(forAgentNamed: "agenta") == nil)
     }
 }
 

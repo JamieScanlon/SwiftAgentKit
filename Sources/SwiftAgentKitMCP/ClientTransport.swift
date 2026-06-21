@@ -16,9 +16,17 @@ actor ClientTransport: Transport {
     nonisolated let logger: Logging.Logger
     private let chunker: MessageChunker
     
-    init(inPipe: Pipe, outPipe: Pipe, logger: Logging.Logger? = nil) {
+    private let messageFilter: JSONRPCMessageFilter
+    
+    init(
+        inPipe: Pipe,
+        outPipe: Pipe,
+        messageFilter: JSONRPCMessageFilter = JSONRPCMessageFilter(),
+        logger: Logging.Logger? = nil
+    ) {
         self.inPipe = inPipe
         self.outPipe = outPipe
+        self.messageFilter = messageFilter
         let resolvedLogger = logger ?? SwiftAgentKitLogging.logger(
             for: .mcp("ClientTransport")
         )
@@ -134,7 +142,7 @@ actor ClientTransport: Transport {
             guard !trimmedLine.isEmpty else { continue }
             
             // First check if this is a valid JSON-RPC message (non-chunked)
-            if isValidJSONRPCMessage(trimmedLine) {
+            if JSONRPCMessageValidator.isValidLine(trimmedLine) {
                 // This is a complete JSON-RPC message, yield it directly
                 let messageWithNewline = trimmedLine + "\n"
                 if let messageData = messageWithNewline.data(using: .utf8) {
@@ -160,7 +168,7 @@ actor ClientTransport: Transport {
                             let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !trimmed.isEmpty else { continue }
                             
-                            if isValidJSONRPCMessage(trimmed) {
+                            if JSONRPCMessageValidator.isValidLine(trimmed) {
                                 validMessages.append(trimmed)
                             } else {
                                 logger.debug("Filtered from reassembled message: \(trimmed)")
@@ -170,9 +178,10 @@ actor ClientTransport: Transport {
                         // Yield valid messages if any
                         if !validMessages.isEmpty {
                             let filteredMessage = validMessages.joined(separator: "\n") + "\n"
-                            if let filteredData = filteredMessage.data(using: .utf8) {
+                            if let filteredData = filteredMessage.data(using: .utf8),
+                               let filtered = messageFilter.filterMessage(filteredData) {
                                 logger.debug("Yielding reassembled message: \(validMessages.count) line(s)")
-                                messageContinuation.yield(filteredData)
+                                messageContinuation.yield(filtered)
                             }
                         }
                     }
@@ -199,29 +208,4 @@ actor ClientTransport: Transport {
         }
         return true
     }
-    
-    /// Validates if a string is a valid JSON-RPC message
-    /// - Parameter message: The message string to validate
-    /// - Returns: True if the message is valid JSON-RPC, false otherwise
-    nonisolated private func isValidJSONRPCMessage(_ message: String) -> Bool {
-        // First, check if it's valid JSON
-        guard let data = message.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
-        }
-        
-        // Check for required JSON-RPC fields
-        guard let jsonrpc = json["jsonrpc"] as? String,
-              jsonrpc == "2.0" else {
-            return false
-        }
-        
-        // Check if it has either method (request) or result/error (response)
-        let hasMethod = json["method"] != nil
-        let hasResult = json["result"] != nil
-        let hasError = json["error"] != nil
-        
-        // Must have either method (for requests) or result/error (for responses)
-        return hasMethod || hasResult || hasError
-    }
-} 
+}

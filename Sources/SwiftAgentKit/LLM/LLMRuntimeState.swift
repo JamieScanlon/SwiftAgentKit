@@ -178,6 +178,10 @@ public struct StatefulLLM: LLMProtocol, LLMRuntimeStateControllable {
         baseLLM.getCapabilities()
     }
 
+    public func getRequestFeatures() -> ModelRequestFeatures {
+        baseLLM.getRequestFeatures()
+    }
+
     public func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
         let hub = effectiveRequestHub()
         let rid = effectiveRequestID()

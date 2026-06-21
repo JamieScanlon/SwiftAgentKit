@@ -68,6 +68,9 @@ public actor MCPManager {
     public private(set) var ingestionDiagnostics: [ToolIngestionDiagnostic] = []
     public private(set) var clients: [MCPClient] = []
 
+    /// Local stdio server boot descriptors from the last config-file initialization.
+    public private(set) var serverBootCalls: [MCPConfig.ServerBootCall] = []
+
     /// When the manager was initialized from a config file that set ``MCPConfig/toolCallTimeout``, that value is stored here. Otherwise `nil` (call sites fall back to the orchestrator’s default tool-call timeout).
     public private(set) var toolCallTimeout: TimeInterval? = nil
 
@@ -90,9 +93,15 @@ public actor MCPManager {
     public func initialize(clients: [MCPClient]) async throws {
         toolCallTimeout = nil
         self.clients = clients
+        serverBootCalls = []
         localServerProcesses = [:]
         await buildToolsJson()
         state = .initialized
+    }
+
+    /// Returns local stdio MCP server boot descriptors from config-file initialization.
+    public func localServerBootCalls() -> [MCPConfig.ServerBootCall] {
+        serverBootCalls
     }
 
     /// Disconnects MCP clients and terminates locally spawned MCP server subprocesses. Call this from app shutdown (e.g. `NSApplication.willTerminate`); it does not run when the process is killed with `SIGKILL`.
@@ -216,6 +225,7 @@ public actor MCPManager {
     
     private func createClients(_ config: MCPConfig) async throws {
         toolCallTimeout = config.toolCallTimeout
+        serverBootCalls = config.serverBootCalls
         var failedServers: [String] = []
         
         // Create clients for local servers (stdio)

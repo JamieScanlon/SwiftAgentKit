@@ -513,42 +513,6 @@ public struct TaskPushNotificationConfig: Codable, Sendable {
 
 // MARK: Errors
 
-// JSON-RPC Error Structures
-public struct JSONRPCError: Codable, Sendable {
-    public let code: Int
-    public let message: String
-
-    public init(code: Int, message: String) {
-        self.code = code
-        self.message = message
-    }
-}
-
-public struct JSONRPCErrorResponse: Codable, Sendable {
-    public let jsonrpc: String
-    public let id: Int
-    public let error: JSONRPCError
-
-    public init(jsonrpc: String, id: Int, error: JSONRPCError) {
-        self.jsonrpc = jsonrpc
-        self.id = id
-        self.error = error
-    }
-}
-
-/// JSON-RPC 2.0 request envelope used to carry params and id for RPC calls
-public struct JSONRPCRequest<T: Codable & Sendable>: Codable, Sendable {
-    public let jsonrpc: String
-    public let id: Int
-    public let params: T
-
-    public init(jsonrpc: String = "2.0", id: Int, params: T) {
-        self.jsonrpc = jsonrpc
-        self.id = id
-        self.params = params
-    }
-}
-
 public enum ErrorCode: Int {
     // Standard JSON-RPC Errors
     /// Server received JSON that was not well-formed.
