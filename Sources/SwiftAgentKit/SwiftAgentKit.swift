@@ -3,4 +3,4 @@ import Foundation
 /// SwiftAgentKit - A comprehensive toolkit for building local AI agents in Swift
 
 /// Get the version of SwiftAgentKit
-public let swiftAgentKitVersion = "0.16.0" 
+public let swiftAgentKitVersion = "0.17.0" 

@@ -19,6 +19,7 @@ import SwiftAgentKitMCP
         #expect(manager != nil)
     }
     
+    #if os(macOS) || os(Linux) || os(Windows)
     @Test("MCPServerManager can boot a server with valid configuration")
     func testBootServer() async throws {
         let manager = MCPServerManager()
@@ -147,6 +148,7 @@ import SwiftAgentKitMCP
         #expect(outPipe != nil)
         Shell.terminateProcess(process)
     }
+    #endif
 }
 
 @Suite struct MCPManagerTests {
@@ -172,6 +174,7 @@ import SwiftAgentKitMCP
         await manager.shutdown()
     }
 
+    #if os(macOS) || os(Linux) || os(Windows)
     @Test("Shell.terminateProcess stops a long-running subprocess")
     func testTerminateProcessStopsSleep() async throws {
         let launched = Shell.launchSubprocess(command: "sleep", arguments: ["60"], environment: [:], useShell: false)
@@ -179,4 +182,39 @@ import SwiftAgentKitMCP
         Shell.terminateProcess(launched.process)
         #expect(!launched.process.isRunning)
     }
+    #endif
+
+    #if !(os(macOS) || os(Linux) || os(Windows))
+    @Test("MCPManager skips local stdio servers on platforms without subprocess support")
+    func testSkipsLocalStdioServers() async throws {
+        #expect(SubprocessAvailability.isSupported == false)
+
+        let configJSON = """
+        {
+            "mcpServers": {
+                "local-echo": {
+                    "command": "echo",
+                    "args": ["hello"]
+                }
+            }
+        }
+        """
+        let tempURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-config-\(UUID().uuidString).json")
+        try configJSON.write(to: tempURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let manager = MCPManager()
+        try await manager.initialize(configFileURL: tempURL)
+
+        let clients = await manager.clients
+        let state = await manager.state
+        #expect(clients.isEmpty)
+        if case .initialized = state {
+            // Remote init path completed even though the local stdio server was skipped.
+        } else {
+            #expect(Bool(false), "Expected MCPManager to reach .initialized state")
+        }
+    }
+    #endif
 } 

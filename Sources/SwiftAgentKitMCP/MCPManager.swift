@@ -75,7 +75,9 @@ public actor MCPManager {
     public private(set) var toolCallTimeout: TimeInterval? = nil
 
     /// Subprocess handles for locally booted stdio MCP servers (used by ``shutdown()``).
+    #if os(macOS) || os(Linux) || os(Windows)
     private var localServerProcesses: [String: Process] = [:]
+    #endif
     
     /// Initialize the MCPManager with a config file URL
     public func initialize(configFileURL: URL) async throws {
@@ -94,7 +96,9 @@ public actor MCPManager {
         toolCallTimeout = nil
         self.clients = clients
         serverBootCalls = []
+        #if os(macOS) || os(Linux) || os(Windows)
         localServerProcesses = [:]
+        #endif
         await buildToolsJson()
         state = .initialized
     }
@@ -106,15 +110,19 @@ public actor MCPManager {
 
     /// Disconnects MCP clients and terminates locally spawned MCP server subprocesses. Call this from app shutdown (e.g. `NSApplication.willTerminate`); it does not run when the process is killed with `SIGKILL`.
     public func shutdown() async {
+        #if os(macOS) || os(Linux) || os(Windows)
         let processes = localServerProcesses
         localServerProcesses.removeAll()
+        #endif
         for client in clients {
             await client.shutdown()
         }
         clients.removeAll()
+        #if os(macOS) || os(Linux) || os(Windows)
         for (_, process) in processes {
             Shell.terminateProcess(process)
         }
+        #endif
         toolCallsJson = []
         toolCallTimeout = nil
         state = .notReady
@@ -229,6 +237,7 @@ public actor MCPManager {
         var failedServers: [String] = []
         
         // Create clients for local servers (stdio)
+        #if os(macOS) || os(Linux) || os(Windows)
         if !config.serverBootCalls.isEmpty {
             let serverManager = MCPServerManager()
             let serverPipes = try await serverManager.bootServers(config: config)
@@ -267,6 +276,19 @@ public actor MCPManager {
                 }
             }
         }
+        #else
+        if !config.serverBootCalls.isEmpty {
+            let skipped = config.serverBootCalls.map(\.name)
+            logger.warning(
+                "Local MCP stdio servers are not supported on this platform; skipping",
+                metadata: SwiftAgentKitLogging.metadata(
+                    ("count", .stringConvertible(skipped.count)),
+                    ("servers", .string(skipped.joined(separator: ", ")))
+                )
+            )
+            failedServers.append(contentsOf: skipped)
+        }
+        #endif
         
         // Create clients for remote servers (HTTP/HTTPS).
         // Use the provided oauthHandler, or create a default so remote servers requiring

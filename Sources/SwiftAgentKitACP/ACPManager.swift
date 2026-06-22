@@ -103,7 +103,9 @@ public actor ACPManager {
     public private(set) var clients: [ACPClient] = []
 
     private var streamClients: [any ACPAgentStreamClient] = []
+    #if os(macOS) || os(Linux) || os(Windows)
     private var localProcesses: [String: Process] = [:]
+    #endif
     private var sessionMcpServersProvider: ACPSessionMcpServersProvider = { _ in [] }
 
     private struct InFlightRecord {
@@ -136,7 +138,9 @@ public actor ACPManager {
         }
         toolCallTimeout = nil
         streamClients = clients
+        #if os(macOS) || os(Linux) || os(Windows)
         localProcesses = [:]
+        #endif
         await buildToolsJson()
         state = .initialized
     }
@@ -477,10 +481,12 @@ public actor ACPManager {
         for client in streamClients {
             await client.shutdown()
         }
+        #if os(macOS) || os(Linux) || os(Windows)
         for (_, process) in localProcesses {
             Shell.terminateProcess(process)
         }
         localProcesses.removeAll()
+        #endif
         streamClients.removeAll()
         clients.removeAll()
         state = .notReady
@@ -752,6 +758,7 @@ public actor ACPManager {
                     }
                     _ = try await client.newSession(cwd: FileManager.default.currentDirectoryPath)
                 } else {
+                    #if os(macOS) || os(Linux) || os(Windows)
                     guard let command = bootCall.command else {
                         throw ACPClient.ACPClientError.bootFailed("Missing command or url for agent \(bootCall.name)")
                     }
@@ -766,6 +773,11 @@ public actor ACPManager {
                         staticMcpBootServers: config.mcpBootServers,
                         sessionMcpServersProvider: mcpProvider
                     )
+                    #else
+                    throw ACPClient.ACPClientError.bootFailed(
+                        "Local subprocess ACP agents are not supported on this platform; use a url-based (websocket/streamableHTTP) agent instead"
+                    )
+                    #endif
                 }
                 bootedClients.append(client)
             } catch {

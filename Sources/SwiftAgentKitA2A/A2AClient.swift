@@ -46,6 +46,7 @@ public actor A2AClient {
         
         var shouldWait = false
         if let bootCall {
+            #if os(macOS) || os(Linux) || os(Windows)
             shouldWait = true
             var environment = globalEnvironment.a2aEnvironment
             let bootCallEnvironment = bootCall.environment.a2aEnvironment
@@ -68,6 +69,12 @@ public actor A2AClient {
                     )
                 }
             }
+            #else
+            logger.warning(
+                "A2A local subprocess agents are not supported on this platform; attempting remote connection only",
+                metadata: SwiftAgentKitLogging.metadata(("command", .string(bootCall.command)))
+            )
+            #endif
         }
         
         // Configure RestAPIManager with extended timeout for long-running LLM responses
@@ -113,10 +120,12 @@ public actor A2AClient {
 
     /// Terminates the boot subprocess (if any) and clears the REST client. Call when tearing down the host (see ``SwiftAgentKitOrchestrator/shutdown()``).
     public func shutdown() async {
+        #if os(macOS) || os(Linux) || os(Windows)
         if let bootProcess {
             Shell.terminateProcess(bootProcess)
             self.bootProcess = nil
         }
+        #endif
         apiManager = nil
         agentCard = nil
     }
@@ -470,7 +479,9 @@ public actor A2AClient {
     private let server: A2AConfig.A2AConfigServer
     private var apiManager: RestAPIManager?
     private var bootCall: A2AConfig.ServerBootCall?
+    #if os(macOS) || os(Linux) || os(Windows)
     private var bootProcess: Process?
+    #endif
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var authHeaders: [String: String]? {
