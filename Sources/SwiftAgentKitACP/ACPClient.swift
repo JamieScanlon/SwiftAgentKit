@@ -58,7 +58,9 @@ public actor ACPClient {
     private let clientInfo: ACPImplementation
     private let clientCapabilities: ACPClientCapabilities
     private let logger: Logger
+    #if os(macOS) || os(Linux) || os(Windows)
     private var bootProcess: Process?
+    #endif
     private var sessionUpdateContinuation: AsyncStream<ACPSessionUpdate>.Continuation?
     private var sessionUpdateHandlerRegistered = false
     private var pendingAvailableCommandsBySessionId: [String: [ACPAvailableCommand]] = [:]
@@ -103,7 +105,13 @@ public actor ACPClient {
         )
     }
 
+    #if os(macOS) || os(Linux) || os(Windows)
     /// Boot an ACP agent subprocess, initialize, and create a default session.
+    ///
+    /// Only available on platforms where ``SwiftAgentKit/SubprocessAvailability/isSupported`` is `true`
+    /// (macOS, Linux, Windows). On platforms without the `Process` API (e.g. iOS, visionOS), use the
+    /// remote connection helpers (``connectWebSocket(name:url:delegate:clientCapabilities:additionalHeaders:toolCallTimeout:staticMcpBootServers:sessionMcpServersProvider:logger:)``
+    /// or ``connectStreamableHTTP(name:url:delegate:clientCapabilities:additionalHeaders:toolCallTimeout:staticMcpBootServers:sessionMcpServersProvider:logger:)``).
     public static func boot(
         name: String,
         command: String,
@@ -144,6 +152,7 @@ public actor ACPClient {
         _ = try await client.newSession(cwd: cwd ?? FileManager.default.currentDirectoryPath)
         return client
     }
+    #endif
 
     /// Connects to a remote ACP agent over WebSocket.
     public static func connectWebSocket(
@@ -207,9 +216,11 @@ public actor ACPClient {
         return client
     }
 
+    #if os(macOS) || os(Linux) || os(Windows)
     func setBootProcess(_ process: Process) {
         bootProcess = process
     }
+    #endif
 
     /// Replaces the client delegate used for agent → client RPCs (filesystem, permission, terminal).
     ///
@@ -547,10 +558,12 @@ public actor ACPClient {
         sessionUpdateContinuation?.finish()
         sessionUpdateContinuation = nil
         await connection.disconnect()
+        #if os(macOS) || os(Linux) || os(Windows)
         if let bootProcess {
             Shell.terminateProcess(bootProcess)
             self.bootProcess = nil
         }
+        #endif
         state = .disconnected
         sessionId = nil
         connectionId = nil
