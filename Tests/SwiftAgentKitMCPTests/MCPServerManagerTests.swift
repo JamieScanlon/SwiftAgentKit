@@ -19,6 +19,7 @@ import SwiftAgentKitMCP
         #expect(manager != nil)
     }
     
+    #if os(macOS) || os(Linux) || os(Windows)
     @Test("MCPServerManager can boot a server with valid configuration")
     func testBootServer() async throws {
         let manager = MCPServerManager()
@@ -147,6 +148,7 @@ import SwiftAgentKitMCP
         #expect(outPipe != nil)
         Shell.terminateProcess(process)
     }
+    #endif
 }
 
 @Suite struct MCPManagerTests {
@@ -172,6 +174,7 @@ import SwiftAgentKitMCP
         await manager.shutdown()
     }
 
+    #if os(macOS) || os(Linux) || os(Windows)
     @Test("Shell.terminateProcess stops a long-running subprocess")
     func testTerminateProcessStopsSleep() async throws {
         let launched = Shell.launchSubprocess(command: "sleep", arguments: ["60"], environment: [:], useShell: false)
@@ -179,4 +182,5 @@ import SwiftAgentKitMCP
         Shell.terminateProcess(launched.process)
         #expect(!launched.process.isRunning)
     }
+    #endif
 } 
