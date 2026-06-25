@@ -184,10 +184,25 @@ actor SSEParser {
             // Ignore other field types (retry:, etc.)
         }
         
+        // An SSE event carrying only `event:`/`id:` metadata (no `data:` payload) is
+        // spec-legal and is commonly used for terminal `event: error` signals. Preserve it
+        // so consumers can observe the error instead of seeing an empty stream.
+        let hasEventMetadata = eventType != nil || eventId != nil
+        
         // Join multiple data fields with newline (per SSE spec)
         guard !dataFields.isEmpty else {
-            logger?.debug("SSE message has no data fields")
-            return nil
+            guard hasEventMetadata else {
+                logger?.debug("SSE message has no data fields")
+                return nil
+            }
+            var result: [String: Sendable] = [:]
+            if let eventType = eventType {
+                result["_sse_event"] = eventType
+            }
+            if let eventId = eventId {
+                result["_sse_id"] = eventId
+            }
+            return result
         }
         
         let combinedData = dataFields.joined(separator: "\n")
@@ -199,7 +214,19 @@ actor SSEParser {
                 "Failed to parse SSE data as JSON",
                 metadata: ["data": .string(combinedData)]
             )
-            return nil
+            // When the unparseable payload carries event metadata, preserve the raw text so
+            // consumers can surface provider error messages (e.g. a non-JSON `event: error` body).
+            guard hasEventMetadata else {
+                return nil
+            }
+            var result: [String: Sendable] = ["_sse_raw_data": combinedData]
+            if let eventType = eventType {
+                result["_sse_event"] = eventType
+            }
+            if let eventId = eventId {
+                result["_sse_id"] = eventId
+            }
+            return result
         }
         
         // Add event type and id if present
@@ -400,10 +427,25 @@ actor SSEJSONParser {
             // Ignore other field types (retry:, etc.)
         }
         
+        // An SSE event carrying only `event:`/`id:` metadata (no `data:` payload) is
+        // spec-legal and is commonly used for terminal `event: error` signals. Preserve it
+        // so consumers can observe the error instead of seeing an empty stream.
+        let hasEventMetadata = eventType != nil || eventId != nil
+        
         // Join multiple data fields with newline (per SSE spec)
         guard !dataFields.isEmpty else {
-            logger?.debug("SSE message has no data fields")
-            return nil
+            guard hasEventMetadata else {
+                logger?.debug("SSE message has no data fields")
+                return nil
+            }
+            var dict: [String: JSON] = [:]
+            if let eventType = eventType {
+                dict["_sse_event"] = .string(eventType)
+            }
+            if let eventId = eventId {
+                dict["_sse_id"] = .string(eventId)
+            }
+            return .object(dict)
         }
         
         let combinedData = dataFields.joined(separator: "\n")
@@ -415,24 +457,33 @@ actor SSEJSONParser {
                 "Failed to parse SSE data as JSON",
                 metadata: ["data": .string(combinedData)]
             )
-            return nil
+            // When the unparseable payload carries event metadata, preserve the raw text so
+            // consumers can surface provider error messages (e.g. a non-JSON `event: error` body).
+            guard hasEventMetadata else {
+                return nil
+            }
+            var dict: [String: JSON] = ["_sse_raw_data": .string(combinedData)]
+            if let eventType = eventType {
+                dict["_sse_event"] = .string(eventType)
+            }
+            if let eventId = eventId {
+                dict["_sse_id"] = .string(eventId)
+            }
+            return .object(dict)
         }
         
         // Convert to EasyJSON.JSON
         let json = convertToJSON(jsonObject)
         
         // Add event type and id if present
-        if let eventType = eventType {
-            if case .object(var dict) = json {
+        if hasEventMetadata, case .object(var dict) = json {
+            if let eventType = eventType {
                 dict["_sse_event"] = .string(eventType)
-                return .object(dict)
             }
-        }
-        if let eventId = eventId {
-            if case .object(var dict) = json {
+            if let eventId = eventId {
                 dict["_sse_id"] = .string(eventId)
-                return .object(dict)
             }
+            return .object(dict)
         }
         
         return json
