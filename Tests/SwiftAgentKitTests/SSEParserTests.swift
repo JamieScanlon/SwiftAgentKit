@@ -216,7 +216,56 @@ struct SSEParserTests {
         
         let messages = await parser.appendChunk(sseData)
         
-        // Invalid JSON should be skipped
+        // Invalid JSON without event metadata should be skipped
+        #expect(messages.isEmpty)
+    }
+    
+    // MARK: - Terminal Error Event Handling
+    
+    @Test("Event without data is preserved")
+    func testEventWithoutData() async throws {
+        let parser = SSEParser()
+        // Spec-legal terminal error event carrying only `event:` (no `data:`)
+        let sseData = "event: error\n\n".data(using: .utf8)!
+        
+        let messages = await parser.appendChunk(sseData)
+        
+        #expect(messages.count == 1)
+        #expect(messages.first?["_sse_event"] as? String == "error")
+    }
+    
+    @Test("Event with non-JSON data preserves raw data")
+    func testEventWithNonJSONData() async throws {
+        let parser = SSEParser()
+        let sseData = "event: error\ndata: not-json\n\n".data(using: .utf8)!
+        
+        let messages = await parser.appendChunk(sseData)
+        
+        #expect(messages.count == 1)
+        #expect(messages.first?["_sse_event"] as? String == "error")
+        #expect(messages.first?["_sse_raw_data"] as? String == "not-json")
+    }
+    
+    @Test("Event with JSON data preserves event and decoded object")
+    func testEventWithJSONData() async throws {
+        let parser = SSEParser()
+        let sseData = "event: error\ndata: {\"error\":{\"message\":\"No user query found in messages.\"}}\n\n".data(using: .utf8)!
+        
+        let messages = await parser.appendChunk(sseData)
+        
+        #expect(messages.count == 1)
+        #expect(messages.first?["_sse_event"] as? String == "error")
+        let error = messages.first?["error"] as? [String: Any]
+        #expect(error?["message"] as? String == "No user query found in messages.")
+    }
+    
+    @Test("Non-JSON data without event metadata is still skipped")
+    func testNonJSONDataWithoutEventIsSkipped() async throws {
+        let parser = SSEParser()
+        let sseData = "data: not-json\n\n".data(using: .utf8)!
+        
+        let messages = await parser.appendChunk(sseData)
+        
         #expect(messages.isEmpty)
     }
     
@@ -409,6 +458,61 @@ struct SSEJSONParserTests {
             #expect(message == "test")
         } else {
             Issue.record("Failed to parse finalized message")
+        }
+    }
+    
+    // MARK: - Terminal Error Event Handling
+    
+    @Test("Event without data is preserved (JSON parser)")
+    func testEventWithoutData() async throws {
+        let parser = SSEJSONParser()
+        let sseData = "event: error\n\n".data(using: .utf8)!
+        
+        let messages = await parser.appendChunk(sseData)
+        
+        #expect(messages.count == 1)
+        if case .object(let dict) = messages[0],
+           case .string(let event) = dict["_sse_event"] {
+            #expect(event == "error")
+        } else {
+            Issue.record("Expected an object carrying _sse_event")
+        }
+    }
+    
+    @Test("Event with non-JSON data preserves raw data (JSON parser)")
+    func testEventWithNonJSONData() async throws {
+        let parser = SSEJSONParser()
+        let sseData = "event: error\ndata: not-json\n\n".data(using: .utf8)!
+        
+        let messages = await parser.appendChunk(sseData)
+        
+        #expect(messages.count == 1)
+        if case .object(let dict) = messages[0],
+           case .string(let event) = dict["_sse_event"],
+           case .string(let raw) = dict["_sse_raw_data"] {
+            #expect(event == "error")
+            #expect(raw == "not-json")
+        } else {
+            Issue.record("Expected an object carrying _sse_event and _sse_raw_data")
+        }
+    }
+    
+    @Test("Event with JSON data preserves event and decoded object (JSON parser)")
+    func testEventWithJSONData() async throws {
+        let parser = SSEJSONParser()
+        let sseData = "event: error\ndata: {\"error\":{\"message\":\"No user query found in messages.\"}}\n\n".data(using: .utf8)!
+        
+        let messages = await parser.appendChunk(sseData)
+        
+        #expect(messages.count == 1)
+        if case .object(let dict) = messages[0],
+           case .string(let event) = dict["_sse_event"],
+           case .object(let error) = dict["error"],
+           case .string(let message) = error["message"] {
+            #expect(event == "error")
+            #expect(message == "No user query found in messages.")
+        } else {
+            Issue.record("Expected an object carrying _sse_event and decoded error")
         }
     }
 }

@@ -10,6 +10,12 @@ final class SSEDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     private let logger: Logger
     private let endpoint: String
     private var session: URLSession? // Retain session to keep delegate alive
+    /// Serializes the unstructured work spawned by delegate callbacks. Delegate callbacks are
+    /// themselves serialized on the session's delegate queue, so mutating this is safe. Each new
+    /// task awaits the previous one, guaranteeing that every chunk parsed in `didReceive` is
+    /// yielded before `didCompleteWithError` finishes the stream (otherwise a terminal error
+    /// chunk in flight can be dropped by `continuation.finish()`).
+    private var pendingWork: Task<Void, Never>?
     
     init(continuation: AsyncStream<[String: Sendable]>.Continuation, logger: Logger, endpoint: String) {
         self.continuation = continuation
@@ -23,7 +29,9 @@ final class SSEDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     }
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        Task {
+        let previousWork = pendingWork
+        pendingWork = Task {
+            await previousWork?.value
             // Log raw data chunk at debug level
             logger.debug(
                 "SSE data chunk received",
@@ -93,7 +101,10 @@ final class SSEDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        Task {
+        let previousWork = pendingWork
+        pendingWork = Task {
+            // Wait for any in-flight delivery to finish so the final chunk is never dropped.
+            await previousWork?.value
             if let error = error {
                 logger.error(
                     "SSE request failed",
@@ -191,6 +202,12 @@ final class SSEJSONDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendab
     private let logger: Logger
     private let endpoint: String
     private var session: URLSession? // Retain session to keep delegate alive
+    /// Serializes the unstructured work spawned by delegate callbacks. Delegate callbacks are
+    /// themselves serialized on the session's delegate queue, so mutating this is safe. Each new
+    /// task awaits the previous one, guaranteeing that every chunk parsed in `didReceive` is
+    /// yielded before `didCompleteWithError` finishes the stream (otherwise a terminal error
+    /// chunk in flight can be dropped by `continuation.finish()`).
+    private var pendingWork: Task<Void, Never>?
     
     init(continuation: AsyncStream<JSON>.Continuation, logger: Logger, endpoint: String) {
         self.continuation = continuation
@@ -204,7 +221,9 @@ final class SSEJSONDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendab
     }
     
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
-        Task {
+        let previousWork = pendingWork
+        pendingWork = Task {
+            await previousWork?.value
             // Log raw data chunk at debug level
             logger.debug(
                 "SSE data chunk received",
@@ -260,7 +279,10 @@ final class SSEJSONDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendab
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        Task {
+        let previousWork = pendingWork
+        pendingWork = Task {
+            // Wait for any in-flight delivery to finish so the final chunk is never dropped.
+            await previousWork?.value
             if let error = error {
                 logger.error(
                     "SSE request failed",
@@ -389,6 +411,10 @@ public struct SSEClient: Sendable {
     private let baseURL: URL
     private let logger: Logger
     private let session: URLSession
+    /// Base configuration used as a template for the per-request delegate session. A new session
+    /// is created per request because the SSE delegate is per-request, but we preserve any custom
+    /// configuration from an injected session (e.g. `protocolClasses` for tests) by copying it here.
+    private let baseConfiguration: URLSessionConfiguration
     private let timeoutInterval: TimeInterval
     
     /// Initialize SSEClient with configurable timeout
@@ -414,12 +440,24 @@ public struct SSEClient: Sendable {
         // Create a session with configured timeouts for SSE streams if not provided
         if let session = session {
             self.session = session
+            // Preserve the injected session's configuration (incl. protocolClasses) as the
+            // template for per-request delegate sessions.
+            self.baseConfiguration = (session.configuration.copy() as? URLSessionConfiguration) ?? URLSessionConfiguration.default
         } else {
             let config = URLSessionConfiguration.default
             config.timeoutIntervalForRequest = timeoutInterval
             config.timeoutIntervalForResource = timeoutInterval
             self.session = URLSession(configuration: config)
+            self.baseConfiguration = config
         }
+    }
+    
+    /// Builds the per-request session configuration from the base template, applying SSE timeouts.
+    private func makeSessionConfiguration() -> URLSessionConfiguration {
+        let config = (baseConfiguration.copy() as? URLSessionConfiguration) ?? URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = timeoutInterval
+        config.timeoutIntervalForResource = timeoutInterval
+        return config
     }
     
     public init(baseURL: URL) {
@@ -506,9 +544,7 @@ public struct SSEClient: Sendable {
             request.timeoutInterval = self.timeoutInterval
             
             // Use streaming delegate for incremental SSE parsing
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = self.timeoutInterval
-            config.timeoutIntervalForResource = self.timeoutInterval
+            let config = self.makeSessionConfiguration()
             let delegate = SSEDelegate(continuation: continuation, logger: self.logger, endpoint: endpoint)
             // Create session with delegate (delegate retains session to keep it alive)
             let delegateSession = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)
@@ -607,9 +643,7 @@ public struct SSEClient: Sendable {
             request.timeoutInterval = self.timeoutInterval
             
             // Use streaming delegate for incremental SSE parsing
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = self.timeoutInterval
-            config.timeoutIntervalForResource = self.timeoutInterval
+            let config = self.makeSessionConfiguration()
             let delegate = SSEJSONDelegate(continuation: continuation, logger: self.logger, endpoint: endpoint)
             // Create session with delegate (delegate retains session to keep it alive)
             let delegateSession = URLSession(configuration: config, delegate: delegate, delegateQueue: nil)

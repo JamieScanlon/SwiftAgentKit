@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import EasyJSON
+import Logging
 @testable import SwiftAgentKit
 
 @Suite("SSEClient Tests")
@@ -592,5 +593,98 @@ struct SSEClientTests {
         #expect(events[1]["message"] as? String == "Something went wrong")
         #expect(events[1]["code"] as? Int == 500)
     }
+    
+    // MARK: - Delivery / Completion Ordering (race regression)
+    
+    @Test("Final error chunk is delivered before the stream finishes")
+    func testFinalChunkDeliveredBeforeFinish() async throws {
+        // Run repeatedly to stress the ordering between `didReceive` and `didCompleteWithError`.
+        // A provider that emits a terminal error event and then immediately closes the connection
+        // must not have that final chunk dropped by `continuation.finish()`.
+        let logger = Logger(label: "SSEClientTests")
+        let dummySession = URLSession.shared
+        let dummyTask = dummySession.dataTask(with: URL(string: "https://example.com")!)
+        let errorEvent = "event: error\ndata: {\"error\":{\"message\":\"boom\"}}\n\n".data(using: .utf8)!
+        
+        for _ in 0..<200 {
+            var continuation: AsyncStream<[String: Sendable]>.Continuation!
+            let stream = AsyncStream<[String: Sendable]> { continuation = $0 }
+            let delegate = SSEDelegate(continuation: continuation, logger: logger, endpoint: "test")
+            
+            // Deliver the error chunk, then immediately complete (the racy sequence).
+            delegate.urlSession(dummySession, dataTask: dummyTask, didReceive: errorEvent)
+            delegate.urlSession(dummySession, task: dummyTask, didCompleteWithError: nil)
+            
+            var chunks: [[String: Sendable]] = []
+            for await chunk in stream {
+                chunks.append(chunk)
+            }
+            
+            #expect(chunks.count == 1)
+            #expect(chunks.first?["_sse_event"] as? String == "error")
+        }
+    }
+    
+    // MARK: - End-to-End SSE Error Surfacing
+    
+    @Test("SSE error-only event reaches the consumer end-to-end")
+    func testSSEErrorEventEndToEnd() async throws {
+        MockSSEURLProtocol.statusCode = 200
+        MockSSEURLProtocol.responseBody = "event: error\ndata: {\"error\":{\"message\":\"Error rendering prompt with jinja template: \\\"No user query found in messages.\\\"\"}}\n\n".data(using: .utf8)!
+        
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [MockSSEURLProtocol.self]
+        let mockSession = URLSession(configuration: config)
+        
+        let client = SSEClient(
+            baseURL: URL(string: "https://mock.test")!,
+            session: mockSession,
+            timeoutInterval: 5,
+            logger: nil
+        )
+        
+        let stream = client.sseRequest(
+            "v1/chat/completions",
+            method: .post,
+            parameters: ["model": "test"]
+        )
+        
+        var chunks: [[String: Sendable]] = []
+        for await chunk in stream {
+            chunks.append(chunk)
+        }
+        
+        #expect(chunks.count >= 1)
+        #expect(chunks.first?["_sse_event"] as? String == "error")
+        let error = chunks.first?["error"] as? [String: Any]
+        #expect((error?["message"] as? String)?.contains("No user query found in messages.") == true)
+    }
+}
+
+/// Mock URLProtocol that returns a scripted SSE response body, then closes the connection.
+final class MockSSEURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var responseBody: Data = Data()
+    nonisolated(unsafe) static var statusCode: Int = 200
+    
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    
+    override func startLoading() {
+        guard let url = request.url else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badURL))
+            return
+        }
+        let response = HTTPURLResponse(
+            url: url,
+            statusCode: Self.statusCode,
+            httpVersion: "HTTP/1.1",
+            headerFields: ["Content-Type": "text/event-stream"]
+        )!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.responseBody)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    
+    override func stopLoading() {}
 }
 
