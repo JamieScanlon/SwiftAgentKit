@@ -155,7 +155,18 @@ func main() async {
 
         _ = Task {
             for await fragment in partialFragmentsStream {
-                logger.info("Received partial fragment: \(String(describing: fragment))")
+                switch fragment {
+                case .text(let text):
+                    logger.info("Received partial text: \(text)")
+                case .reasoning(let reasoning):
+                    logger.info("Received partial reasoning: \(reasoning)")
+                case .toolCall(let id, let name, let argumentsFragment):
+                    logger.info("Received partial toolCall delta id=\(id ?? "nil") name=\(name ?? "nil") fragment=\(argumentsFragment)")
+                case .toolCallStarted(let id, let name, let contentIndex):
+                    logger.info("Received toolCallStarted id=\(id ?? "nil") name=\(name ?? "nil") contentIndex=\(contentIndex.map(String.init) ?? "nil")")
+                case .toolCallCompleted(let id, let name, let arguments):
+                    logger.info("Received toolCallCompleted id=\(id ?? "nil") name=\(name ?? "nil") arguments=\(arguments)")
+                }
             }
         }
         
