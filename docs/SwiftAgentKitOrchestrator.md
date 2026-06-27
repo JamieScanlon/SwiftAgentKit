@@ -105,9 +105,16 @@ Finishes the async stream continuations for **`messageStream`**, **`partialConte
 |-----|---------|
 | **`messageStream`** | Complete `Message` values (user, assistant, tool) as the turn progresses |
 | **`partialContentStream`** | Incremental **assistant-visible text** chunks only while **`streamingEnabled`** is `true` (legacy path; reasoning and tool-call deltas are excluded) |
-| **`partialFragmentsStream`** | Discriminated streaming deltas (`PartialFragment`: text, reasoning, tool-call argument fragments) while **`streamingEnabled`** is `true` |
+| **`partialFragmentsStream`** | Discriminated streaming deltas (`PartialFragment`: text, reasoning, tool-call started / argument deltas / completed) while **`streamingEnabled`** is `true` |
 
-**Classification:** The orchestrator derives each `PartialFragment` from each streaming `LLMResponse` chunk: if ``LLMResponse/streamingFragment`` is `nil`, the chunk is treated as ``PartialFragment/text(_:)`` using ``LLMResponse/content`` (backward compatible). If your provider exposes reasoning or streaming tool metadata, set ``LLMResponse/streamingFragment`` on incomplete chunks at the point you build those responses (typically in your `LLMProtocol` implementation). Downstream servers can map cases directly to their wire format (for example text / reasoning / toolCall content deltas).
+**Classification:** The orchestrator derives each `PartialFragment` from each streaming `LLMResponse` chunk: if ``LLMResponse/streamingFragment`` is `nil`, the chunk is treated as ``PartialFragment/text(_:)`` using ``LLMResponse/content`` (backward compatible). If your provider exposes reasoning or streaming tool metadata, set ``LLMResponse/streamingFragment`` on incomplete chunks at the point you build those responses (typically in your `LLMProtocol` implementation).
+
+Tool calls have three fragment shapes on this stream:
+- ``PartialFragment/toolCallStarted(id:name:contentIndex:)`` — invocation announced (buffered / non-eager providers)
+- ``PartialFragment/toolCall(id:name:argumentsFragment:)`` — partial argument JSON fragments (eager providers; merge per `id`)
+- ``PartialFragment/toolCallCompleted(id:name:arguments:)`` — complete serialized arguments (JSON object string)
+
+Buffered providers should emit started → completed with no intermediate argument deltas. Eager providers may emit started → N × delta → optional completed. Downstream servers can map cases directly to their wire format (for example text / reasoning / toolCall content deltas).
 
 The partial streams are created together on first access to either; subscribe **before** calling `updateConversation` if you need to observe every event.
 

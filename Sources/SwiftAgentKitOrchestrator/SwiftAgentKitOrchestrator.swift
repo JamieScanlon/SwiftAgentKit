@@ -1998,6 +1998,22 @@ private extension SwiftAgentKitOrchestrator {
             if let id { meta["toolCallId"] = .string(id) }
             if let name { meta["toolName"] = .string(name) }
             return meta
+        case .toolCallStarted(let id, let name, let contentIndex):
+            var meta = SwiftAgentKitLogging.metadata(
+                ("partialKind", .string("toolCallStarted"))
+            )
+            if let id { meta["toolCallId"] = .string(id) }
+            if let name { meta["toolName"] = .string(name) }
+            if let contentIndex { meta["contentIndex"] = .stringConvertible(contentIndex) }
+            return meta
+        case .toolCallCompleted(let id, let name, let arguments):
+            var meta = SwiftAgentKitLogging.metadata(
+                ("partialKind", .string("toolCallCompleted")),
+                ("argumentsLength", .stringConvertible(arguments.count))
+            )
+            if let id { meta["toolCallId"] = .string(id) }
+            if let name { meta["toolName"] = .string(name) }
+            return meta
         }
     }
 

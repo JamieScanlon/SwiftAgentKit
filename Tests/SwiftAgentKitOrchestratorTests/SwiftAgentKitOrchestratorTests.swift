@@ -201,6 +201,34 @@ struct FragmentStreamingMockLLM: LLMProtocol {
     }
 }
 
+/// Yields buffered tool-call lifecycle fragments (started → completed) for partial-stream tests.
+struct ToolCallLifecycleStreamingMockLLM: LLMProtocol {
+    let logger: Logger
+
+    init(logger: Logger) {
+        self.logger = logger
+    }
+
+    func getModelName() -> String { "tool-lifecycle-mock" }
+
+    func getCapabilities() -> [LLMCapability] { [.completion] }
+
+    func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+        LLMResponse.complete(content: "")
+    }
+
+    func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                continuation.yield(.stream(LLMResponse.streamToolCallStarted(id: "call_1", name: "search", contentIndex: 2)))
+                continuation.yield(.stream(LLMResponse.streamToolCallCompleted(id: "call_1", name: "search", arguments: "{\"q\":\"x\"}")))
+                continuation.yield(.complete(LLMResponse.complete(content: "")))
+                continuation.finish()
+            }
+        }
+    }
+}
+
 struct SlowStreamingCancelMockLLM: LLMProtocol {
     let logger: Logger
     let sleepNanos: UInt64
@@ -1193,6 +1221,49 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
             .toolCall(id: "call_x", name: "todo", argumentsFragment: "{\"q\":")
         ])
         #expect(texts == ["Hello"])
+    }
+
+    @Test("partialFragmentsStream forwards toolCallStarted and toolCallCompleted; partialContentStream stays empty")
+    func testPartialFragmentsStreamToolCallLifecycle() async throws {
+        let logger = Logger(label: "ToolCallLifecycleStreamingMockLLM")
+        let llm = ToolCallLifecycleStreamingMockLLM(logger: logger)
+        let config = OrchestratorConfig(streamingEnabled: true)
+        let orchestrator = SwiftAgentKitOrchestrator(llm: llm, config: config)
+
+        let messageStream = await orchestrator.messageStream
+        let fragmentsStream = await orchestrator.partialFragmentsStream
+        let textStream = await orchestrator.partialContentStream
+
+        let collectFrags = Task { () -> [PartialFragment] in
+            var collected: [PartialFragment] = []
+            for await fragment in fragmentsStream {
+                collected.append(fragment)
+            }
+            return collected
+        }
+        let collectText = Task { () -> [String] in
+            var collected: [String] = []
+            for await text in textStream {
+                collected.append(text)
+            }
+            return collected
+        }
+
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Hi")],
+                availableTools: []
+            )
+        }
+
+        let frags = await collectFrags.value
+        let texts = await collectText.value
+
+        #expect(frags == [
+            .toolCallStarted(id: "call_1", name: "search", contentIndex: 2),
+            .toolCallCompleted(id: "call_1", name: "search", arguments: "{\"q\":\"x\"}")
+        ])
+        #expect(texts.isEmpty)
     }
     
     @Test("updateConversation preserves original message order")

@@ -157,6 +157,24 @@ public extension LLMResponse {
     static func streamChunk(_ content: String, streamingFragment: PartialFragment? = nil) -> LLMResponse {
         return LLMResponse(content: content, isComplete: false, streamingFragment: streamingFragment)
     }
+
+    /// Create a streaming chunk announcing a tool invocation before arguments are available.
+    static func streamToolCallStarted(id: String?, name: String?, contentIndex: Int? = nil) -> LLMResponse {
+        return LLMResponse(
+            content: "",
+            isComplete: false,
+            streamingFragment: .toolCallStarted(id: id, name: name, contentIndex: contentIndex)
+        )
+    }
+
+    /// Create a streaming chunk with complete serialized tool arguments (JSON object string).
+    static func streamToolCallCompleted(id: String?, name: String?, arguments: String) -> LLMResponse {
+        return LLMResponse(
+            content: "",
+            isComplete: false,
+            streamingFragment: .toolCallCompleted(id: id, name: name, arguments: arguments)
+        )
+    }
     
     /// Create a complete response with metadata
     static func complete(
