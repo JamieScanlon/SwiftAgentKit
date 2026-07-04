@@ -152,6 +152,7 @@ struct OAuthManualFlowTests {
         #expect(OAuthError.incorrectClientCredentials.localizedDescription.contains("client_id") || OAuthError.incorrectClientCredentials.localizedDescription.contains("client_secret"))
         #expect(OAuthError.invalidGrant.localizedDescription.contains("Invalid grant"))
         #expect(OAuthError.invalidConfiguration("x").localizedDescription.contains("x"))
+        #expect(OAuthError.stateMismatch.localizedDescription.contains("OAuth state mismatch"))
     }
 
     @Test("OAuthError networkError and tokenExchangeFailed include message")

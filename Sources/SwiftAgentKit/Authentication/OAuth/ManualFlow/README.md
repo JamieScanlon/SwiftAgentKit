@@ -6,7 +6,7 @@ When an OAuth provider requires the user to sign in in a browser (authorization 
 
 | Type | Role |
 |------|------|
-| **OAuthAuthenticator** | Runs the manual flow: builds auth URL from `OAuthManualFlowRequired`, opens it in the browser, runs callback server, exchanges code for tokens using `PKCEUtilities`. Optional callback receiver, token exchanger, and URL opener. |
+| **OAuthAuthenticator** | Runs the manual flow: builds auth URL from `OAuthManualFlowRequired` (PKCE + CSRF `state`), opens it in the browser, runs callback server, validates callback `state`, exchanges code for tokens using `PKCEUtilities`. Optional callback receiver, token exchanger, and URL opener. |
 | **OAuthCallbackReceiver** | Protocol for receiving the redirect (authorization code). |
 | **OAuthCallbackServer** | Local HTTP server that catches the OAuth redirect; conforms to `OAuthCallbackReceiver`. Uses the Network framework. |
 | **OAuthTokenExchanger** | Protocol for exchanging the code for tokens at the token endpoint. |
@@ -21,7 +21,7 @@ When an OAuth provider requires the user to sign in in a browser (authorization 
 ## Completing the flow
 
 1. Catch `OAuthManualFlowRequired` from your MCP (or other) client when it needs user login.
-2. Call `OAuthAuthenticator.completeManualOAuthFlow(oauthFlowError:clientId:clientSecret:)`. The authenticator uses `PKCEUtilities` for PKCE, opens the auth URL (e.g. in the default browser on macOS), runs the callback server, and exchanges the code for tokens.
+2. Call `OAuthAuthenticator.completeManualOAuthFlow(oauthFlowError:clientId:clientSecret:)`. The authenticator uses `PKCEUtilities` for PKCE, generates a cryptographically random `state` parameter for CSRF protection (RFC 6749 §10.12), opens the auth URL (e.g. in the default browser on macOS), runs the callback server, validates that the callback `state` matches, and exchanges the code for tokens.
 3. Build `OAuthTokenWithConfig` from the returned `OAuthToken` and your token endpoint/client id/secret/scope, then store it with your chosen `OAuthTokenStorage` (e.g. `RobustTokenStorage()`).
 4. Retry the connection so the client can use the stored token (e.g. by creating a provider from the stored config or injecting the token into the next request).
 
@@ -42,27 +42,45 @@ If you already run an HTTP server (e.g. Vapor on port 8080), you can add a route
    public final class ExternalServerOAuthCallbackReceiver: OAuthCallbackReceiver, @unchecked Sendable {
        private let lock = NSLock()
        private var continuation: CheckedContinuation<OAuthCallbackServer.CallbackResult, Error>?
+       private var waitGeneration: UInt64 = 0
 
        public init() {}
 
        public func waitForCallback(timeout: TimeInterval) async throws -> OAuthCallbackServer.CallbackResult {
            try await withCheckedThrowingContinuation { continuation in
-               lock.lock()
-               self.continuation = continuation
-               lock.unlock()
+               let generation = storeContinuation(continuation)
 
                Task {
-                   try await Task.sleep(for: .seconds(timeout))
-                   lock.lock()
-                   if let c = self.continuation {
-                       self.continuation = nil
-                       lock.unlock()
-                       c.resume(throwing: OAuthError.networkError("OAuth callback timeout"))
-                   } else {
-                       lock.unlock()
-                   }
+                   try? await Task.sleep(for: .seconds(timeout))
+                   resumeStoredContinuation(
+                       throwing: OAuthError.networkError("OAuth callback timeout"),
+                       generation: generation
+                   )
                }
            }
+       }
+
+       private func storeContinuation(_ continuation: CheckedContinuation<OAuthCallbackServer.CallbackResult, Error>) -> UInt64 {
+           lock.lock()
+           waitGeneration += 1
+           let generation = waitGeneration
+           self.continuation = continuation
+           lock.unlock()
+           return generation
+       }
+
+       @discardableResult
+       private func resumeStoredContinuation(throwing error: Error, generation: UInt64) -> Bool {
+           lock.lock()
+           guard generation == waitGeneration, let continuation = self.continuation else {
+               lock.unlock()
+               return false
+           }
+           self.continuation = nil
+           waitGeneration += 1
+           lock.unlock()
+           continuation.resume(throwing: error)
+           return true
        }
 
        /// Call this from your HTTP route (e.g. Vapor GET /auth/callback) with the query parameters from the redirect.
@@ -74,10 +92,11 @@ If you already run an HTTP server (e.g. Vapor on port 8080), you can add a route
                errorDescription: errorDescription
            )
            lock.lock()
-           let c = continuation
-           continuation = nil
+           let continuation = self.continuation
+           self.continuation = nil
+           waitGeneration += 1
            lock.unlock()
-           c?.resume(returning: result)
+           continuation?.resume(returning: result)
        }
    }
    ```
@@ -128,7 +147,7 @@ If you already run an HTTP server (e.g. Vapor on port 8080), you can add a route
    let oauthHandler = MCPOAuthHandler(authenticator: authenticator)
    ```
 
-   In both cases, when OAuth is required the flow opens the auth URL and waits on your receiver’s `waitForCallback`; your route receives the redirect and calls `deliver(...)`, completing the flow. Ensure the redirect URI in your OAuth/MCP config matches your route (e.g. `http://localhost:8080/auth/callback`). Only one OAuth flow should be waiting at a time on a given receiver instance.
+   In both cases, when OAuth is required the flow opens the auth URL and waits on your receiver’s `waitForCallback`; your route receives the redirect and calls `deliver(...)`, completing the flow. Forward the `state` query parameter unchanged — `OAuthAuthenticator` validates it against the value it sent. Ensure the redirect URI in your OAuth/MCP config matches your route (e.g. `http://localhost:8080/auth/callback`). Only one OAuth flow should be waiting at a time on a given receiver instance.
 
 ## Customization
 

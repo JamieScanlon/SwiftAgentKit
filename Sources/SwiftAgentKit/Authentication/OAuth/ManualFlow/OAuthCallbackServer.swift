@@ -38,6 +38,8 @@ public final class OAuthCallbackServer: OAuthCallbackReceiver, @unchecked Sendab
     
     private var listener: NWListener?
     private var continuation: CheckedContinuation<CallbackResult, Error>?
+    private var waitGeneration: UInt64 = 0
+    private let lock = NSLock()
     private let port: UInt16
     private let callbackPath: String
     private let logger: Logger
@@ -53,26 +55,63 @@ public final class OAuthCallbackServer: OAuthCallbackReceiver, @unchecked Sendab
     /// - Returns: OAuth callback result
     public func waitForCallback(timeout: TimeInterval = 300) async throws -> CallbackResult {
         return try await withCheckedThrowingContinuation { continuation in
-            self.continuation = continuation
+            let generation = storeContinuation(continuation)
             
             Task {
                 do {
                     try await startServer()
                 } catch {
-                    continuation.resume(throwing: error)
+                    resumeStoredContinuation(throwing: error, generation: generation)
                 }
             }
             
-            // Set up timeout
             Task {
                 try? await Task.sleep(for: .seconds(timeout))
-                if self.continuation != nil {
-                    self.continuation?.resume(throwing: OAuthError.networkError("OAuth callback timeout"))
-                    self.continuation = nil
-                    await self.stopServer()
+                if resumeStoredContinuation(
+                    throwing: OAuthError.networkError("OAuth callback timeout"),
+                    generation: generation
+                ) {
+                    await stopServer()
                 }
             }
         }
+    }
+    
+    private func storeContinuation(_ continuation: CheckedContinuation<CallbackResult, Error>) -> UInt64 {
+        lock.lock()
+        waitGeneration += 1
+        let generation = waitGeneration
+        self.continuation = continuation
+        lock.unlock()
+        return generation
+    }
+    
+    @discardableResult
+    private func resumeStoredContinuation(returning result: CallbackResult, generation: UInt64) -> Bool {
+        lock.lock()
+        guard generation == waitGeneration, let continuation = self.continuation else {
+            lock.unlock()
+            return false
+        }
+        self.continuation = nil
+        waitGeneration += 1
+        lock.unlock()
+        continuation.resume(returning: result)
+        return true
+    }
+    
+    @discardableResult
+    private func resumeStoredContinuation(throwing error: Error, generation: UInt64) -> Bool {
+        lock.lock()
+        guard generation == waitGeneration, let continuation = self.continuation else {
+            lock.unlock()
+            return false
+        }
+        self.continuation = nil
+        waitGeneration += 1
+        lock.unlock()
+        continuation.resume(throwing: error)
+        return true
     }
     
     private func startServer() async throws {
@@ -189,12 +228,34 @@ public final class OAuthCallbackServer: OAuthCallbackReceiver, @unchecked Sendab
             
         Task { await sendResponse(connection: connection, statusCode: 200, body: responseBody) }
         
-        // Resume the continuation
-        continuation?.resume(returning: result)
-        continuation = nil
+        completeActiveWait(returning: result)
         
         // Stop the server
         Task { await stopServer() }
+    }
+    
+    private func completeActiveWait(returning result: CallbackResult) {
+        lock.lock()
+        guard let continuation = self.continuation else {
+            lock.unlock()
+            return
+        }
+        self.continuation = nil
+        waitGeneration += 1
+        lock.unlock()
+        continuation.resume(returning: result)
+    }
+    
+    private func completeActiveWait(throwing error: Error) {
+        lock.lock()
+        guard let continuation = self.continuation else {
+            lock.unlock()
+            return
+        }
+        self.continuation = nil
+        waitGeneration += 1
+        lock.unlock()
+        continuation.resume(throwing: error)
     }
     
     private func sendResponse(connection: NWConnection, statusCode: Int, body: String) async {
@@ -252,8 +313,7 @@ public final class OAuthCallbackServer: OAuthCallbackReceiver, @unchecked Sendab
     }
     
     private func handleError(_ error: Error) {
-        continuation?.resume(throwing: error)
-        continuation = nil
+        completeActiveWait(throwing: error)
         Task { await stopServer() }
     }
     

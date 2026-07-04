@@ -8,6 +8,7 @@
 import Foundation
 import CryptoKit
 import Logging
+import Security
 
 /// Utilities for implementing PKCE (Proof Key for Code Exchange) as per RFC 7636 and OAuth 2.1 Section 7.5.2
 public struct PKCEUtilities {
@@ -25,6 +26,21 @@ public struct PKCEUtilities {
             self.codeVerifier = codeVerifier
             self.codeChallenge = codeChallenge
         }
+    }
+    
+    /// Generate a cryptographically random OAuth `state` parameter for CSRF protection (RFC 6749 §10.12).
+    /// - Returns: URL-safe base64-encoded random string (32 bytes of entropy)
+    /// - Throws: PKCEError if random generation fails
+    public static func generateOAuthState() throws -> String {
+        var randomBytes = [UInt8](repeating: 0, count: 32)
+        let status = SecRandomCopyBytes(kSecRandomDefault, randomBytes.count, &randomBytes)
+        guard status == errSecSuccess else {
+            throw PKCEError.generationFailed("Failed to generate OAuth state")
+        }
+        return Data(randomBytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
     
     /// Generate a PKCE code verifier and challenge pair

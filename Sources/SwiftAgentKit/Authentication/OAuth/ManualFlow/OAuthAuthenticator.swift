@@ -21,6 +21,7 @@ public enum OAuthError: Error, LocalizedError {
     case invalidScope
     case serverError(String)
     case invalidConfiguration(String)
+    case stateMismatch
     
     public var errorDescription: String? {
         switch self {
@@ -50,6 +51,8 @@ public enum OAuthError: Error, LocalizedError {
             return "OAuth server error: \(message)"
         case .invalidConfiguration(let message):
             return "Invalid OAuth configuration: \(message)"
+        case .stateMismatch:
+            return "OAuth state mismatch"
         }
     }
 }
@@ -132,13 +135,15 @@ extension OAuthAuthenticator {
         }
         
         let pkcePair = try PKCEUtilities.generatePKCEPair()
+        let expectedState = try PKCEUtilities.generateOAuthState()
         var components = URLComponents(string: authEndpoint)
         var queryItems: [URLQueryItem] = [
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "client_id", value: clientId),
             URLQueryItem(name: "redirect_uri", value: oauthFlowError.redirectURI.absoluteString),
             URLQueryItem(name: "code_challenge", value: pkcePair.codeChallenge),
-            URLQueryItem(name: "code_challenge_method", value: pkcePair.codeChallengeMethod)
+            URLQueryItem(name: "code_challenge_method", value: pkcePair.codeChallengeMethod),
+            URLQueryItem(name: "state", value: expectedState)
         ]
         if let scope = oauthFlowError.scope, !scope.isEmpty {
             queryItems.append(URLQueryItem(name: "scope", value: scope))
@@ -167,6 +172,9 @@ extension OAuthAuthenticator {
         }
         guard let authorizationCode = result.authorizationCode else {
             throw OAuthError.authorizationCodeNotFound
+        }
+        guard result.state == expectedState else {
+            throw OAuthError.stateMismatch
         }
         
         let exchanger = tokenExchanger ?? DefaultOAuthTokenExchanger()
