@@ -87,10 +87,15 @@ struct ACPSessionNotificationDeliveryTests {
         try await client.connect()
         _ = try await client.newSession(cwd: "/project")
 
-        let stored = await client.availableCommands
+        // `available_commands_update` is published asynchronously after session/new.
+        var stored: [ACPAvailableCommand] = []
+        for _ in 0..<50 {
+            stored = await client.availableCommands
+            if stored.count == 2 { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
         #expect(stored.count == 2)
-        #expect(stored[0].name == "web")
-        #expect(stored[1].name == "test")
+        #expect(stored.map(\.name) == ["web", "test"])
 
         await client.shutdown()
         await agent.stop()

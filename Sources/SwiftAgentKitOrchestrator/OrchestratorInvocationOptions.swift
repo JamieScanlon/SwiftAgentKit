@@ -14,6 +14,8 @@ public struct OrchestratorInvocationOptions: Sendable {
     public var assistantPersistenceMode: AssistantPersistenceMode?
     public var parallelToolDispatchEnabled: Bool?
     public var dispatchPlannerMode: ToolDispatchPlannerMode?
+    /// Optional override for ``OrchestratorConfig/maxParallelInFlightPerStage``.
+    public var maxParallelInFlightPerStage: Int?
     /// Optional per-call safety metadata keyed by toolCallID.
     public var toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]?
     public var preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)?
@@ -36,6 +38,7 @@ public struct OrchestratorInvocationOptions: Sendable {
         assistantPersistenceMode: AssistantPersistenceMode? = nil,
         parallelToolDispatchEnabled: Bool? = nil,
         dispatchPlannerMode: ToolDispatchPlannerMode? = nil,
+        maxParallelInFlightPerStage: Int? = nil,
         toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]? = nil,
         preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)? = nil,
         maxAgenticStepsPerUpdate: Int? = nil,
@@ -52,6 +55,7 @@ public struct OrchestratorInvocationOptions: Sendable {
         self.assistantPersistenceMode = assistantPersistenceMode
         self.parallelToolDispatchEnabled = parallelToolDispatchEnabled
         self.dispatchPlannerMode = dispatchPlannerMode
+        self.maxParallelInFlightPerStage = maxParallelInFlightPerStage
         self.toolParallelSafetyMetadata = toolParallelSafetyMetadata
         self.preDispatchPolicyEvaluator = preDispatchPolicyEvaluator
         self.maxAgenticStepsPerUpdate = maxAgenticStepsPerUpdate

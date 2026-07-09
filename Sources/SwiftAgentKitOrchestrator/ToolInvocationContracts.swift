@@ -92,6 +92,10 @@ public struct ToolBatchInvocationRequest: Sendable, Codable {
     public let conversationID: String?
     public let runID: String?
     public let source: ToolInvocationSource
+    /// When set, overrides ``OrchestratorConfig/parallelToolDispatchEnabled`` for this batch.
+    public let parallelToolDispatchEnabled: Bool?
+    /// When set, overrides ``OrchestratorConfig/maxParallelInFlightPerStage`` for this batch.
+    public let maxParallelInFlightPerStage: Int?
 
     public init(
         requests: [ToolInvocationRequest],
@@ -99,7 +103,9 @@ public struct ToolBatchInvocationRequest: Sendable, Codable {
         defaultTimeoutSeconds: TimeInterval? = nil,
         conversationID: String? = nil,
         runID: String? = nil,
-        source: ToolInvocationSource = .direct
+        source: ToolInvocationSource = .direct,
+        parallelToolDispatchEnabled: Bool? = nil,
+        maxParallelInFlightPerStage: Int? = nil
     ) {
         self.requests = requests
         self.plannerMode = plannerMode
@@ -107,6 +113,8 @@ public struct ToolBatchInvocationRequest: Sendable, Codable {
         self.conversationID = conversationID
         self.runID = runID
         self.source = source
+        self.parallelToolDispatchEnabled = parallelToolDispatchEnabled
+        self.maxParallelInFlightPerStage = maxParallelInFlightPerStage
     }
 }
 

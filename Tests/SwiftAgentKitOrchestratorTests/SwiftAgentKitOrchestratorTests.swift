@@ -670,6 +670,144 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
     }
 }
 
+actor ConcurrencyPeakTracker {
+    private var inFlight = 0
+    private(set) var peak = 0
+
+    func enter() {
+        inFlight += 1
+        peak = max(peak, inFlight)
+    }
+
+    func leave() {
+        inFlight = max(0, inFlight - 1)
+    }
+}
+
+struct CappedParallelToolProvider: ToolProvider {
+    var name: String { "CappedParallelToolProvider" }
+    let toolNames: [String]
+    let tracker: ConcurrencyPeakTracker
+    let holdNanoseconds: UInt64
+
+    func availableTools() async -> [ToolDefinition] {
+        toolNames.map {
+            ToolDefinition(name: $0, description: "cap tool \($0)", parameters: [], type: .function)
+        }
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        await tracker.enter()
+        try await Task.sleep(nanoseconds: holdNanoseconds)
+        await tracker.leave()
+        return ToolResult(success: true, content: "ok-\(toolCall.name)", toolCallId: toolCall.id)
+    }
+
+    func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        .parallelSafe
+    }
+}
+
+struct DelayedCompletionToolProvider: ToolProvider {
+    var name: String { "DelayedCompletionToolProvider" }
+    /// Higher delay for earlier tools so completion order inverts call order.
+    let delaysByToolName: [String: UInt64]
+
+    func availableTools() async -> [ToolDefinition] {
+        delaysByToolName.keys.sorted().map {
+            ToolDefinition(name: $0, description: "delayed \($0)", parameters: [], type: .function)
+        }
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        let delay = delaysByToolName[toolCall.name] ?? 10_000_000
+        try await Task.sleep(nanoseconds: delay)
+        return ToolResult(success: true, content: "done-\(toolCall.name)", toolCallId: toolCall.id)
+    }
+
+    func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        .parallelSafe
+    }
+}
+
+actor ModifierApplyOrderRecorder {
+    private(set) var observedSharedValues: [String: String] = [:]
+    private(set) var applyProbeOrder: [String] = []
+
+    func recordObservation(toolName: String, value: String) {
+        observedSharedValues[toolName] = value
+    }
+
+    func recordApplyProbe(_ toolName: String) {
+        applyProbeOrder.append(toolName)
+    }
+}
+
+struct ContextModifierToolProvider: ToolProvider {
+    var name: String { "ContextModifierToolProvider" }
+    let toolNames: [String]
+    let recorder: ModifierApplyOrderRecorder
+    let sharedKey: String
+
+    func availableTools() async -> [ToolDefinition] {
+        toolNames.map {
+            ToolDefinition(name: $0, description: "modifier \($0)", parameters: [], type: .function)
+        }
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        let observed: String
+        if case .string(let value)? = ToolDispatchSharedContext.current?.value(forKey: sharedKey) {
+            observed = value
+        } else {
+            observed = "<nil>"
+        }
+        await recorder.recordObservation(toolName: toolCall.name, value: observed)
+
+        let callID = toolCall.id ?? toolCall.name
+        _ = ToolContextModifierQueue.enqueue(
+            ToolContextModifier(
+                toolCallID: callID,
+                key: sharedKey,
+                value: .string(toolCall.name)
+            )
+        )
+        // Hold briefly so parallel siblings overlap and all observe pre-stage state.
+        try await Task.sleep(nanoseconds: 30_000_000)
+        return ToolResult(success: true, content: "mod-\(toolCall.name)", toolCallId: toolCall.id)
+    }
+
+    func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        .parallelSafe
+    }
+}
+
+struct PostStageProbeToolProvider: ToolProvider {
+    var name: String { "PostStageProbeToolProvider" }
+    let toolName: String
+    let sharedKey: String
+    let recorder: ModifierApplyOrderRecorder
+
+    func availableTools() async -> [ToolDefinition] {
+        [ToolDefinition(name: toolName, description: "probe", parameters: [], type: .function)]
+    }
+
+    func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
+        let observed: String
+        if case .string(let value)? = ToolDispatchSharedContext.current?.value(forKey: sharedKey) {
+            observed = value
+        } else {
+            observed = "<nil>"
+        }
+        await recorder.recordApplyProbe(observed)
+        return ToolResult(success: true, content: "probe-\(observed)", toolCallId: toolCall.id)
+    }
+
+    func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
+        .mutating
+    }
+}
+
 
 @Suite struct SwiftAgentKitOrchestratorTests {
     
@@ -2951,6 +3089,181 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
         #expect(outcome.diagnostics.stages[0].mode == ToolDispatchMode.parallel)
         #expect(outcome.diagnostics.stages[1].mode == ToolDispatchMode.serial)
         #expect(outcome.diagnostics.stages[2].mode == ToolDispatchMode.parallel)
+
+        let contents: [String] = outcome.outcomes.compactMap { item in
+            if case .completed(let result, _) = item {
+                return result.content
+            }
+            return nil
+        }
+        #expect(contents == ["ok-read_a", "ok-mutate_b", "ok-read_c"])
+    }
+
+    @Test("parallel stage never exceeds maxParallelInFlightPerStage")
+    func testParallelStageRespectsInFlightCap() async throws {
+        let toolNames = (1...15).map { "t\($0)" }
+        let tracker = ConcurrencyPeakTracker()
+        let provider = CappedParallelToolProvider(
+            toolNames: toolNames,
+            tracker: tracker,
+            holdNanoseconds: 40_000_000
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: MockLLM(model: "cap", logger: Logger(label: "cap")),
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                parallelToolDispatchEnabled: true,
+                maxParallelInFlightPerStage: 10,
+                dispatchPlannerMode: .allParallel
+            ),
+            toolManager: ToolManager(providers: [provider])
+        )
+        let outcome = await orchestrator.invokeTools(
+            ToolBatchInvocationRequest(
+                requests: toolNames.map { ToolInvocationRequest(toolName: $0) },
+                plannerMode: .allParallel,
+                parallelToolDispatchEnabled: true,
+                maxParallelInFlightPerStage: 10
+            )
+        )
+        #expect(outcome.outcomes.count == 15)
+        #expect(outcome.diagnostics.stages.count == 1)
+        #expect(outcome.diagnostics.stages[0].mode == .parallel)
+        let peak = await tracker.peak
+        #expect(peak <= 10)
+        #expect(peak >= 2)
+    }
+
+    @Test("delayed parallel completions still commit outcomes in call order")
+    func testDelayedCompletionCommitOrder() async throws {
+        let toolNames = ["first", "second", "third", "fourth"]
+        // Invert completion latency: first finishes last.
+        let delays: [String: UInt64] = [
+            "first": 120_000_000,
+            "second": 80_000_000,
+            "third": 40_000_000,
+            "fourth": 10_000_000
+        ]
+        let provider = DelayedCompletionToolProvider(delaysByToolName: delays)
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: MockLLM(model: "order", logger: Logger(label: "order")),
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                parallelToolDispatchEnabled: true,
+                dispatchPlannerMode: .allParallel
+            ),
+            toolManager: ToolManager(providers: [provider])
+        )
+        let outcome = await orchestrator.invokeTools(
+            ToolBatchInvocationRequest(
+                requests: toolNames.map { ToolInvocationRequest(toolName: $0) },
+                plannerMode: .allParallel,
+                parallelToolDispatchEnabled: true
+            )
+        )
+        let contents: [String] = outcome.outcomes.compactMap { item in
+            if case .completed(let result, _) = item {
+                return result.content
+            }
+            return nil
+        }
+        #expect(contents == toolNames.map { "done-\($0)" })
+    }
+
+    @Test("context modifiers are deferred until after parallel stage and applied in call order")
+    func testDeferredContextModifiersApplyPostStageInCallOrder() async throws {
+        let sharedKey = "token"
+        let recorder = ModifierApplyOrderRecorder()
+        let parallelProvider = ContextModifierToolProvider(
+            toolNames: ["mod_a", "mod_b", "mod_c"],
+            recorder: recorder,
+            sharedKey: sharedKey
+        )
+        let probeProvider = PostStageProbeToolProvider(
+            toolName: "probe_next",
+            sharedKey: sharedKey,
+            recorder: recorder
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: MockLLM(model: "mods", logger: Logger(label: "mods")),
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                parallelToolDispatchEnabled: true,
+                dispatchPlannerMode: .mixedDeterministic
+            ),
+            toolManager: ToolManager(providers: [parallelProvider, probeProvider])
+        )
+        let outcome = await orchestrator.invokeTools(
+            ToolBatchInvocationRequest(
+                requests: [
+                    ToolInvocationRequest(toolName: "mod_a"),
+                    ToolInvocationRequest(toolName: "mod_b"),
+                    ToolInvocationRequest(toolName: "mod_c"),
+                    ToolInvocationRequest(toolName: "probe_next")
+                ],
+                plannerMode: .mixedDeterministic,
+                parallelToolDispatchEnabled: true
+            )
+        )
+        #expect(outcome.outcomes.count == 4)
+        #expect(outcome.diagnostics.stages.count == 2)
+        #expect(outcome.diagnostics.stages[0].mode == .parallel)
+        #expect(outcome.diagnostics.stages[1].mode == .serial)
+
+        let observations = await recorder.observedSharedValues
+        #expect(observations["mod_a"] == "<nil>")
+        #expect(observations["mod_b"] == "<nil>")
+        #expect(observations["mod_c"] == "<nil>")
+
+        // Last applied modifier in call order wins for the shared key.
+        let probeValues = await recorder.applyProbeOrder
+        #expect(probeValues == ["mod_c"])
+    }
+
+    @Test("ToolBatchInvocationRequest parallelToolDispatchEnabled overrides config false")
+    func testRequestParallelOverrideBeatsConfigFalse() async throws {
+        let collector = ToolLifecycleCollector()
+        let provider = RoutingSafetyToolProvider(
+            safetiesByToolName: [
+                "read_1": .parallelSafe,
+                "read_2": .parallelSafe
+            ]
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: MockLLM(model: "override", logger: Logger(label: "override")),
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                parallelToolDispatchEnabled: false,
+                dispatchPlannerMode: .allParallel
+            ),
+            toolManager: ToolManager(providers: [provider])
+        )
+        let lifecycleTask = Task {
+            for await event in await orchestrator.toolLifecycleEvents {
+                await collector.append(event)
+            }
+        }
+        defer { lifecycleTask.cancel() }
+
+        let outcome = await orchestrator.invokeTools(
+            ToolBatchInvocationRequest(
+                requests: [
+                    ToolInvocationRequest(toolName: "read_1"),
+                    ToolInvocationRequest(toolName: "read_2")
+                ],
+                plannerMode: .allParallel,
+                parallelToolDispatchEnabled: true
+            )
+        )
+        #expect(outcome.diagnostics.stages.count == 1)
+        #expect(outcome.diagnostics.stages[0].mode == .parallel)
+
+        // Allow lifecycle events to flush.
+        try await Task.sleep(nanoseconds: 20_000_000)
+        let events = await collector.snapshot()
+        let started = events.filter { $0.state == .started }
+        #expect(started.count >= 2)
+        #expect(started.allSatisfy { $0.dispatchMode == .parallel })
     }
 }
 
