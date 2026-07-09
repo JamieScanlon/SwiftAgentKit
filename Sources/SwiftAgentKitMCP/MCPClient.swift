@@ -54,6 +54,8 @@ public actor MCPClient {
     public var state: State = .notConnected
     
     public private(set) var tools: [ToolDefinition] = []
+    /// Preserved MCP `inputSchema` JSON keyed by tool name. Last writer wins within this client.
+    public private(set) var toolInputSchemasByName: [String: JSON] = [:]
     public private(set) var resources: [Resource] = []
     public private(set) var prompts: [Prompt] = []
     private let logger: Logger
@@ -446,7 +448,23 @@ public actor MCPClient {
         }
         // List available tools
         let (tools, _) = try await client.listTools()
+        var schemasByName: [String: JSON] = [:]
+        for tool in tools {
+            schemasByName[tool.name] = MCPValueJSONConversion.convert(tool.inputSchema)
+        }
+        self.toolInputSchemasByName = schemasByName
         self.tools = tools.map { ToolDefinition(tool: $0) }
+    }
+
+    /// Returns the preserved MCP `inputSchema` for a tool, if discovered on this client.
+    public func rawInputSchema(for toolName: String) -> JSON? {
+        toolInputSchemasByName[toolName]
+    }
+
+    /// Installs tool definitions and preserved schemas without a live MCP connection (tests only).
+    internal func installToolsForTesting(tools: [ToolDefinition], inputSchemasByName: [String: JSON]) {
+        self.tools = tools
+        self.toolInputSchemasByName = inputSchemasByName
     }
     
     public func callTool(_ toolName: String, arguments: [String: Value]? = nil) async throws -> [Tool.Content]? {
@@ -625,6 +643,7 @@ public actor MCPClient {
         client = nil
         capabilities = nil
         tools = []
+        toolInputSchemasByName = [:]
         resources = []
         prompts = []
         state = .notConnected

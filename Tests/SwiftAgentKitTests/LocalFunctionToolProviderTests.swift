@@ -265,7 +265,7 @@ import EasyJSON
     }
 
     @Test("ToolManager registerReadOnlyTool creates canonical descriptor with metadata")
-    func testToolManagerRegisterReadOnlyToolDescriptor() async throws {
+    func testToolManagerRegisterReadOnlyToolDescriptor() async {
         let definition = ToolDefinition(
             name: "list_projects",
             description: "List projects",
@@ -283,7 +283,10 @@ import EasyJSON
             )
         let descriptors = await manager.allRegisteredToolsAsync()
         #expect(descriptors.count == 1)
-        let descriptor = try #require(descriptors.first)
+        guard let descriptor = descriptors.first else {
+            Issue.record("expected one descriptor")
+            return
+        }
         #expect(descriptor.definition.name == "list_projects")
         #expect(descriptor.source == .local)
         #expect(descriptor.effectClass == .readOnly)

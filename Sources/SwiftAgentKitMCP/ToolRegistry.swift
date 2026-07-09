@@ -84,7 +84,7 @@ public actor ToolRegistry {
         )
         
         // Convert MCP.Value to JSON types for the handler
-        let args = arguments.mapValues { convertMCPValueToJSON($0) }
+        let args = arguments.mapValues { MCPValueJSONConversion.convert($0) }
         
         do {
             let result: MCPToolResult
@@ -163,24 +163,7 @@ public actor ToolRegistry {
     
     /// Convert MCP.Value to JSON types
     private func convertMCPValueToJSON(_ value: MCP.Value) -> JSON {
-        switch value {
-        case .null:
-            return .string("") // EasyJSON doesn't have null, use empty string
-        case .bool(let bool):
-            return .boolean(bool)
-        case .int(let int):
-            return .integer(int)
-        case .double(let double):
-            return .double(double)
-        case .string(let string):
-            return .string(string)
-        case .data(_, let data):
-            return .string(String(data: data, encoding: .utf8) ?? "") // Convert data to string
-        case .array(let array):
-            return .array(array.map { convertMCPValueToJSON($0) })
-        case .object(let object):
-            return .object(object.mapValues { convertMCPValueToJSON($0) })
-        }
+        MCPValueJSONConversion.convert(value)
     }
 }
 

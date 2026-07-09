@@ -71,13 +71,54 @@ public struct ToolSchemaSummary: Sendable, Equatable, Codable {
     }
 }
 
+public enum ToolSchemaDiagnosticSeverity: String, Sendable, Codable {
+    case warning
+    case error
+}
+
+public struct ToolSchemaNormalizationDiagnostic: Sendable, Equatable, Codable {
+    public let toolName: String
+    public let fieldPath: String
+    public let code: String
+    public let message: String
+    public let severity: ToolSchemaDiagnosticSeverity
+
+    public init(
+        toolName: String,
+        fieldPath: String,
+        code: String,
+        message: String,
+        severity: ToolSchemaDiagnosticSeverity
+    ) {
+        self.toolName = toolName
+        self.fieldPath = fieldPath
+        self.code = code
+        self.message = message
+        self.severity = severity
+    }
+}
+
+public extension ToolSchemaNormalizationDiagnostic {
+    /// Canonical log line: tool[web_search].parameters.properties.mode: anyOf unsupported (union.unsupported)
+    var logLine: String {
+        "tool[\(toolName)].\(fieldPath): \(message) (\(code))"
+    }
+}
+
 public struct ToolSchemaNormalizationReport: Sendable, Equatable, Codable {
     public let warnings: [String]
+    public let diagnostics: [ToolSchemaNormalizationDiagnostic]
     public let didFallback: Bool
     public let normalizedVersion: String
 
-    public init(warnings: [String], didFallback: Bool, normalizedVersion: String) {
+    public init(
+        warnings: [String],
+        diagnostics: [ToolSchemaNormalizationDiagnostic] = [],
+        didFallback: Bool,
+        normalizedVersion: String
+    ) {
         self.warnings = warnings
+        self.diagnostics = diagnostics
         self.didFallback = didFallback
         self.normalizedVersion = normalizedVersion
     }
@@ -255,23 +296,48 @@ public struct ToolSchemaTargetProviderCapabilities: Sendable, Equatable, Codable
     public static let providerSafe = ToolSchemaTargetProviderCapabilities()
 }
 
+private struct NormalizationCollector {
+    let toolName: String
+    var warnings: [String] = []
+    var diagnostics: [ToolSchemaNormalizationDiagnostic] = []
+    var didFallback = false
+
+    mutating func emit(
+        fieldPath: String,
+        code: String,
+        message: String,
+        severity: ToolSchemaDiagnosticSeverity
+    ) {
+        let diagnostic = ToolSchemaNormalizationDiagnostic(
+            toolName: toolName,
+            fieldPath: fieldPath,
+            code: code,
+            message: message,
+            severity: severity
+        )
+        diagnostics.append(diagnostic)
+        warnings.append(diagnostic.logLine)
+    }
+}
+
 public struct ToolSchemaNormalizer: Sendable {
-    public static let currentVersion = "1"
+    public static let currentVersion = "2"
 
     public init() {}
 
     public func normalize(
         rawSchema: JSON,
         source: ToolRegistrationSource,
+        toolName: String? = nil,
+        fieldPathPrefix: String = "parameters",
         targetProviderCapabilities: ToolSchemaTargetProviderCapabilities = .providerSafe
     ) -> NormalizedToolSchema {
-        var warnings: [String] = []
-        var didFallback = false
+        var collector = NormalizationCollector(toolName: toolName ?? "unknown")
 
         let normalized = normalizeNode(
             rawSchema,
-            warnings: &warnings,
-            didFallback: &didFallback,
+            fieldPath: fieldPathPrefix,
+            collector: &collector,
             targetProviderCapabilities: targetProviderCapabilities
         )
         let canonical = normalized.canonicalizedSchemaJSON
@@ -283,8 +349,9 @@ public struct ToolSchemaNormalizer: Sendable {
             schema: canonical,
             summary: summary,
             report: ToolSchemaNormalizationReport(
-                warnings: warnings,
-                didFallback: didFallback,
+                warnings: collector.warnings,
+                diagnostics: collector.diagnostics,
+                didFallback: collector.didFallback,
                 normalizedVersion: Self.currentVersion
             ),
             fingerprint: fingerprint,
@@ -294,28 +361,73 @@ public struct ToolSchemaNormalizer: Sendable {
 
     private func normalizeNode(
         _ node: JSON,
-        warnings: inout [String],
-        didFallback: inout Bool,
+        fieldPath: String,
+        collector: inout NormalizationCollector,
         targetProviderCapabilities: ToolSchemaTargetProviderCapabilities
     ) -> JSON {
+        if case .string(let stringValue) = node {
+            if let data = stringValue.data(using: .utf8),
+               let parsed = try? JSONDecoder().decode(JSON.self, from: data),
+               case .object = parsed {
+                collector.emit(
+                    fieldPath: fieldPath,
+                    code: "malformed.stringNode",
+                    message: "Schema node was a JSON string; parsed to object.",
+                    severity: .warning
+                )
+                return normalizeNode(
+                    parsed,
+                    fieldPath: fieldPath,
+                    collector: &collector,
+                    targetProviderCapabilities: targetProviderCapabilities
+                )
+            }
+            return node
+        }
+
         guard case .object(let object) = node else {
             return node
         }
         var output = object
 
-        if let type = object["type"] {
+        if let additionalProperties = object["additionalProperties"], !isBooleanJSON(additionalProperties) {
+            output["additionalProperties"] = .boolean(false)
+            collector.emit(
+                fieldPath: fieldPath,
+                code: "malformed.additionalProperties",
+                message: "additionalProperties was not a boolean; repaired to false.",
+                severity: .warning
+            )
+        }
+
+        if isObjectType(output), output["properties"] == nil {
+            output["properties"] = .object([:])
+            collector.emit(
+                fieldPath: fieldPath,
+                code: "malformed.bareObject",
+                message: "type object without properties; filled empty properties object.",
+                severity: .warning
+            )
+        }
+
+        if let type = output["type"] {
             switch type {
             case .array(let arr):
                 let typeStrings = arr.compactMap { if case .string(let s) = $0 { return s } else { return nil } }
                 let nonNull = typeStrings.filter { $0 != "null" }
                 if typeStrings.contains("null"), !targetProviderCapabilities.supportsNullableTypeArrays {
-                    warnings.append("Flattened nullable type array into x-nullable.")
+                    collector.emit(
+                        fieldPath: fieldPath,
+                        code: "nullable.flattened",
+                        message: "Flattened nullable type array into x-nullable.",
+                        severity: .warning
+                    )
                     output["x-nullable"] = .boolean(true)
                     if let first = nonNull.first {
                         output["type"] = .string(first)
                     } else {
                         output["type"] = .string("string")
-                        didFallback = true
+                        collector.didFallback = true
                     }
                 }
             default:
@@ -324,42 +436,20 @@ public struct ToolSchemaNormalizer: Sendable {
         }
 
         if !targetProviderCapabilities.supportsUnionTypes {
-            if let oneOf = object["oneOf"] {
-                warnings.append("Flattened unsupported oneOf into first candidate.")
-                output.removeValue(forKey: "oneOf")
-                if case .array(let options) = oneOf, let first = options.first {
-                    let firstNormalized = normalizeNode(
-                        first,
-                        warnings: &warnings,
-                        didFallback: &didFallback,
-                        targetProviderCapabilities: targetProviderCapabilities
-                    )
-                    if case .object(let firstObject) = firstNormalized {
-                        firstObject.forEach { output[$0.key] = $0.value }
-                    }
-                } else {
-                    output["type"] = .string("string")
-                    didFallback = true
-                }
-            }
-            if let anyOf = object["anyOf"] {
-                warnings.append("Flattened unsupported anyOf into first candidate.")
-                output.removeValue(forKey: "anyOf")
-                if case .array(let options) = anyOf, let first = options.first {
-                    let firstNormalized = normalizeNode(
-                        first,
-                        warnings: &warnings,
-                        didFallback: &didFallback,
-                        targetProviderCapabilities: targetProviderCapabilities
-                    )
-                    if case .object(let firstObject) = firstNormalized {
-                        firstObject.forEach { output[$0.key] = $0.value }
-                    }
-                } else {
-                    output["type"] = .string("string")
-                    didFallback = true
-                }
-            }
+            output = collapseOrFlattenUnion(
+                output,
+                combinatorKey: "oneOf",
+                fieldPath: fieldPath,
+                collector: &collector,
+                targetProviderCapabilities: targetProviderCapabilities
+            )
+            output = collapseOrFlattenUnion(
+                output,
+                combinatorKey: "anyOf",
+                fieldPath: fieldPath,
+                collector: &collector,
+                targetProviderCapabilities: targetProviderCapabilities
+            )
         }
 
         if case .object(let properties) = output["properties"] {
@@ -367,12 +457,57 @@ public struct ToolSchemaNormalizer: Sendable {
             for (key, value) in properties {
                 normalizedProperties[key] = normalizeNode(
                     value,
-                    warnings: &warnings,
-                    didFallback: &didFallback,
+                    fieldPath: "\(fieldPath).properties.\(key)",
+                    collector: &collector,
                     targetProviderCapabilities: targetProviderCapabilities
                 )
             }
             output["properties"] = .object(normalizedProperties)
+        }
+
+        if let items = output["items"] {
+            output["items"] = normalizeNode(
+                items,
+                fieldPath: "\(fieldPath).items",
+                collector: &collector,
+                targetProviderCapabilities: targetProviderCapabilities
+            )
+        }
+
+        if let additionalProperties = output["additionalProperties"], case .object = additionalProperties {
+            output["additionalProperties"] = normalizeNode(
+                additionalProperties,
+                fieldPath: "\(fieldPath).additionalProperties",
+                collector: &collector,
+                targetProviderCapabilities: targetProviderCapabilities
+            )
+        }
+
+        if case .object(let patternProperties) = output["patternProperties"] {
+            var normalizedPatternProperties: [String: JSON] = [:]
+            for (key, value) in patternProperties {
+                normalizedPatternProperties[key] = normalizeNode(
+                    value,
+                    fieldPath: "\(fieldPath).patternProperties.\(key)",
+                    collector: &collector,
+                    targetProviderCapabilities: targetProviderCapabilities
+                )
+            }
+            output["patternProperties"] = .object(normalizedPatternProperties)
+        }
+
+        for combinatorKey in ["allOf", "oneOf", "anyOf"] {
+            guard targetProviderCapabilities.supportsUnionTypes || combinatorKey == "allOf" else { continue }
+            if case .array(let branches) = output[combinatorKey] {
+                output[combinatorKey] = .array(branches.enumerated().map { index, branch in
+                    normalizeNode(
+                        branch,
+                        fieldPath: "\(fieldPath).\(combinatorKey)[\(index)]",
+                        collector: &collector,
+                        targetProviderCapabilities: targetProviderCapabilities
+                    )
+                })
+            }
         }
 
         if case .array(let requiredValues) = output["required"] {
@@ -383,6 +518,110 @@ public struct ToolSchemaNormalizer: Sendable {
             output["required"] = .array(requiredStrings.sorted().map(JSON.string))
         }
         return .object(output)
+    }
+
+    private func collapseOrFlattenUnion(
+        _ object: [String: JSON],
+        combinatorKey: String,
+        fieldPath: String,
+        collector: inout NormalizationCollector,
+        targetProviderCapabilities: ToolSchemaTargetProviderCapabilities
+    ) -> [String: JSON] {
+        guard let combinator = object[combinatorKey] else { return object }
+        var output = object
+        output.removeValue(forKey: combinatorKey)
+
+        guard case .array(let options) = combinator, !options.isEmpty else {
+            output["type"] = .string("string")
+            collector.didFallback = true
+            collector.emit(
+                fieldPath: fieldPath,
+                code: "union.unsupported",
+                message: "\(combinatorKey) union is empty or invalid.",
+                severity: .error
+            )
+            return output
+        }
+
+        if let enumValues = extractConstantEnumValues(from: options) {
+            output["enum"] = .array(enumValues)
+            collector.emit(
+                fieldPath: fieldPath,
+                code: "union.collapsedToEnum",
+                message: "Collapsed \(combinatorKey) of constants to enum.",
+                severity: .warning
+            )
+            return output
+        }
+
+        guard let first = options.first else {
+            output["type"] = .string("string")
+            collector.didFallback = true
+            collector.emit(
+                fieldPath: fieldPath,
+                code: "union.unsupported",
+                message: "\(combinatorKey) union has no valid branches.",
+                severity: .error
+            )
+            return output
+        }
+
+        let firstNormalized = normalizeNode(
+            first,
+            fieldPath: "\(fieldPath).\(combinatorKey)[0]",
+            collector: &collector,
+            targetProviderCapabilities: targetProviderCapabilities
+        )
+
+        if case .object(let firstObject) = firstNormalized {
+            firstObject.forEach { output[$0.key] = $0.value }
+            collector.emit(
+                fieldPath: fieldPath,
+                code: "union.firstCandidate",
+                message: "Flattened unsupported \(combinatorKey) into first candidate.",
+                severity: .warning
+            )
+        } else {
+            output["type"] = .string("string")
+            collector.didFallback = true
+            collector.emit(
+                fieldPath: fieldPath,
+                code: "union.unsupported",
+                message: "\(combinatorKey) union first candidate is not an object schema.",
+                severity: .error
+            )
+        }
+        return output
+    }
+
+    private func extractConstantEnumValues(from options: [JSON]) -> [JSON]? {
+        var values: [JSON] = []
+        for option in options {
+            guard case .object(let branch) = option else { return nil }
+            if let const = branch["const"] {
+                values.append(const)
+                continue
+            }
+            if case .array(let enumArray) = branch["enum"], enumArray.count == 1 {
+                values.append(enumArray[0])
+                continue
+            }
+            return nil
+        }
+        return values
+    }
+
+    private func isBooleanJSON(_ value: JSON) -> Bool {
+        if case .boolean = value { return true }
+        return false
+    }
+
+    private func isObjectType(_ object: [String: JSON]) -> Bool {
+        if case .string(let type) = object["type"], type == "object" { return true }
+        if case .array(let types) = object["type"] {
+            return types.contains(where: { if case .string(let s) = $0 { return s == "object" } else { return false } })
+        }
+        return false
     }
 
     private static func makeSummary(schema: JSON, fingerprint: String) -> ToolSchemaSummary {
@@ -440,6 +679,16 @@ public extension ToolDefinition {
             "properties": .object(properties),
             "required": .array(required)
         ])
+    }
+
+    /// Prefers ``LLMRequestConfig/toolParameterSchemasByName`` when present; otherwise ``inferredSchemaJSON``.
+    func resolvedParameterSchema(in config: LLMRequestConfig) -> JSON {
+        config.toolParameterSchemasByName[name] ?? inferredSchemaJSON
+    }
+
+    /// Per-tool strict schema flag from ``LLMRequestConfig/toolSchemaStrictByName``.
+    func resolvedSchemaStrict(in config: LLMRequestConfig) -> Bool {
+        config.toolSchemaStrictByName[name] ?? false
     }
 }
 

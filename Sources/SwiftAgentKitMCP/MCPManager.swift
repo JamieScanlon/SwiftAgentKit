@@ -184,10 +184,11 @@ public actor MCPManager {
         for client in clients {
             let tools = await client.tools
             for tool in tools {
-                let schema = tool.inferredSchemaJSON
+                let rawSchema = await client.rawInputSchema(for: tool.name) ?? tool.inferredSchemaJSON
                 let normalized = normalizer.normalize(
-                    rawSchema: schema,
+                    rawSchema: rawSchema,
                     source: .mcp,
+                    toolName: tool.name,
                     targetProviderCapabilities: targetProviderCapabilities
                 )
                 descriptors.append(

@@ -11,7 +11,7 @@ import SwiftAgentKitAdapters
 import SwiftAgentKitA2A
 import SwiftAgentKit
 import SwiftAgentKitACP
-import SwiftAgentKitMCP
+@testable import SwiftAgentKitMCP
 import EasyJSON
 import MCP
 
@@ -514,6 +514,47 @@ import MCP
         #expect(result.success == false)
         #expect(result.content.isEmpty)
         #expect(result.error == "MCP tool not found or failed")
+    }
+
+    @Test("MCPToolProvider rawSchema forwards preserved MCP inputSchema")
+    func testMCPToolProviderRawSchema() async {
+        let complexSchema: JSON = .object([
+            "type": .string("object"),
+            "properties": .object([
+                "mode": .object([
+                    "anyOf": .array([
+                        .object(["const": .string("fast")]),
+                        .object(["const": .string("thorough")])
+                    ])
+                ])
+            ])
+        ])
+        let tool = ToolDefinition(
+            name: "search",
+            description: "Search",
+            parameters: [],
+            type: .mcpTool
+        )
+        let client = MCPClient(name: "test")
+        await client.installToolsForTesting(tools: [tool], inputSchemasByName: ["search": complexSchema])
+        let provider = MCPToolProvider(clients: [client])
+
+        let raw = await provider.rawSchema(for: tool)
+        guard case .object(let root) = raw,
+              case .object(let properties) = root["properties"],
+              case .object(let mode) = properties["mode"],
+              case .array = mode["anyOf"] else {
+            Issue.record("expected preserved anyOf in rawSchema")
+            return
+        }
+
+        let manager = ToolManager(providers: [provider])
+        let descriptors = await manager.allRegisteredToolsAsync()
+        guard let descriptor = descriptors.first(where: { $0.definition.name == "search" }) else {
+            Issue.record("expected search descriptor")
+            return
+        }
+        #expect(descriptor.normalizedSchema.report.normalizedVersion == "2")
     }
     
     // MARK: - MCPToolProvider Resource Content Tests

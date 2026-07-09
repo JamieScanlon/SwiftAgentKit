@@ -16,6 +16,10 @@ public struct LLMRequestConfig: Sendable {
     public let stream: Bool
     /// Available tools that can be used during processing
     public let availableTools: [ToolDefinition]
+    /// Provider-normalized JSON Schema per tool name. When present, adapters should prefer over inferred flat parameters.
+    public let toolParameterSchemasByName: [String: JSON]
+    /// Per-tool OpenAI strict flag (other adapters may ignore).
+    public let toolSchemaStrictByName: [String: Bool]
     /// Additional model-specific parameters
     public let additionalParameters: JSON?
     /// How tool calls are selected when ``availableTools`` is non-empty.
@@ -33,6 +37,8 @@ public struct LLMRequestConfig: Sendable {
         topP: Double? = nil,
         stream: Bool = false,
         availableTools: [ToolDefinition] = [],
+        toolParameterSchemasByName: [String: JSON] = [:],
+        toolSchemaStrictByName: [String: Bool] = [:],
         additionalParameters: JSON? = nil,
         toolInvocationPolicy: ToolInvocationPolicy = .automatic,
         responseFormat: ResponseFormatRequest? = nil,
@@ -44,6 +50,8 @@ public struct LLMRequestConfig: Sendable {
         self.topP = topP
         self.stream = stream
         self.availableTools = availableTools
+        self.toolParameterSchemasByName = toolParameterSchemasByName
+        self.toolSchemaStrictByName = toolSchemaStrictByName
         self.additionalParameters = additionalParameters
         self.toolInvocationPolicy = toolInvocationPolicy
         self.responseFormat = responseFormat
@@ -208,6 +216,8 @@ public extension LLMProtocol {
             topP: config.topP,
             stream: true,
             availableTools: config.availableTools,
+            toolParameterSchemasByName: config.toolParameterSchemasByName,
+            toolSchemaStrictByName: config.toolSchemaStrictByName,
             additionalParameters: config.additionalParameters,
             toolInvocationPolicy: config.toolInvocationPolicy,
             responseFormat: config.responseFormat,

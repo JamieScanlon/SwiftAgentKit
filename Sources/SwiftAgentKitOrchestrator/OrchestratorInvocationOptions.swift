@@ -22,6 +22,10 @@ public struct OrchestratorInvocationOptions: Sendable {
     public var maxCorrectionRetries: Int?
     public var correctionMessage: String?
     public var correctionRole: MessageRole?
+    /// Provider-normalized JSON Schema per tool name for LLM dispatch.
+    public var toolParameterSchemasByName: [String: JSON]?
+    /// Per-tool OpenAI strict schema flag for LLM dispatch.
+    public var toolSchemaStrictByName: [String: Bool]?
 
     public static let `default` = OrchestratorInvocationOptions()
 
@@ -38,7 +42,9 @@ public struct OrchestratorInvocationOptions: Sendable {
         rejectAssistantTurnWithNoToolCallsWhenToolsAvailable: Bool? = nil,
         maxCorrectionRetries: Int? = nil,
         correctionMessage: String? = nil,
-        correctionRole: MessageRole? = nil
+        correctionRole: MessageRole? = nil,
+        toolParameterSchemasByName: [String: JSON]? = nil,
+        toolSchemaStrictByName: [String: Bool]? = nil
     ) {
         self.additionalParameters = additionalParameters
         self.systemPromptMetadata = systemPromptMetadata
@@ -53,5 +59,7 @@ public struct OrchestratorInvocationOptions: Sendable {
         self.maxCorrectionRetries = maxCorrectionRetries
         self.correctionMessage = correctionMessage
         self.correctionRole = correctionRole
+        self.toolParameterSchemasByName = toolParameterSchemasByName
+        self.toolSchemaStrictByName = toolSchemaStrictByName
     }
 }

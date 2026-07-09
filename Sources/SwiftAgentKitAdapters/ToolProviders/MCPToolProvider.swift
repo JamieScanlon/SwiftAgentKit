@@ -163,4 +163,13 @@ public struct MCPToolProvider: ToolProvider {
     public func parallelSafety(for toolCall: ToolCall) async -> ToolParallelSafety {
         .mutating
     }
-} 
+
+    public func rawSchema(for definition: ToolDefinition) async -> JSON? {
+        for client in clients {
+            if let schema = await client.rawInputSchema(for: definition.name) {
+                return schema
+            }
+        }
+        return nil
+    }
+}

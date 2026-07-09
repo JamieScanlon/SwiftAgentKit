@@ -2200,6 +2200,38 @@ struct StaticPreDispatchPolicyEvaluator: ToolPreDispatchPolicyEvaluating {
         #expect(configs.first?.toolInvocationPolicy == .required)
     }
 
+    @Test("updateConversation forwards tool schema maps from invocation options")
+    func testToolSchemaMapsForwarded() async throws {
+        let configCapture = ConfigCapture()
+        let capturing = CapturingMockLLM(
+            logger: Logger(label: "schema-maps"),
+            toolCallsToReturn: [],
+            configCapture: configCapture
+        )
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: capturing,
+            config: OrchestratorConfig(streamingEnabled: false)
+        )
+        let schema: JSON = .object([
+            "type": .string("object"),
+            "properties": .object([:])
+        ])
+        let messageStream = await orchestrator.messageStream
+        try await drainPublishedMessagesWhileRunning(messageStream) {
+            try await orchestrator.updateConversation(
+                [Message(id: UUID(), role: .user, content: "Hi")],
+                availableTools: [],
+                options: OrchestratorInvocationOptions(
+                    toolParameterSchemasByName: ["search": schema],
+                    toolSchemaStrictByName: ["search": true]
+                )
+            )
+        }
+        let configs = await configCapture.getConfigs()
+        #expect(configs.first?.toolParameterSchemasByName["search"] != nil)
+        #expect(configs.first?.toolSchemaStrictByName["search"] == true)
+    }
+
     @Test("maxAgenticStepsPerUpdate stops runaway tool loops")
     func testMaxAgenticStepsPerUpdate() async throws {
         let toolCall = ToolCall(

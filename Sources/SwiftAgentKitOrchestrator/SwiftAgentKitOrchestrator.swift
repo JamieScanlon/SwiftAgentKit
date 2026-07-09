@@ -716,6 +716,8 @@ public actor SwiftAgentKitOrchestrator {
         let maxCorr = options.maxCorrectionRetries ?? config.maxCorrectionRetries
         let msg = options.correctionMessage ?? config.correctionMessage
         let role = options.correctionRole ?? config.correctionRole
+        let toolParameterSchemas = options.toolParameterSchemasByName ?? [:]
+        let toolSchemaStrict = options.toolSchemaStrictByName ?? [:]
         return OrchestratorInvocationContext(
             mergedAdditionalParameters: merged,
             toolInvocationPolicy: policy,
@@ -728,7 +730,9 @@ public actor SwiftAgentKitOrchestrator {
             rejectProseWithoutTools: reject,
             maxCorrectionRetries: maxCorr,
             correctionMessage: msg,
-            correctionRole: role
+            correctionRole: role,
+            toolParameterSchemasByName: toolParameterSchemas,
+            toolSchemaStrictByName: toolSchemaStrict
         )
     }
 
@@ -762,6 +766,8 @@ public actor SwiftAgentKitOrchestrator {
             topP: config.topP,
             stream: config.streamingEnabled,
             availableTools: availableTools,
+            toolParameterSchemasByName: context.toolParameterSchemasByName,
+            toolSchemaStrictByName: context.toolSchemaStrictByName,
             additionalParameters: context.mergedAdditionalParameters,
             toolInvocationPolicy: context.toolInvocationPolicy
         )
@@ -1763,6 +1769,8 @@ private struct OrchestratorInvocationContext: Sendable {
     let maxCorrectionRetries: Int
     let correctionMessage: String
     let correctionRole: MessageRole
+    let toolParameterSchemasByName: [String: JSON]
+    let toolSchemaStrictByName: [String: Bool]
 }
 
 private struct ToolExecutionBatchResult: Sendable {
