@@ -55,6 +55,8 @@ public struct OrchestratorConfig: Sendable {
     public let assistantPersistenceMode: AssistantPersistenceMode
     /// When true, tool batches classified as parallel-safe may run concurrently.
     public let parallelToolDispatchEnabled: Bool
+    /// Maximum concurrent tool executions admitted per parallel stage (clamped to at least 1).
+    public let maxParallelInFlightPerStage: Int
     /// Optional custom policy evaluator for selecting serial vs parallel mode for each tool batch.
     public let toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)?
     /// Optional explicit planner mode for tool batches (`nil` keeps legacy evaluator behavior).
@@ -106,6 +108,7 @@ public struct OrchestratorConfig: Sendable {
         maxAgenticStepsPerUpdate: Int? = nil,
         assistantPersistenceMode: AssistantPersistenceMode = .immediate,
         parallelToolDispatchEnabled: Bool = false,
+        maxParallelInFlightPerStage: Int = 10,
         toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)? = nil,
         dispatchPlannerMode: ToolDispatchPlannerMode? = nil,
         preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)? = nil,
@@ -129,6 +132,7 @@ public struct OrchestratorConfig: Sendable {
         self.maxAgenticStepsPerUpdate = maxAgenticStepsPerUpdate
         self.assistantPersistenceMode = assistantPersistenceMode
         self.parallelToolDispatchEnabled = parallelToolDispatchEnabled
+        self.maxParallelInFlightPerStage = max(1, maxParallelInFlightPerStage)
         self.toolDispatchPolicyEvaluator = toolDispatchPolicyEvaluator
         self.dispatchPlannerMode = dispatchPlannerMode
         self.preDispatchPolicyEvaluator = preDispatchPolicyEvaluator
@@ -155,6 +159,7 @@ public struct OrchestratorConfig: Sendable {
         maxAgenticStepsPerUpdate: Int? = nil,
         assistantPersistenceMode: AssistantPersistenceMode = .immediate,
         parallelToolDispatchEnabled: Bool = false,
+        maxParallelInFlightPerStage: Int = 10,
         toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)? = nil,
         dispatchPlannerMode: ToolDispatchPlannerMode? = nil,
         preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)? = nil,
@@ -179,6 +184,7 @@ public struct OrchestratorConfig: Sendable {
             maxAgenticStepsPerUpdate: maxAgenticStepsPerUpdate,
             assistantPersistenceMode: assistantPersistenceMode,
             parallelToolDispatchEnabled: parallelToolDispatchEnabled,
+            maxParallelInFlightPerStage: maxParallelInFlightPerStage,
             toolDispatchPolicyEvaluator: toolDispatchPolicyEvaluator,
             dispatchPlannerMode: dispatchPlannerMode,
             preDispatchPolicyEvaluator: preDispatchPolicyEvaluator,
@@ -206,6 +212,7 @@ public struct OrchestratorConfig: Sendable {
         maxAgenticStepsPerUpdate: Int? = nil,
         assistantPersistenceMode: AssistantPersistenceMode = .immediate,
         parallelToolDispatchEnabled: Bool = false,
+        maxParallelInFlightPerStage: Int = 10,
         toolDispatchPolicyEvaluator: (any ToolDispatchPolicyEvaluating)? = nil,
         dispatchPlannerMode: ToolDispatchPlannerMode? = nil,
         preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)? = nil,
@@ -230,6 +237,7 @@ public struct OrchestratorConfig: Sendable {
             maxAgenticStepsPerUpdate: maxAgenticStepsPerUpdate,
             assistantPersistenceMode: assistantPersistenceMode,
             parallelToolDispatchEnabled: parallelToolDispatchEnabled,
+            maxParallelInFlightPerStage: maxParallelInFlightPerStage,
             toolDispatchPolicyEvaluator: toolDispatchPolicyEvaluator,
             dispatchPlannerMode: dispatchPlannerMode,
             preDispatchPolicyEvaluator: preDispatchPolicyEvaluator,
@@ -636,20 +644,28 @@ public actor SwiftAgentKitOrchestrator {
     public func invokeTools(_ request: ToolBatchInvocationRequest) async -> ToolBatchInvocationOutcome {
         let normalizedRequests = request.requests.map(normalizeInvocationRequest(_:))
         let plannerMode = request.plannerMode ?? config.dispatchPlannerMode ?? .serial
+        let parallelEnabled = request.parallelToolDispatchEnabled ?? config.parallelToolDispatchEnabled
+        let cap = max(1, request.maxParallelInFlightPerStage ?? config.maxParallelInFlightPerStage)
         let dispatchPlan = await makeDispatchPlan(
             requests: normalizedRequests,
             plannerMode: plannerMode,
             explicitSafety: [:],
-            parallelEnabledHint: config.parallelToolDispatchEnabled
+            parallelEnabledHint: parallelEnabled
         )
         let invocationRunID = request.runID ?? "direct-\(UUID().uuidString)"
+        let sharedContext = ToolDispatchSharedContext()
         var outcomesByCallID: [String: ToolInvocationOutcome] = [:]
         for stage in dispatchPlan.stages {
             let stageRequests = normalizedRequests.filter { stage.toolCallIDs.contains($0.toolCallID) }
-            if stage.mode == .parallel {
-                let parallelResults = await withTaskGroup(of: (String, ToolInvocationOutcome).self) { group in
-                    for stageRequest in stageRequests {
-                        group.addTask { [self] in
+            let callOrder = stageRequests.map(\.toolCallID)
+            let stageOutcomes: [(String, ToolInvocationOutcome)] = await sharedContext.withCurrent {
+                await ToolContextModifierQueue.withCollector { collector in
+                    let results: [(String, ToolInvocationOutcome)]
+                    if stage.mode == .parallel {
+                        results = await runBoundedParallel(
+                            items: stageRequests,
+                            cap: cap
+                        ) { [self] stageRequest in
                             let outcome = await executeInvocationRequest(
                                 stageRequest,
                                 dispatchMode: .parallel,
@@ -661,26 +677,33 @@ public actor SwiftAgentKitOrchestrator {
                             )
                             return (stageRequest.toolCallID, outcome)
                         }
+                    } else {
+                        var serialResults: [(String, ToolInvocationOutcome)] = []
+                        serialResults.reserveCapacity(stageRequests.count)
+                        for stageRequest in stageRequests {
+                            let outcome = await executeInvocationRequest(
+                                stageRequest,
+                                dispatchMode: .serial,
+                                runID: .orchestratorSession(UUID()),
+                                invocationRunID: invocationRunID,
+                                source: request.source,
+                                conversationID: request.conversationID,
+                                batchDiagnostics: dispatchPlan.diagnostics
+                            )
+                            serialResults.append((stageRequest.toolCallID, outcome))
+                        }
+                        results = serialResults
                     }
-                    var collected: [(String, ToolInvocationOutcome)] = []
-                    for await value in group {
-                        collected.append(value)
-                    }
-                    return collected
-                }
-                parallelResults.forEach { outcomesByCallID[$0.0] = $0.1 }
-            } else {
-                for stageRequest in stageRequests {
-                    outcomesByCallID[stageRequest.toolCallID] = await executeInvocationRequest(
-                        stageRequest,
-                        dispatchMode: .serial,
-                        runID: .orchestratorSession(UUID()),
-                        invocationRunID: invocationRunID,
-                        source: request.source,
-                        conversationID: request.conversationID,
-                        batchDiagnostics: dispatchPlan.diagnostics
+                    let orderedModifiers = ToolContextModifierQueue.sortedForCallOrder(
+                        collector.drain(),
+                        callOrder: callOrder
                     )
+                    sharedContext.applyAll(orderedModifiers)
+                    return results
                 }
+            }
+            for (toolCallID, outcome) in stageOutcomes {
+                outcomesByCallID[toolCallID] = outcome
             }
         }
         let ordered = normalizedRequests.map { request in
@@ -709,6 +732,7 @@ public actor SwiftAgentKitOrchestrator {
         let assistantMode = options.assistantPersistenceMode ?? config.assistantPersistenceMode
         let parallelEnabled = options.parallelToolDispatchEnabled ?? config.parallelToolDispatchEnabled
         let plannerMode = options.dispatchPlannerMode ?? config.dispatchPlannerMode
+        let maxParallelInFlight = max(1, options.maxParallelInFlightPerStage ?? config.maxParallelInFlightPerStage)
         let safetyMetadata = options.toolParallelSafetyMetadata ?? [:]
         let preDispatchPolicy = options.preDispatchPolicyEvaluator ?? config.preDispatchPolicyEvaluator
         let maxSteps = options.maxAgenticStepsPerUpdate ?? config.maxAgenticStepsPerUpdate
@@ -723,6 +747,7 @@ public actor SwiftAgentKitOrchestrator {
             toolInvocationPolicy: policy,
             assistantPersistenceMode: assistantMode,
             parallelToolDispatchEnabled: parallelEnabled,
+            maxParallelInFlightPerStage: maxParallelInFlight,
             dispatchPlannerMode: plannerMode,
             toolParallelSafetyMetadata: safetyMetadata,
             preDispatchPolicyEvaluator: preDispatchPolicy,
@@ -732,7 +757,8 @@ public actor SwiftAgentKitOrchestrator {
             correctionMessage: msg,
             correctionRole: role,
             toolParameterSchemasByName: toolParameterSchemas,
-            toolSchemaStrictByName: toolSchemaStrict
+            toolSchemaStrictByName: toolSchemaStrict,
+            sharedToolContext: ToolDispatchSharedContext()
         )
     }
 
@@ -1294,16 +1320,26 @@ public actor SwiftAgentKitOrchestrator {
         runID: AgenticLoopID,
         context: OrchestratorInvocationContext
     ) async -> ToolExecutionBatchResult {
-        var aggregated: [LLMResponse] = []
-        var pendingCount = 0
-        for toolCall in toolCalls {
-            let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID, context: context)
-            aggregated.append(contentsOf: outcome.responses)
-            if outcome.pendingAccepted {
-                pendingCount += 1
+        let callOrder = toolCalls.compactMap(\.id)
+        return await context.sharedToolContext.withCurrent {
+            await ToolContextModifierQueue.withCollector { collector in
+                var aggregated: [LLMResponse] = []
+                var pendingCount = 0
+                for toolCall in toolCalls {
+                    let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID, context: context)
+                    aggregated.append(contentsOf: outcome.responses)
+                    if outcome.pendingAccepted {
+                        pendingCount += 1
+                    }
+                }
+                let orderedModifiers = ToolContextModifierQueue.sortedForCallOrder(
+                    collector.drain(),
+                    callOrder: callOrder
+                )
+                context.sharedToolContext.applyAll(orderedModifiers)
+                return ToolExecutionBatchResult(responses: aggregated, pendingCount: pendingCount)
             }
         }
-        return ToolExecutionBatchResult(responses: aggregated, pendingCount: pendingCount)
     }
 
     private func executeToolCallsInParallel(
@@ -1312,24 +1348,61 @@ public actor SwiftAgentKitOrchestrator {
         runID: AgenticLoopID,
         context: OrchestratorInvocationContext
     ) async -> ToolExecutionBatchResult {
-        let indexed = await withTaskGroup(of: (Int, SingleToolExecutionOutcome).self) { group in
-            for (index, toolCall) in toolCalls.enumerated() {
-                group.addTask { [self] in
-                    let outcome = await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID, context: context)
-                    return (index, outcome)
+        let callOrder = toolCalls.compactMap(\.id)
+        return await context.sharedToolContext.withCurrent {
+            await ToolContextModifierQueue.withCollector { collector in
+                let outcomes = await runBoundedParallel(
+                    items: toolCalls,
+                    cap: context.maxParallelInFlightPerStage
+                ) { [self] toolCall in
+                    await executeSingleToolCall(toolCall, dispatchMode: dispatchMode, runID: runID, context: context)
+                }
+
+                let responses = outcomes.flatMap(\.responses)
+                let pendingCount = outcomes.filter(\.pendingAccepted).count
+                let orderedModifiers = ToolContextModifierQueue.sortedForCallOrder(
+                    collector.drain(),
+                    callOrder: callOrder
+                )
+                context.sharedToolContext.applyAll(orderedModifiers)
+                return ToolExecutionBatchResult(responses: responses, pendingCount: pendingCount)
+            }
+        }
+    }
+
+    /// Admit at most `cap` concurrent tasks; as each finishes, start the next pending item.
+    private func runBoundedParallel<Item: Sendable, Result: Sendable>(
+        items: [Item],
+        cap: Int,
+        work: @escaping @Sendable (Item) async -> Result
+    ) async -> [Result] {
+        guard !items.isEmpty else { return [] }
+        let limit = max(1, min(cap, items.count))
+        return await withTaskGroup(of: (Int, Result).self) { group in
+            var nextIndex = 0
+            var collected: [(Int, Result)] = []
+            collected.reserveCapacity(items.count)
+
+            func admitNext() {
+                guard nextIndex < items.count else { return }
+                let index = nextIndex
+                let item = items[index]
+                nextIndex += 1
+                group.addTask {
+                    let result = await work(item)
+                    return (index, result)
                 }
             }
-            var collected: [(Int, SingleToolExecutionOutcome)] = []
-            for await item in group {
-                collected.append(item)
-            }
-            return collected
-        }
 
-        let sorted = indexed.sorted { $0.0 < $1.0 }.map(\.1)
-        let responses = sorted.flatMap(\.responses)
-        let pendingCount = sorted.filter(\.pendingAccepted).count
-        return ToolExecutionBatchResult(responses: responses, pendingCount: pendingCount)
+            for _ in 0..<limit {
+                admitNext()
+            }
+            while let finished = await group.next() {
+                collected.append(finished)
+                admitNext()
+            }
+            return collected.sorted { $0.0 < $1.0 }.map(\.1)
+        }
     }
 
     private func executeSingleToolCall(
@@ -1761,6 +1834,7 @@ private struct OrchestratorInvocationContext: Sendable {
     let toolInvocationPolicy: ToolInvocationPolicy
     let assistantPersistenceMode: AssistantPersistenceMode
     let parallelToolDispatchEnabled: Bool
+    let maxParallelInFlightPerStage: Int
     let dispatchPlannerMode: ToolDispatchPlannerMode?
     let toolParallelSafetyMetadata: [ToolCallID: ToolParallelSafety]
     let preDispatchPolicyEvaluator: (any ToolPreDispatchPolicyEvaluating)?
@@ -1771,6 +1845,7 @@ private struct OrchestratorInvocationContext: Sendable {
     let correctionRole: MessageRole
     let toolParameterSchemasByName: [String: JSON]
     let toolSchemaStrictByName: [String: Bool]
+    let sharedToolContext: ToolDispatchSharedContext
 }
 
 private struct ToolExecutionBatchResult: Sendable {
