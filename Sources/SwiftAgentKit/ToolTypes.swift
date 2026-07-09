@@ -2,6 +2,23 @@ import Foundation
 import EasyJSON
 import Logging
 
+private struct NormalizationDiagnosticFingerprint: Hashable {
+    let toolName: String
+    let source: ToolRegistrationSource
+    let code: String
+}
+
+private enum NormalizationDiagnosticDeduper {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var seenFingerprints: Set<NormalizationDiagnosticFingerprint> = []
+
+    static func shouldLog(_ fingerprint: NormalizationDiagnosticFingerprint) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return seenFingerprints.insert(fingerprint).inserted
+    }
+}
+
 private struct DescriptorValidationWarningFingerprint: Hashable {
     let toolName: String
     let source: ToolRegistrationSource
@@ -210,7 +227,14 @@ public struct ToolManager: Sendable {
                 let parallelHint = await provider.executionParallelHint(for: tool)
                 let tags = await provider.policyTags(for: tool)
                 let rawSchema = await provider.rawSchema(for: tool) ?? tool.inferredSchemaJSON
-                let normalized = schemaNormalizer.normalize(rawSchema: rawSchema, source: source)
+                let normalized = schemaNormalizer.normalize(
+                    rawSchema: rawSchema,
+                    source: source,
+                    toolName: tool.name
+                )
+                for diagnostic in normalized.report.diagnostics {
+                    logNormalizationDiagnostic(diagnostic, source: source)
+                }
                 collected.append(
                     RegisteredToolDescriptor(
                         definition: tool,
@@ -253,8 +277,12 @@ public struct ToolManager: Sendable {
         let normalized = schemaNormalizer.normalize(
             rawSchema: schema,
             source: source,
+            toolName: definition.name,
             targetProviderCapabilities: targetProviderCapabilities
         )
+        for diagnostic in normalized.report.diagnostics {
+            logNormalizationDiagnostic(diagnostic, source: source)
+        }
         return register(RegisteredToolDescriptor(
             definition: definition,
             source: source,
@@ -521,6 +549,31 @@ public struct ToolManager: Sendable {
                 ("overshadowedProvider", .string(overshadowedProvider))
             )
         )
+    }
+
+    private func logNormalizationDiagnostic(
+        _ diagnostic: ToolSchemaNormalizationDiagnostic,
+        source: ToolRegistrationSource
+    ) {
+        let fingerprint = NormalizationDiagnosticFingerprint(
+            toolName: diagnostic.toolName,
+            source: source,
+            code: diagnostic.code
+        )
+        guard NormalizationDiagnosticDeduper.shouldLog(fingerprint) else { return }
+        let metadata = SwiftAgentKitLogging.metadata(
+            ("toolName", .string(diagnostic.toolName)),
+            ("source", .string(source.rawValue)),
+            ("fieldPath", .string(diagnostic.fieldPath)),
+            ("code", .string(diagnostic.code)),
+            ("message", .string(diagnostic.message))
+        )
+        switch diagnostic.severity {
+        case .warning:
+            logger.warning("Tool schema normalization diagnostic", metadata: metadata)
+        case .error:
+            logger.error("Tool schema normalization diagnostic", metadata: metadata)
+        }
     }
 
     private func validateDescriptors(_ descriptors: [RegisteredToolDescriptor]) -> [RegisteredToolDescriptor] {

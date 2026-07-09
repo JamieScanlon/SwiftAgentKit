@@ -317,15 +317,23 @@ struct A2AManagerTests {
     }
 
     @Test("registeredToolDescriptors returns canonical typed descriptors for A2A tools")
-    func testRegisteredToolDescriptorsForA2A() async throws {
+    func testRegisteredToolDescriptorsForA2A() async {
         let manager = A2AManager()
         let card = createMockAgentCard(name: "DescriptorAgent")
         let client = MockA2AStreamClient(agentCard: card, events: [])
-        try await manager.initialize(clients: [client])
+        do {
+            try await manager.initialize(clients: [client])
+        } catch {
+            Issue.record("initialize failed: \(error)")
+            return
+        }
 
         let descriptors = await manager.registeredToolDescriptors()
         #expect(descriptors.count == 1)
-        let descriptor = try #require(descriptors.first)
+        guard let descriptor = descriptors.first else {
+            Issue.record("expected one descriptor")
+            return
+        }
         #expect(descriptor.definition.name == "DescriptorAgent")
         #expect(descriptor.source == .a2a)
         #expect(descriptor.effectClass == .mutating)

@@ -1935,9 +1935,14 @@ extension ChatStreamResult.Choice.ChoiceDelta.ChoiceDeltaToolCall {
 
 extension ToolDefinition {
     
-    func toOpenAIFunction() -> ChatQuery.ChatCompletionToolParam.FunctionDefinition {
+    func toOpenAIFunction(
+        parameterSchema: JSON? = nil,
+        strict: Bool = false
+    ) -> ChatQuery.ChatCompletionToolParam.FunctionDefinition {
         var params: JSONSchema?
-        if parameters.isEmpty == false {
+        if let parameterSchema {
+            params = Self.openAIJSONSchema(from: parameterSchema)
+        } else if parameters.isEmpty == false {
             var props: Dictionary<String, AnyJSONDocument> = Dictionary<String, AnyJSONDocument>()
             for p in parameters {
                 props[p.name] = .init(["type": p.type])
@@ -1961,8 +1966,36 @@ extension ToolDefinition {
             name: name,
             description: description,
             parameters: params,
-            strict: false
+            strict: strict
         )
+    }
+
+    func toOpenAIFunction(config: LLMRequestConfig) -> ChatQuery.ChatCompletionToolParam.FunctionDefinition {
+        let schema = config.toolParameterSchemasByName[name]
+        let strict = config.toolSchemaStrictByName[name] ?? false
+        return toOpenAIFunction(parameterSchema: schema, strict: strict)
+    }
+
+    private static func openAIJSONSchema(from json: JSON) -> JSONSchema? {
+        guard case .object(let object) = json else { return nil }
+        return .object(object.mapValues { anyJSONDocument(from: $0) })
+    }
+
+    private static func anyJSONDocument(from json: JSON) -> AnyJSONDocument {
+        switch json {
+        case .boolean(let value):
+            return .init(value)
+        case .integer(let value):
+            return .init(value)
+        case .double(let value):
+            return .init(Decimal(value))
+        case .string(let value):
+            return .init(value)
+        case .array(let values):
+            return .init(values.map { anyJSONDocument(from: $0) })
+        case .object(let object):
+            return .init(object.mapValues { anyJSONDocument(from: $0) })
+        }
     }
 }
 

@@ -15,6 +15,8 @@ import EasyJSON
         #expect(config.topP == nil)
         #expect(config.stream == false)
         #expect(config.availableTools.isEmpty)
+        #expect(config.toolParameterSchemasByName.isEmpty)
+        #expect(config.toolSchemaStrictByName.isEmpty)
         #expect(config.additionalParameters == nil)
         #expect(config.toolInvocationPolicy == .automatic)
     }
@@ -769,9 +771,59 @@ import EasyJSON
         #expect(streaming.toolInvocationPolicy == base.toolInvocationPolicy)
         #expect(streaming.parallelToolCalls == base.parallelToolCalls)
         #expect(streaming.reasoningEffort == base.reasoningEffort)
+        #expect(streaming.toolParameterSchemasByName.isEmpty)
+        #expect(streaming.toolSchemaStrictByName.isEmpty)
         guard case .jsonObject? = base.responseFormat, case .jsonObject? = streaming.responseFormat else {
             Issue.record("expected jsonObject responseFormat forwarded")
             return
         }
+    }
+
+    @Test("createStreamingConfig forwards tool schema maps")
+    func testCreateStreamingConfigForwardsToolSchemaMaps() async throws {
+        struct StubLLM: LLMProtocol {
+            func getModelName() -> String { "stub" }
+            func getCapabilities() -> [LLMCapability] { [.completion] }
+            func send(_ messages: [Message], config: LLMRequestConfig) async throws -> LLMResponse {
+                .complete(content: "")
+            }
+            func stream(_ messages: [Message], config: LLMRequestConfig) -> AsyncThrowingStream<StreamResult<LLMResponse, LLMResponse>, Error> {
+                AsyncThrowingStream { $0.finish() }
+            }
+        }
+
+        let schema: JSON = .object(["type": .string("object"), "properties": .object([:])])
+        let base = LLMRequestConfig(
+            toolParameterSchemasByName: ["search": schema],
+            toolSchemaStrictByName: ["search": true]
+        )
+        let streaming = StubLLM().createStreamingConfig(from: base)
+        #expect(streaming.toolParameterSchemasByName["search"] != nil)
+        #expect(streaming.toolSchemaStrictByName["search"] == true)
+    }
+
+    @Test("resolvedParameterSchema prefers config map over inferred schema")
+    func testResolvedParameterSchemaPrefersMap() {
+        let tool = ToolDefinition(
+            name: "search",
+            description: "Search",
+            parameters: [.init(name: "q", description: "query", type: "string", required: true)],
+            type: .function
+        )
+        let customSchema: JSON = .object([
+            "type": .string("object"),
+            "properties": .object([
+                "q": .object(["type": .string("string"), "minLength": .integer(1)])
+            ])
+        ])
+        let config = LLMRequestConfig(toolParameterSchemasByName: ["search": customSchema])
+        guard case .object(let resolvedRoot) = tool.resolvedParameterSchema(in: config),
+              case .object(let props) = resolvedRoot["properties"],
+              case .object(let qSchema) = props["q"] else {
+            Issue.record("expected custom schema from map")
+            return
+        }
+        #expect(qSchema["minLength"] != nil)
+        #expect(tool.resolvedSchemaStrict(in: LLMRequestConfig(toolSchemaStrictByName: ["search": true])) == true)
     }
 } 
