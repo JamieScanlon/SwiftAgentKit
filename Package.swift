@@ -93,8 +93,13 @@ let package = Package(
         // Optional dependencies for specific modules
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
         
-        // MCP dependency (0.12+ Tool.Content uses text/image/audio annotations and _meta)
-        .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", from: "0.12.0"),
+        // MCP dependency (0.12+ Tool.Content uses text/image/audio annotations and _meta).
+        // Temporarily pin JamieScanlon fork with monotonic integer ID.random (mcpbridge compatibility)
+        // until https://github.com/modelcontextprotocol/swift-sdk/pull/259 lands in a release.
+        .package(
+            url: "https://github.com/JamieScanlon/swift-sdk.git",
+            revision: "53572f4780e6659ba9bd2cac334189a2e6cbdecb"
+        ),
         
         // OpenAI dependency
         .package(url: "https://github.com/MacPaw/OpenAI.git", from: "0.4.5"),
@@ -338,6 +343,7 @@ let package = Package(
                 "SwiftAgentKitMCP",
                 "SwiftAgentKit",
                 .product(name: "EasyJSON", package: "EasyJSON"),
+                .product(name: "MCP", package: "swift-sdk"),
             ]
         ),
         .testTarget(

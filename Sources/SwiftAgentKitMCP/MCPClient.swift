@@ -102,24 +102,14 @@ public actor MCPClient {
         let newClient = Client(name: name, version: version, configuration: configuration)
         
         do {
-            // Connect the client to the transport with timeout
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                // Add the connection task
-                group.addTask {
-                    try await newClient.connect(transport: transport)
-                }
-                
-                // Add the timeout task
-                group.addTask {
-                    try await Task.sleep(for: .seconds(self.connectionTimeout))
-                    throw MCPClientError.connectionTimeout(self.connectionTimeout)
-                }
-                
-                // Wait for either connection or timeout
-                try await group.next()
-                
-                // Cancel remaining tasks
-                group.cancelAll()
+            // Race connect against a wall-clock timeout. On timeout we must call
+            // `disconnect()` so SDK pending-request continuations resume; Task
+            // cancellation alone cannot unblock `sendAndAwait` waiting for a response.
+            _ = try await withTimeout(
+                seconds: connectionTimeout,
+                onTimeout: { await newClient.disconnect() }
+            ) {
+                try await newClient.connect(transport: transport)
             }
             
             // Store the connected client
@@ -446,8 +436,13 @@ public actor MCPClient {
         guard let client = client else {
             throw MCPClientError.notConnected
         }
-        // List available tools
-        let (tools, _) = try await client.listTools()
+        // Bound tools/list so a silent server fails closed (same wall clock as connect).
+        let (tools, _) = try await withTimeout(
+            seconds: connectionTimeout,
+            onTimeout: { await client.disconnect() }
+        ) {
+            try await client.listTools()
+        }
         var schemasByName: [String: JSON] = [:]
         for tool in tools {
             schemasByName[tool.name] = MCPValueJSONConversion.convert(tool.inputSchema)
@@ -653,6 +648,58 @@ public actor MCPClient {
     
     private var client: Client?
     private var capabilities: Client.Capabilities?
+
+    /// Runs `operation` against a wall-clock timeout.
+    ///
+    /// When the timer wins, `onTimeout` runs (typically `Client.disconnect()` so hung
+    /// JSON-RPC waiters resume) and ``MCPClientError/connectionTimeout`` is thrown.
+    /// Preferring an explicit timed-out result avoids racing a disconnect-induced
+    /// connect failure ahead of the timeout error.
+    private func withTimeout<T: Sendable>(
+        seconds: TimeInterval,
+        onTimeout: @Sendable @escaping () async -> Void,
+        operation: @Sendable @escaping () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: TimeoutRaceResult<T>.self) { group in
+            group.addTask {
+                .success(try await operation())
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                return .timedOut
+            }
+
+            let first: TimeoutRaceResult<T>
+            do {
+                guard let value = try await group.next() else {
+                    throw MCPClientError.connectionFailed("Timeout race produced no result")
+                }
+                first = value
+            } catch {
+                await onTimeout()
+                group.cancelAll()
+                while let _ = try? await group.next() {}
+                throw error
+            }
+
+            switch first {
+            case .success(let value):
+                group.cancelAll()
+                return value
+            case .timedOut:
+                await onTimeout()
+                group.cancelAll()
+                // Drain the cancelled/unblocked operation so the task group can exit.
+                while let _ = try? await group.next() {}
+                throw MCPClientError.connectionTimeout(seconds)
+            }
+        }
+    }
+}
+
+private enum TimeoutRaceResult<T: Sendable>: Sendable {
+    case success(T)
+    case timedOut
 }
 
 
