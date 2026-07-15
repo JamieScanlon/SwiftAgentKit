@@ -9,6 +9,7 @@ import Testing
 import Foundation
 import SwiftAgentKitMCP
 import EasyJSON
+import MCP
 
 @Suite struct MCPClientTests {
     
@@ -484,4 +485,129 @@ import EasyJSON
             return
         }
     }
-} 
+
+    // MARK: - Timeout fail-closed (silent server)
+
+    @Test("connect times out when initialize never receives a response")
+    func testConnectTimeoutWhenServerSilent() async throws {
+        let clientToServer = Pipe()
+        let serverToClient = Pipe()
+        let timeout: TimeInterval = 0.4
+        let client = MCPClient(
+            name: "silent-server-client",
+            version: "1.0.0",
+            connectionTimeout: timeout
+        )
+
+        let start = ContinuousClock.now
+        var timedOut = false
+        do {
+            try await client.connect(inPipe: clientToServer, outPipe: serverToClient)
+            #expect(Bool(false), "Expected connectionTimeout against a silent server")
+        } catch let error as MCPClient.MCPClientError {
+            if case .connectionTimeout(let elapsed) = error {
+                timedOut = true
+                #expect(elapsed == timeout)
+            } else {
+                Issue.record("Expected connectionTimeout, got \(error)")
+            }
+        } catch {
+            Issue.record("Expected MCPClientError.connectionTimeout, got \(error)")
+        }
+
+        let elapsed = ContinuousClock.now - start
+        #expect(timedOut)
+        // Must fail closed quickly — not hang far past the configured timeout.
+        #expect(elapsed < .seconds(timeout + 2.0))
+        #expect(await client.state == .notConnected)
+    }
+
+    @Test("getTools times out when tools/list never receives a response")
+    func testGetToolsTimeoutWhenToolsListSilent() async throws {
+        let clientToServer = Pipe()
+        let serverToClient = Pipe()
+        let timeout: TimeInterval = 0.5
+        let client = MCPClient(
+            name: "partial-server-client",
+            version: "1.0.0",
+            connectionTimeout: timeout
+        )
+
+        // Answer initialize only; ignore subsequent requests (tools/list hangs).
+        let serverTask = Task {
+            let reader = clientToServer.fileHandleForReading
+            let writer = serverToClient.fileHandleForWriting
+            var buffer = Data()
+            while !Task.isCancelled {
+                let chunk = reader.availableData
+                if chunk.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(10))
+                    continue
+                }
+                buffer.append(chunk)
+                while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                    let line = buffer.subdata(in: buffer.startIndex..<newline)
+                    buffer.removeSubrange(buffer.startIndex...newline)
+                    guard
+                        let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                        let method = obj["method"] as? String,
+                        method == "initialize",
+                        let id = obj["id"]
+                    else {
+                        continue
+                    }
+                    let response: [String: Any] = [
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": [
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": [String: Any](),
+                            "serverInfo": [
+                                "name": "partial-test-server",
+                                "version": "1.0.0",
+                            ],
+                        ],
+                    ]
+                    var payload = try JSONSerialization.data(withJSONObject: response)
+                    payload.append(UInt8(ascii: "\n"))
+                    try writer.write(contentsOf: payload)
+                }
+            }
+        }
+        defer { serverTask.cancel() }
+
+        // connect(inPipe:) calls getTools after initialize — that should time out.
+        let start = ContinuousClock.now
+        var timedOut = false
+        do {
+            try await client.connect(inPipe: clientToServer, outPipe: serverToClient)
+            #expect(Bool(false), "Expected connectionTimeout when tools/list is silent")
+        } catch let error as MCPClient.MCPClientError {
+            if case .connectionTimeout = error {
+                timedOut = true
+            } else {
+                Issue.record("Expected connectionTimeout, got \(error)")
+            }
+        } catch {
+            Issue.record("Expected MCPClientError.connectionTimeout, got \(error)")
+        }
+
+        let elapsed = ContinuousClock.now - start
+        #expect(timedOut)
+        // initialize succeeds quickly; tools/list then waits up to `timeout`.
+        #expect(elapsed < .seconds(timeout + 2.5))
+    }
+
+    @Test("MCP SDK ID.random encodes as a JSON integer")
+    func testMCPRequestIDIsInteger() throws {
+        let id = ID.random
+        guard case .number = id else {
+            Issue.record("Expected ID.random to be .number for mcpbridge compatibility")
+            return
+        }
+        let data = try JSONEncoder().encode(id)
+        let json = String(data: data, encoding: .utf8)
+        #expect(json != nil)
+        #expect(json?.contains("\"") == false, "Integer ids must not encode as JSON strings")
+    }
+}
