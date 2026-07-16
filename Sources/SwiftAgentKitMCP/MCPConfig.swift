@@ -21,6 +21,8 @@ public struct MCPConfig: Codable, Sendable {
         public let useShell: Bool
         /// Per-server tool-call limit (seconds); falls back to root ``MCPConfig/toolCallTimeout`` then orchestrator default.
         public let toolCallTimeout: TimeInterval?
+        /// Optional working directory for the stdio subprocess when that path exists.
+        public let cwd: String?
 
         public init(
             name: String,
@@ -28,7 +30,8 @@ public struct MCPConfig: Codable, Sendable {
             arguments: [String],
             environment: JSON,
             useShell: Bool = false,
-            toolCallTimeout: TimeInterval? = nil
+            toolCallTimeout: TimeInterval? = nil,
+            cwd: String? = nil
         ) {
             self.name = name
             self.command = command
@@ -36,10 +39,11 @@ public struct MCPConfig: Codable, Sendable {
             self.environment = environment
             self.useShell = useShell
             self.toolCallTimeout = toolCallTimeout
+            self.cwd = cwd
         }
 
         enum CodingKeys: String, CodingKey {
-            case name, command, arguments, environment, useShell, toolCallTimeout
+            case name, command, arguments, environment, useShell, toolCallTimeout, cwd
         }
 
         public init(from decoder: Decoder) throws {
@@ -50,6 +54,7 @@ public struct MCPConfig: Codable, Sendable {
             environment = try c.decode(JSON.self, forKey: .environment)
             useShell = try c.decodeIfPresent(Bool.self, forKey: .useShell) ?? false
             toolCallTimeout = try c.decodeIfPresent(TimeInterval.self, forKey: .toolCallTimeout)
+            cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -60,6 +65,7 @@ public struct MCPConfig: Codable, Sendable {
             try c.encode(environment, forKey: .environment)
             try c.encode(useShell, forKey: .useShell)
             try c.encodeIfPresent(toolCallTimeout, forKey: .toolCallTimeout)
+            try c.encodeIfPresent(cwd, forKey: .cwd)
         }
     }
     
@@ -252,6 +258,7 @@ public struct MCPConfigHelper {
                 let environment = mcpServerConfig["env"] as? [String: Any] ?? [:]
                 let envJson = (try? JSON(environment)) ?? .object([:])
                 let useShell = mcpServerConfig["useShell"] as? Bool ?? false
+                let cwd = mcpServerConfig["cwd"] as? String
                 let perServerTimeout = Self.optionalTimeInterval(mcpServerConfig["toolCallTimeout"])
                     ?? Self.optionalTimeInterval(mcpServerConfig["timeout"])
                 serverBootCalls.append(
@@ -261,7 +268,8 @@ public struct MCPConfigHelper {
                         arguments: arguments,
                         environment: envJson,
                         useShell: useShell,
-                        toolCallTimeout: perServerTimeout
+                        toolCallTimeout: perServerTimeout,
+                        cwd: cwd
                     )
                 )
             }
