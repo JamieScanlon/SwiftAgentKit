@@ -182,6 +182,134 @@ import SwiftAgentKitMCP
         Shell.terminateProcess(launched.process)
         #expect(!launched.process.isRunning)
     }
+
+    @Test("slow local server does not starve a peer under parallel boot-and-connect")
+    func testPeerNotStarvedBySlowLocalServer() async throws {
+        let stubURL = try Self.writeMinimalMCPServerStub()
+        defer { try? FileManager.default.removeItem(at: stubURL) }
+
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-parallel-\(UUID().uuidString).json")
+        let configObject: [String: Any] = [
+            "mcpServers": [
+                "slow-server": [
+                    "command": "sleep",
+                    "args": ["60"],
+                ],
+                "fast-server": [
+                    "command": "python3",
+                    "args": [stubURL.path],
+                ],
+            ],
+        ]
+        let configData = try JSONSerialization.data(withJSONObject: configObject, options: [.prettyPrinted])
+        try configData.write(to: configURL)
+        defer { try? FileManager.default.removeItem(at: configURL) }
+
+        let timeout: TimeInterval = 0.8
+        let manager = MCPManager(connectionTimeout: timeout)
+        let start = ContinuousClock.now
+        try await manager.initialize(configFileURL: configURL)
+        let elapsed = ContinuousClock.now - start
+
+        // Parallel bring-up: must not wait on the full sleep(60).
+        #expect(elapsed < .seconds(timeout + 2.5))
+
+        let clients = await manager.clients
+        #expect(clients.count == 1)
+        #expect(await clients[0].name == "fast-server")
+        #expect(await clients[0].state == .connected)
+
+        let tools = await manager.availableTools()
+        #expect(tools.contains(where: { $0.name == "ping" }))
+
+        await manager.shutdown()
+        #expect(await manager.clients.isEmpty)
+        #expect(await manager.state == .notReady)
+    }
+
+    @Test("shutdown after mixed local boot clears connected clients")
+    func testShutdownAfterMixedLocalBoot() async throws {
+        let stubURL = try Self.writeMinimalMCPServerStub()
+        defer { try? FileManager.default.removeItem(at: stubURL) }
+
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-shutdown-\(UUID().uuidString).json")
+        let configObject: [String: Any] = [
+            "mcpServers": [
+                "dead-server": [
+                    "command": "sleep",
+                    "args": ["30"],
+                ],
+                "alive-server": [
+                    "command": "python3",
+                    "args": [stubURL.path],
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: configObject).write(to: configURL)
+        defer { try? FileManager.default.removeItem(at: configURL) }
+
+        // Generous timeout so the stub can connect even under suite parallelism.
+        let manager = MCPManager(connectionTimeout: 2.0)
+        try await manager.initialize(configFileURL: configURL)
+        let connected = await manager.clients
+        #expect(connected.count == 1)
+        #expect(await connected[0].name == "alive-server")
+
+        await manager.shutdown()
+        #expect(await manager.clients.isEmpty)
+        #expect(await manager.state == .notReady)
+    }
+
+    /// Writes a tiny stdio MCP server that answers initialize + tools/list with a `ping` tool.
+    private static func writeMinimalMCPServerStub() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("minimal-mcp-\(UUID().uuidString).py")
+        let script = """
+        #!/usr/bin/env python3
+        import sys, json
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            msg = json.loads(line)
+            mid = msg.get("id")
+            method = msg.get("method")
+            if method == "initialize":
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "serverInfo": {"name": "minimal-stub", "version": "1.0.0"},
+                    },
+                }
+                print(json.dumps(out), flush=True)
+            elif method == "notifications/initialized":
+                continue
+            elif method == "tools/list":
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "result": {
+                        "tools": [{
+                            "name": "ping",
+                            "description": "ping",
+                            "inputSchema": {"type": "object", "properties": {}},
+                        }]
+                    },
+                }
+                print(json.dumps(out), flush=True)
+        """
+        try script.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: url.path
+        )
+        return url
+    }
     #endif
 
     #if !(os(macOS) || os(Linux) || os(Windows))

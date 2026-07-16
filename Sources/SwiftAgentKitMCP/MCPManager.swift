@@ -237,45 +237,11 @@ public actor MCPManager {
         serverBootCalls = config.serverBootCalls
         var failedServers: [String] = []
         
-        // Create clients for local servers (stdio)
+        // Create clients for local servers (stdio): boot-and-connect each server
+        // independently so a slow peer (e.g. cold `swift run`) cannot starve others.
         #if os(macOS) || os(Linux) || os(Windows)
         if !config.serverBootCalls.isEmpty {
-            let serverManager = MCPServerManager()
-            let serverPipes = try await serverManager.bootServers(config: config)
-            
-            for (serverName, pipes) in serverPipes {
-                do {
-                    let boot = config.serverBootCalls.first(where: { $0.name == serverName })
-                    let client = MCPClient(
-                        name: serverName,
-                        version: "0.1.3",
-                        connectionTimeout: connectionTimeout,
-                        toolCallTimeout: boot?.toolCallTimeout
-                    )
-                    try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
-                    try await client.getTools()
-                    clients.append(client)
-                    localServerProcesses[serverName] = pipes.process
-                    logger.info(
-                        "Successfully connected to local MCP server",
-                        metadata: SwiftAgentKitLogging.metadata(("server", .string(serverName)))
-                    )
-                } catch let mcpError as MCPClient.MCPClientError {
-                    Shell.terminateProcess(pipes.process)
-                    logMCPClientError(mcpError, serverName: serverName)
-                    failedServers.append(serverName)
-                } catch {
-                    Shell.terminateProcess(pipes.process)
-                    logger.error(
-                        "Failed to connect to local MCP server",
-                        metadata: SwiftAgentKitLogging.metadata(
-                            ("server", .string(serverName)),
-                            ("error", .string(String(describing: error)))
-                        )
-                    )
-                    failedServers.append(serverName)
-                }
-            }
+            await bootAndConnectLocalServers(config: config, failedServers: &failedServers)
         }
         #else
         if !config.serverBootCalls.isEmpty {
@@ -358,6 +324,110 @@ public actor MCPManager {
         
         await buildToolsJson()
     }
+
+    #if os(macOS) || os(Linux) || os(Windows)
+    /// Boots and connects each local stdio server in parallel. Failures terminate that
+    /// subprocess and continue; peers are never blocked behind a hung boot/connect.
+    private func bootAndConnectLocalServers(
+        config: MCPConfig,
+        failedServers: inout [String]
+    ) async {
+        let serverManager = MCPServerManager()
+        let timeout = connectionTimeout
+        let globalEnvironment = config.globalEnvironment
+        let bootCalls = config.serverBootCalls
+
+        await withTaskGroup(of: LocalBootResult.self) { group in
+            for bootCall in bootCalls {
+                group.addTask {
+                    await Self.bootAndConnectOneLocalServer(
+                        bootCall: bootCall,
+                        globalEnvironment: globalEnvironment,
+                        connectionTimeout: timeout,
+                        serverManager: serverManager
+                    )
+                }
+            }
+
+            for await result in group {
+                switch result {
+                case .success(let name, let client, let process):
+                    clients.append(client)
+                    localServerProcesses[name] = process.value
+                    logger.info(
+                        "Successfully connected to local MCP server",
+                        metadata: SwiftAgentKitLogging.metadata(("server", .string(name)))
+                    )
+                case .failure(let name, let kind, let elapsed):
+                    failedServers.append(name)
+                    logger.warning(
+                        "MCP server failed; continuing with remaining clients",
+                        metadata: SwiftAgentKitLogging.metadata(
+                            ("server", .string(name)),
+                            ("elapsedSeconds", .stringConvertible(elapsed)),
+                            ("failure", .string(kind)),
+                            ("connectedCount", .stringConvertible(clients.count))
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    /// Boot → connect (including timed getTools) for a single local server.
+    private nonisolated static func bootAndConnectOneLocalServer(
+        bootCall: MCPConfig.ServerBootCall,
+        globalEnvironment: JSON,
+        connectionTimeout: TimeInterval,
+        serverManager: MCPServerManager
+    ) async -> LocalBootResult {
+        let start = ContinuousClock.now
+        var process: Process?
+        do {
+            let pipes = try await serverManager.bootServer(
+                bootCall: bootCall,
+                globalEnvironment: globalEnvironment
+            )
+            process = pipes.process
+            let client = MCPClient(
+                name: bootCall.name,
+                version: "0.1.3",
+                connectionTimeout: connectionTimeout,
+                toolCallTimeout: bootCall.toolCallTimeout
+            )
+            // connect(inPipe:) already loads tools under connectionTimeout.
+            try await client.connect(inPipe: pipes.inPipe, outPipe: pipes.outPipe)
+            return .success(
+                name: bootCall.name,
+                client: client,
+                process: UncheckedProcess(pipes.process)
+            )
+        } catch {
+            if let process {
+                Shell.terminateProcess(process)
+            }
+            let elapsed = start.elapsedSeconds(until: ContinuousClock.now)
+            let kind: String
+            if let mcpError = error as? MCPClient.MCPClientError {
+                switch mcpError {
+                case .connectionTimeout(let timeout):
+                    kind = "timeout(\(timeout)s)"
+                case .pipeError(let message):
+                    kind = "pipeError(\(message))"
+                case .processTerminated(let message):
+                    kind = "processTerminated(\(message))"
+                case .connectionFailed(let message):
+                    kind = "connectionFailed(\(message))"
+                case .notConnected:
+                    kind = "notConnected"
+                }
+            } else {
+                kind = String(describing: error)
+            }
+            return .failure(name: bootCall.name, kind: kind, elapsed: elapsed)
+        }
+    }
+    #endif
 
     private func logMCPClientError(_ mcpError: MCPClient.MCPClientError, serverName: String) {
         switch mcpError {
@@ -511,4 +581,26 @@ extension ToolCall {
         return dict.mapValues(convertJSONToValue)
     }
 }
+
+#if os(macOS) || os(Linux) || os(Windows)
+/// Result of a parallel local MCP boot-and-connect attempt.
+/// `Process` is wrapped as `@unchecked Sendable` so it can cross the task-group boundary.
+private enum LocalBootResult: Sendable {
+    case success(name: String, client: MCPClient, process: UncheckedProcess)
+    case failure(name: String, kind: String, elapsed: TimeInterval)
+}
+
+private struct UncheckedProcess: @unchecked Sendable {
+    let value: Process
+    init(_ value: Process) { self.value = value }
+}
+
+private extension ContinuousClock.Instant {
+    func elapsedSeconds(until end: ContinuousClock.Instant) -> TimeInterval {
+        let duration = self.duration(to: end)
+        let (seconds, attoseconds) = duration.components
+        return TimeInterval(seconds) + TimeInterval(attoseconds) / 1e18
+    }
+}
+#endif
 
