@@ -195,6 +195,34 @@ struct MCPConfigTests {
         #expect(config.serverBootCalls[0].name == "test-server")
         #expect(config.serverBootCalls[0].command == "echo")
         #expect(config.serverBootCalls[0].arguments == ["hello", "world"])
+        #expect(config.serverBootCalls[0].cwd == nil)
+    }
+
+    @Test("MCPConfigHelper should parse per-server cwd")
+    func testParseLocalServerCwd() async throws {
+        let configJSON = """
+        {
+            "mcpServers": {
+                "xcode-mcp": {
+                    "command": "xcrun",
+                    "args": ["mcpbridge"],
+                    "cwd": "/Users/example/MyProject",
+                    "env": {
+                        "PWD": "/Users/example/MyProject"
+                    }
+                }
+            }
+        }
+        """
+
+        let tempURL = createTempConfigFile(content: configJSON)
+        defer { try? FileManager.default.removeItem(at: tempURL) }
+
+        let config = try MCPConfigHelper.parseMCPConfig(fileURL: tempURL)
+
+        #expect(config.serverBootCalls.count == 1)
+        #expect(config.serverBootCalls[0].name == "xcode-mcp")
+        #expect(config.serverBootCalls[0].cwd == "/Users/example/MyProject")
     }
     
     @Test("MCPConfigHelper should parse remote servers only")

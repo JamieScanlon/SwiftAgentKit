@@ -25,6 +25,8 @@ public struct Shell {
     ///   - command: Executable name (resolved via `PATH`) or path when `useShell` is false on Unix (via `/usr/bin/env`).
     ///   - arguments: Arguments passed to the command (not used as shell syntax unless `useShell` is true).
     ///   - environment: Environment for the child process.
+    ///   - currentDirectory: Preferred working directory when it exists; otherwise a stable fallback is chosen
+    ///     (`PWD` / `HOME` / temp) so children never inherit a missing parent cwd (e.g. Xcode Clean Build).
     ///   - useShell: When true, runs the command through a shell (`zsh -c` on Unix, `cmd /c` on Windows) so shell features work.
     ///     When false (default), uses `/usr/bin env command arg1 arg2 …` on Unix for a direct, terminable process tree.
     /// - Returns: The launched ``Process`` and pipes where the parent writes to the child’s stdin (`inPipe`) and reads merged stdout/stderr (`outPipe`).
@@ -32,25 +34,42 @@ public struct Shell {
         command: String,
         arguments: [String] = [],
         environment: [String: String] = [:],
+        currentDirectory: URL? = nil,
         useShell: Bool = false
     ) -> (process: Process, inPipe: Pipe, outPipe: Pipe) {
         let task = Process()
         let inPipe = Pipe()
         let outPipe = Pipe()
 
+        let cwd = resolveExistingDirectory(preferred: currentDirectory, environment: environment)
+        let parentCwd = FileManager.default.currentDirectoryPath
+
         let metadata: Logger.Metadata = [
             "command": .string(command),
             "argumentCount": .stringConvertible(arguments.count),
             "useShell": .string(useShell ? "true" : "false"),
             "environmentKeys": .string(environment.keys.sorted().joined(separator: ",")),
-            "environmentCount": .stringConvertible(environment.count)
+            "environmentCount": .stringConvertible(environment.count),
+            "currentDirectory": .string(cwd.path)
         ]
         logger.info("Launching subprocess", metadata: metadata)
+
+        if cwd.path != parentCwd {
+            logger.info(
+                "Using resolved subprocess cwd (differs from parent)",
+                metadata: [
+                    "command": .string(command),
+                    "resolvedCwd": .string(cwd.path),
+                    "parentCwd": .string(parentCwd)
+                ]
+            )
+        }
 
         task.standardOutput = outPipe
         task.standardError = outPipe
         task.environment = environment
         task.standardInput = inPipe
+        task.currentDirectoryURL = cwd
 
         if useShell {
             configureShellInvocation(task: task, command: command, arguments: arguments)
@@ -72,6 +91,31 @@ public struct Shell {
 
         task.launch()
         return (process: task, inPipe: inPipe, outPipe: outPipe)
+    }
+
+    /// Picks the first existing directory from preferred cwd, env `PWD`/`HOME`, then system fallbacks.
+    static func resolveExistingDirectory(
+        preferred: URL?,
+        environment: [String: String]
+    ) -> URL {
+        let fm = FileManager.default
+        let candidates: [String] = [
+            preferred?.path,
+            environment["PWD"],
+            environment["HOME"],
+            NSHomeDirectory(),
+            NSTemporaryDirectory(),
+            "/tmp",
+            "/"
+        ].compactMap { $0 }
+
+        for path in candidates {
+            var isDirectory: ObjCBool = false
+            if fm.fileExists(atPath: path, isDirectory: &isDirectory), isDirectory.boolValue {
+                return URL(fileURLWithPath: path, isDirectory: true)
+            }
+        }
+        return URL(fileURLWithPath: "/", isDirectory: true)
     }
 
     private static func configureShellInvocation(task: Process, command: String, arguments: [String]) {

@@ -59,6 +59,7 @@ extension MCPServerManager {
             command: bootCall.command,
             arguments: bootCall.arguments,
             environment: environment,
+            currentDirectory: bootCall.cwd.map { URL(fileURLWithPath: $0, isDirectory: true) },
             useShell: bootCall.useShell
         )
 
