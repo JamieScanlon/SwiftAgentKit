@@ -462,17 +462,63 @@ public actor MCPClient {
         self.toolInputSchemasByName = inputSchemasByName
     }
     
-    public func callTool(_ toolName: String, arguments: [String: Value]? = nil) async throws -> [Tool.Content]? {
+    /// Invokes an MCP `tools/call` RPC with a hard wall-clock timeout.
+    ///
+    /// On timeout this calls SDK `Client.disconnect()` so hung JSON-RPC waiters resume,
+    /// then marks this client ``State/notConnected``. Cooperative `Task` cancellation alone
+    /// is not enough for wedged stdio transports — treat a timed-out client as unhealthy
+    /// until ``MCPManager/reconnectClient(named:)`` (or a fresh connect).
+    ///
+    /// - Parameters:
+    ///   - toolName: Tool to invoke (must already appear in ``tools``).
+    ///   - arguments: MCP tool arguments.
+    ///   - timeoutSeconds: Maximum wait. When `nil` or non-positive, uses ``toolCallTimeout``
+    ///     if set and positive; otherwise `300`.
+    /// - Returns: Tool content, or `nil` if this client does not expose `toolName`.
+    /// - Throws: ``ToolCallTimeoutError`` when the timer wins; other transport/RPC errors as thrown by the SDK.
+    public func callTool(
+        _ toolName: String,
+        arguments: [String: Value]? = nil,
+        timeoutSeconds: TimeInterval? = nil
+    ) async throws -> [Tool.Content]? {
         
-        guard let client = client else {
+        guard let sdkClient = client else {
             throw MCPClientError.notConnected
         }
         
         guard tools.map(\.name).firstIndex(of: toolName) != nil else {
             return nil
         }
+
+        let seconds = Self.resolvedCallToolTimeout(
+            explicit: timeoutSeconds,
+            clientConfigured: toolCallTimeout
+        )
         
-        let (content, _) = try await client.callTool(name: toolName, arguments: arguments)
+        let content: [Tool.Content]
+        do {
+            // Race tools/call against wall clock. On timeout we must disconnect so SDK
+            // pending-request continuations resume (same pattern as connect / listTools).
+            let (result, _) = try await withTimeout(
+                seconds: seconds,
+                onTimeout: { await sdkClient.disconnect() }
+            ) {
+                try await sdkClient.callTool(name: toolName, arguments: arguments)
+            }
+            content = result
+        } catch let error as MCPClientError {
+            if case .connectionTimeout(let elapsed) = error {
+                markDisconnectedAfterTimeout()
+                throw ToolCallTimeoutError(timeout: elapsed, toolName: toolName)
+            }
+            throw error
+        } catch is CancellationError {
+            // Outer cooperative timeout (e.g. MCPManager.withToolCallTimeout) cancelled us;
+            // withTimeout's catch path already requested disconnect — clear local session state.
+            markDisconnectedAfterTimeout()
+            throw CancellationError()
+        }
+
         // Handle tool content
         for item in content {
             switch item {
@@ -540,6 +586,26 @@ public actor MCPClient {
             }
         }
         return content
+    }
+
+    private nonisolated static func resolvedCallToolTimeout(
+        explicit: TimeInterval?,
+        clientConfigured: TimeInterval?
+    ) -> TimeInterval {
+        if let explicit, explicit > 0 { return explicit }
+        if let clientConfigured, clientConfigured > 0 { return clientConfigured }
+        return 300
+    }
+
+    /// Clears the local session after a hard disconnect so later calls fail fast with ``MCPClientError/notConnected``.
+    private func markDisconnectedAfterTimeout() {
+        client = nil
+        capabilities = nil
+        state = .notConnected
+        logger.warning(
+            "MCP client disconnected after tools/call timeout; reconnect before further use",
+            metadata: SwiftAgentKitLogging.metadata(("client", .string(name)))
+        )
     }
     
     func getResources() async throws {
@@ -633,8 +699,12 @@ public actor MCPClient {
         }
     }
 
-    /// Releases the MCP session and clears cached tools. Local stdio servers are torn down by ``MCPManager/shutdown()`` via subprocess termination.
+    /// Disconnects the SDK session (unblocking any hung JSON-RPC waiters), then clears cached tools.
+    /// Local stdio servers are torn down by ``MCPManager/shutdown()`` via subprocess termination.
     public func shutdown() async {
+        if let client {
+            await client.disconnect()
+        }
         client = nil
         capabilities = nil
         tools = []
@@ -653,8 +723,13 @@ public actor MCPClient {
     ///
     /// When the timer wins, `onTimeout` runs (typically `Client.disconnect()` so hung
     /// JSON-RPC waiters resume) and ``MCPClientError/connectionTimeout`` is thrown.
+    /// Call sites that need a different error (e.g. ``ToolCallTimeoutError`` for `tools/call`)
+    /// map `connectionTimeout` after this returns.
     /// Preferring an explicit timed-out result avoids racing a disconnect-induced
     /// connect failure ahead of the timeout error.
+    ///
+    /// Cancellation from an outer cooperative timeout also invokes `onTimeout` so stdio
+    /// waiters are unblocked even when the outer timer wins the race.
     private func withTimeout<T: Sendable>(
         seconds: TimeInterval,
         onTimeout: @Sendable @escaping () async -> Void,

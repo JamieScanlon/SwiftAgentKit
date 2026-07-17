@@ -541,17 +541,20 @@ struct MockFunctionToolProvider: ToolProvider {
     private let resultContent: String
     private let resultSuccess: Bool
     private let resultError: String?
+    private let hangDuration: TimeInterval?
     
     init(
         toolName: String = "get_current_time",
         resultContent: String = "2025-02-14T12:00:00Z",
         resultSuccess: Bool = true,
-        resultError: String? = nil
+        resultError: String? = nil,
+        hangDuration: TimeInterval? = nil
     ) {
         self.toolName = toolName
         self.resultContent = resultContent
         self.resultSuccess = resultSuccess
         self.resultError = resultError
+        self.hangDuration = hangDuration
     }
     
     func availableTools() async -> [ToolDefinition] {
@@ -568,6 +571,9 @@ struct MockFunctionToolProvider: ToolProvider {
     func executeTool(_ toolCall: ToolCall) async throws -> ToolResult {
         guard toolCall.name == toolName else {
             return ToolResult(success: false, content: "", toolCallId: toolCall.id, error: "Unknown tool: \(toolCall.name)")
+        }
+        if let hangDuration {
+            try await Task.sleep(for: .seconds(hangDuration))
         }
         return ToolResult(
             success: resultSuccess,
@@ -2983,6 +2989,62 @@ struct PostStageProbeToolProvider: ToolProvider {
         try? await Task.sleep(nanoseconds: 20_000_000)
         let completions = await pendingCollector.snapshot()
         #expect(completions.isEmpty)
+    }
+
+    @Test("invokeTool maps ToolCallTimeoutError to ToolResult with errorClass timeout")
+    func testInvokeToolTimeoutMapsStructuredMetadata() async throws {
+        let llm = MockLLM(model: "timeout", logger: Logger(label: "timeout"))
+        let provider = MockFunctionToolProvider(
+            toolName: "slow_tool",
+            resultContent: "should-not-return",
+            hangDuration: 30
+        )
+        let timeout: TimeInterval = 0.35
+        let orchestrator = SwiftAgentKitOrchestrator(
+            llm: llm,
+            config: OrchestratorConfig(
+                streamingEnabled: false,
+                mcpEnabled: false,
+                a2aIntegration: .disabled,
+                toolCallTimeout: timeout
+            ),
+            toolManager: ToolManager(providers: [provider])
+        )
+        let start = ContinuousClock.now
+        let outcome = await orchestrator.invokeTool(
+            ToolInvocationRequest(
+                toolName: "slow_tool",
+                argumentsPayload: .object([:]),
+                toolCallID: "timeout-call-1",
+                source: .direct,
+                callerProvenance: "unit-test"
+            )
+        )
+        let elapsed = ContinuousClock.now - start
+        #expect(elapsed < .seconds(timeout + 2.0))
+
+        switch outcome {
+        case .completed(let result, _):
+            #expect(result.success == false)
+            #expect(result.toolCallId == "timeout-call-1")
+            #expect(result.error == ToolCallTimeoutError(timeout: timeout, toolName: "slow_tool").message)
+            guard case .object(let meta) = result.metadata else {
+                Issue.record("Expected object metadata")
+                return
+            }
+            if case .string(let errorClass) = meta["errorClass"] {
+                #expect(errorClass == "timeout")
+            } else {
+                Issue.record("Expected errorClass timeout string")
+            }
+            if case .double(let seconds) = meta["timeoutSeconds"] {
+                #expect(seconds == timeout)
+            } else {
+                Issue.record("Expected timeoutSeconds double")
+            }
+        default:
+            Issue.record("Expected completed failure outcome for timeout")
+        }
     }
 
     @Test("invokeTool executes tool directly and returns completed outcome")

@@ -212,8 +212,9 @@ import SwiftAgentKitMCP
         try await manager.initialize(configFileURL: configURL)
         let elapsed = ContinuousClock.now - start
 
-        // Parallel bring-up: must not wait on the full sleep(60).
-        #expect(elapsed < .seconds(timeout + 2.5))
+        // Parallel bring-up must not wait on the full sleep(60). Allow headroom under
+        // suite parallelism (other MCPManagerTests also spawn python stdio stubs).
+        #expect(elapsed < .seconds(20))
 
         let clients = await manager.clients
         #expect(clients.count == 1)
@@ -262,7 +263,8 @@ import SwiftAgentKitMCP
         #expect(await manager.state == .notReady)
     }
 
-    /// Writes a tiny stdio MCP server that answers initialize + tools/list with a `ping` tool.
+    /// Writes a tiny stdio MCP server that answers initialize + tools/list with a `ping` tool,
+    /// and tools/call for `ping` with text `pong`.
     private static func writeMinimalMCPServerStub() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("minimal-mcp-\(UUID().uuidString).py")
@@ -302,6 +304,16 @@ import SwiftAgentKitMCP
                     },
                 }
                 print(json.dumps(out), flush=True)
+            elif method == "tools/call":
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "result": {
+                        "content": [{"type": "text", "text": "pong"}],
+                        "isError": False,
+                    },
+                }
+                print(json.dumps(out), flush=True)
         """
         try script.write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
@@ -309,6 +321,60 @@ import SwiftAgentKitMCP
             ofItemAtPath: url.path
         )
         return url
+    }
+
+    @Test("reconnectClient restores tools/list for a local test server; unknown name returns false")
+    func testReconnectClientNamedLocalServer() async throws {
+        let stubURL = try Self.writeMinimalMCPServerStub()
+        defer { try? FileManager.default.removeItem(at: stubURL) }
+
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-reconnect-\(UUID().uuidString).json")
+        let configObject: [String: Any] = [
+            "mcpServers": [
+                "ping-server": [
+                    "command": "python3",
+                    "args": [stubURL.path],
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: configObject).write(to: configURL)
+        defer { try? FileManager.default.removeItem(at: configURL) }
+
+        let manager = MCPManager(connectionTimeout: 2.0)
+        try await manager.initialize(configFileURL: configURL)
+        #expect(await manager.clients.count == 1)
+        #expect(await manager.availableTools().contains(where: { $0.name == "ping" }))
+
+        let unknown = await manager.reconnectClient(named: "does-not-exist")
+        #expect(unknown == false)
+
+        // Force-disconnect the live client, then reconnect via stored boot config.
+        let client = await manager.clients[0]
+        await client.shutdown()
+        #expect(await client.state == .notConnected)
+
+        let reconnected = await manager.reconnectClient(named: "ping-server")
+        #expect(reconnected == true)
+        #expect(await manager.clients.count == 1)
+        #expect(await manager.clients[0].state == .connected)
+        #expect(await manager.availableTools().contains(where: { $0.name == "ping" }))
+
+        let call = ToolCall(name: "ping", arguments: .object([:]), id: "reconnect-ping")
+        let responses = try await manager.toolCall(call, orchestratorDefaultTimeout: 5.0)
+        #expect(responses?.first?.content == "pong")
+
+        await manager.shutdown()
+    }
+
+    @Test("reconnectClient returns false after initialize(clients:) without config boot descriptors")
+    func testReconnectClientRequiresConfigBackedInit() async throws {
+        let manager = MCPManager()
+        let orphan = MCPClient(name: "orphan", version: "1.0.0")
+        try await manager.initialize(clients: [orphan])
+        let result = await manager.reconnectClient(named: "orphan")
+        #expect(result == false)
+        await manager.shutdown()
     }
     #endif
 

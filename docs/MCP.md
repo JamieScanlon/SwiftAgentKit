@@ -35,14 +35,21 @@ The MCP module follows a **separation of concerns** architecture:
 - **MCPServerManager**: Boots and manages MCP server processes, returns communication pipes and a ``Process`` handle for each server
 - **MCPClient**: Manages the connection to an MCP server, tool invocation, and resource access
 - **ClientTransport**: Implements the Transport protocol for stdio-based communication
-- **MCPManager**: Manages multiple MCP clients and tool calls (uses new architecture internally)
+- **MCPManager**: Manages multiple MCP clients and tool calls (uses new architecture internally). Supports ``reconnectClient(named:)`` after a hard `tools/call` timeout disconnect.
 - **MCPConfig**: Configuration for MCP servers and environments
 
 ### Local subprocess lifecycle
 
 - **`MCPManager.shutdown()`** disconnects clients and terminates subprocesses that were started from configuration. Call it from normal app teardown (for example `NSApplication.willTerminate` or a CLI `defer`). If you boot servers only via ``MCPServerManager``, retain each returned ``Process`` and call ``Shell/terminateProcess(_:gracePeriod:)`` when finished.
+- **`MCPManager.reconnectClient(named:)`** disconnects a named client, terminates its local subprocess when config-booted, re-boots or re-connects using descriptors from the last ``initialize(configFileURL:)``, re-runs `tools/list`, and rebuilds tool JSON. It does **not** retry a hung tool call. Returns `false` after ``initialize(clients:)`` (no stored boot/remote config) or when the name is unknown / reconnect fails.
 - **`useShell`**: Set `useShell: true` on ``MCPConfig/ServerBootCall`` only when you need shell features in `command`/`args`. The default (`false`) launches through `/usr/bin/env` on Apple platforms so the top-level child is easier to terminate.
 - **Abrupt exit**: If the host process is killed with `SIGKILL` or crashes, Swift teardown does not run; subprocess cleanup requires cooperative shutdown or OS-specific mechanisms outside this library.
+
+### Tool-call timeouts and disconnect
+
+Cancellation from ``withToolCallTimeout`` is **cooperative**. For stdio MCP, **disconnect on timeout** is required to unblock hung JSON-RPC waiters. ``MCPClient.callTool`` races `tools/call` against a wall-clock timeout and calls SDK `Client.disconnect()` when the timer wins (same pattern as connect / `tools/list`), then throws ``ToolCallTimeoutError``. Hosts should treat a timed-out client as unhealthy until ``MCPManager.reconnectClient(named:)`` (or a fresh connect).
+
+``MCPManager.toolCall`` still wraps with ``withToolCallTimeout`` as defense in depth; the client-level disconnect is the primary lever that resumes SDK waiters.
 
 ## New Architecture: Step-by-Step Usage
 

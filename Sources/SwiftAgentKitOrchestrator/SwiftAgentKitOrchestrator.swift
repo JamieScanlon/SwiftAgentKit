@@ -1741,7 +1741,37 @@ public actor SwiftAgentKitOrchestrator {
             publishToolLifecycle(eventName: .toolCallFailed, toolCallID: request.toolCallID, toolName: request.toolName, state: .failed(fallback.error), dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
             return .completed(result: fallback, metadata: meta)
         } catch {
-            let failed = ToolResult(success: false, content: "", metadata: .object([:]), toolCallId: request.toolCallID, error: String(describing: error))
+            let failed: ToolResult
+            if let timeout = error as? ToolCallTimeoutError {
+                failed = ToolResult(
+                    success: false,
+                    content: "",
+                    metadata: .object([
+                        "errorClass": .string("timeout"),
+                        "timeoutSeconds": .double(timeout.timeout),
+                    ]),
+                    toolCallId: request.toolCallID,
+                    error: timeout.message
+                )
+            } else if let mcpError = error as? MCPClient.MCPClientError {
+                failed = ToolResult(
+                    success: false,
+                    content: "",
+                    metadata: .object([
+                        "errorClass": .string("mcp_error"),
+                    ]),
+                    toolCallId: request.toolCallID,
+                    error: mcpError.errorDescription ?? String(describing: error)
+                )
+            } else {
+                failed = ToolResult(
+                    success: false,
+                    content: "",
+                    metadata: .object([:]),
+                    toolCallId: request.toolCallID,
+                    error: String(describing: error)
+                )
+            }
             let meta = ToolInvocationMetadata(conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source, callerProvenance: request.callerProvenance, policyDecision: nil, dispatchMode: dispatchMode, dispatchPlan: batchDiagnostics)
             publishToolLifecycle(eventName: .toolCallFailed, toolCallID: request.toolCallID, toolName: request.toolName, state: .failed(failed.error), dispatchMode: dispatchMode, conversationID: conversationID ?? request.conversationID, runID: invocationRunID, source: source.rawValue)
             return .completed(result: failed, metadata: meta)

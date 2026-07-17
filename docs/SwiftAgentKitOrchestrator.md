@@ -188,13 +188,15 @@ For each `ToolCall`, the orchestrator aggregates responses from (in order):
 
 Each step is wrapped with **`withToolCallTimeout`** (`SwiftAgentKit`) inside **`MCPManager.toolCall`** and **`A2AManager.agentCall`** (orchestrator passes **`OrchestratorConfig.toolCallTimeout`** as the fallback). The effective limit is:
 
-- **MCP** — per-server `toolCallTimeout` / `timeout` on each **`mcpServers`** or **`remoteServers`** entry, else root MCP JSON, else **`config.toolCallTimeout`**.
+- **MCP** — per-server `toolCallTimeout` / `timeout` on each **`mcpServers`** or **`remoteServers`** entry, else root MCP JSON, else **`config.toolCallTimeout`**. MCP `tools/call` also uses a **hard disconnect on timeout** inside ``MCPClient/callTool`` so wedged stdio/JSON-RPC waiters resume; see [MCP — Tool-call timeouts and disconnect](MCP.md#tool-call-timeouts-and-disconnect).
 - **A2A** — per-server `toolCallTimeout` / `timeout` on each **`a2aServers`** entry, else root A2A JSON, else **`config.toolCallTimeout`**.
 - **`ToolManager`** — always **`config.toolCallTimeout`**.
 
 Values from JSON must be **positive** (seconds); zero or negative values are ignored and the next fallback is used. If the step **throws** (including timeout), the orchestrator appends a **tool-role** `LLMResponse` with an error string (timeouts use `ToolCallTimeoutError.message`) and does not try later backends for that failed step’s error path—so the agentic loop can continue. Other failures from MCP/A2A are surfaced the same way (not only logged).
 
-Timeouts are **cooperative**: the timed-out `Task` is cancelled, but blocking work that ignores cancellation may still not finish until the process ends.
+For **`invokeTool` / `invokeTools`**, timeout failures map to `ToolResult(success: false, error: ToolCallTimeoutError.message)` with `metadata.errorClass == "timeout"` and `metadata.timeoutSeconds`. MCP connection/transport failures map to `errorClass: "mcp_error"`.
+
+Outer ``withToolCallTimeout`` cancellation is **cooperative**; for MCP stdio, client disconnect-on-timeout is required to unblock hung JSON-RPC waiters. Treat a timed-out MCP client as unhealthy until reconnect.
 
 ## Related documentation
 

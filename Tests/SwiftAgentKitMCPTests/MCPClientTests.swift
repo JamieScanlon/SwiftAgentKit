@@ -7,6 +7,7 @@
 
 import Testing
 import Foundation
+import SwiftAgentKit
 import SwiftAgentKitMCP
 import EasyJSON
 import MCP
@@ -596,6 +597,195 @@ import MCP
         #expect(timedOut)
         // initialize succeeds quickly; tools/list then waits up to `timeout`.
         #expect(elapsed < .seconds(timeout + 2.5))
+    }
+
+    @Test("callTool times out, disconnects, and throws ToolCallTimeoutError when tools/call is silent")
+    func testCallToolTimeoutWhenToolsCallSilent() async throws {
+        let clientToServer = Pipe()
+        let serverToClient = Pipe()
+        let connectionTimeout: TimeInterval = 2.0
+        let toolTimeout: TimeInterval = 0.4
+        let client = MCPClient(
+            name: "silent-tools-call-client",
+            version: "1.0.0",
+            connectionTimeout: connectionTimeout
+        )
+
+        // Answer initialize + tools/list; ignore tools/call so the RPC waiter hangs.
+        let serverTask = Task {
+            let reader = clientToServer.fileHandleForReading
+            let writer = serverToClient.fileHandleForWriting
+            var buffer = Data()
+            while !Task.isCancelled {
+                let chunk = reader.availableData
+                if chunk.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(10))
+                    continue
+                }
+                buffer.append(chunk)
+                while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                    let line = buffer.subdata(in: buffer.startIndex..<newline)
+                    buffer.removeSubrange(buffer.startIndex...newline)
+                    guard
+                        let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                        let method = obj["method"] as? String,
+                        let id = obj["id"]
+                    else {
+                        continue
+                    }
+                    let result: [String: Any]
+                    switch method {
+                    case "initialize":
+                        result = [
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": [String: Any](),
+                            "serverInfo": [
+                                "name": "silent-tools-call-server",
+                                "version": "1.0.0",
+                            ],
+                        ]
+                    case "tools/list":
+                        result = [
+                            "tools": [[
+                                "name": "hang",
+                                "description": "never responds",
+                                "inputSchema": ["type": "object", "properties": [String: Any]()],
+                            ]],
+                        ]
+                    default:
+                        // tools/call and others: remain silent
+                        continue
+                    }
+                    let response: [String: Any] = [
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result,
+                    ]
+                    var payload = try JSONSerialization.data(withJSONObject: response)
+                    payload.append(UInt8(ascii: "\n"))
+                    try writer.write(contentsOf: payload)
+                }
+            }
+        }
+        defer { serverTask.cancel() }
+
+        try await client.connect(inPipe: clientToServer, outPipe: serverToClient)
+        #expect(await client.state == .connected)
+        #expect(await client.tools.contains(where: { $0.name == "hang" }))
+
+        let start = ContinuousClock.now
+        var timedOut = false
+        do {
+            _ = try await client.callTool("hang", timeoutSeconds: toolTimeout)
+            #expect(Bool(false), "Expected ToolCallTimeoutError against a silent tools/call")
+        } catch let error as ToolCallTimeoutError {
+            timedOut = true
+            #expect(error.timeout == toolTimeout)
+            #expect(error.toolName == "hang")
+            #expect(error.message.contains("hang"))
+        } catch {
+            Issue.record("Expected ToolCallTimeoutError, got \(error)")
+        }
+
+        let elapsed = ContinuousClock.now - start
+        #expect(timedOut)
+        #expect(elapsed < .seconds(toolTimeout + 2.0))
+        #expect(await client.state == .notConnected)
+
+        // Subsequent calls fail fast (session cleared after disconnect).
+        do {
+            _ = try await client.callTool("hang", timeoutSeconds: toolTimeout)
+            #expect(Bool(false), "Expected notConnected after tool-call timeout")
+        } catch let error as MCPClient.MCPClientError {
+            if case .notConnected = error {
+                // ok
+            } else {
+                Issue.record("Expected notConnected, got \(error)")
+            }
+        } catch {
+            Issue.record("Expected MCPClientError.notConnected, got \(error)")
+        }
+    }
+
+    @Test("callTool succeeds quickly when the server responds")
+    func testCallToolSucceedsWithoutDisconnect() async throws {
+        let clientToServer = Pipe()
+        let serverToClient = Pipe()
+        let client = MCPClient(
+            name: "fast-tools-call-client",
+            version: "1.0.0",
+            connectionTimeout: 2.0
+        )
+
+        let serverTask = Task {
+            let reader = clientToServer.fileHandleForReading
+            let writer = serverToClient.fileHandleForWriting
+            var buffer = Data()
+            while !Task.isCancelled {
+                let chunk = reader.availableData
+                if chunk.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(10))
+                    continue
+                }
+                buffer.append(chunk)
+                while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                    let line = buffer.subdata(in: buffer.startIndex..<newline)
+                    buffer.removeSubrange(buffer.startIndex...newline)
+                    guard
+                        let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                        let method = obj["method"] as? String,
+                        let id = obj["id"]
+                    else {
+                        continue
+                    }
+                    let result: [String: Any]
+                    switch method {
+                    case "initialize":
+                        result = [
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": [String: Any](),
+                            "serverInfo": [
+                                "name": "fast-tools-call-server",
+                                "version": "1.0.0",
+                            ],
+                        ]
+                    case "tools/list":
+                        result = [
+                            "tools": [[
+                                "name": "echo",
+                                "description": "echo",
+                                "inputSchema": ["type": "object", "properties": [String: Any]()],
+                            ]],
+                        ]
+                    case "tools/call":
+                        result = [
+                            "content": [["type": "text", "text": "pong"]],
+                            "isError": false,
+                        ]
+                    default:
+                        continue
+                    }
+                    let response: [String: Any] = [
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result,
+                    ]
+                    var payload = try JSONSerialization.data(withJSONObject: response)
+                    payload.append(UInt8(ascii: "\n"))
+                    try writer.write(contentsOf: payload)
+                }
+            }
+        }
+        defer { serverTask.cancel() }
+
+        try await client.connect(inPipe: clientToServer, outPipe: serverToClient)
+        let contents = try await client.callTool("echo", timeoutSeconds: 2.0)
+        #expect(await client.state == .connected)
+        guard let contents, case .text(let text, _, _)? = contents.first else {
+            Issue.record("Expected text content from echo tool")
+            return
+        }
+        #expect(text == "pong")
     }
 
     @Test("MCP SDK ID.random encodes as a JSON integer")

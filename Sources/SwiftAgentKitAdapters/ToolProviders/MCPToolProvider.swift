@@ -49,7 +49,11 @@ public struct MCPToolProvider: ToolProvider {
                 // Convert ToolCall arguments to MCP Value format
                 let arguments = toolCall.argumentsToValue()
                 
-                if let contents = try await client.callTool(toolCall.name, arguments: arguments) {
+                if let contents = try await client.callTool(
+                    toolCall.name,
+                    arguments: arguments,
+                    timeoutSeconds: await client.toolCallTimeout
+                ) {
                     // Extract text content
                     let textContent = contents.compactMap { content in
                         if case .text(let text, _, _) = content { return text } else { return nil }

@@ -71,6 +71,12 @@ public actor MCPManager {
     /// Local stdio server boot descriptors from the last config-file initialization.
     public private(set) var serverBootCalls: [MCPConfig.ServerBootCall] = []
 
+    /// Remote server configs from the last config-file initialization (used by ``reconnectClient(named:)``).
+    public private(set) var remoteServers: [MCPConfig.RemoteServerConfig] = []
+
+    /// Global environment from the last config-file initialization (re-applied on local reconnect).
+    private var globalEnvironment: JSON = .object([:])
+
     /// When the manager was initialized from a config file that set ``MCPConfig/toolCallTimeout``, that value is stored here. Otherwise `nil` (call sites fall back to the orchestrator’s default tool-call timeout).
     public private(set) var toolCallTimeout: TimeInterval? = nil
 
@@ -92,10 +98,14 @@ public actor MCPManager {
     }
     
     /// Initialize the MCPManager with an array of `MCPClient` objects (no local subprocess handles; ``shutdown()`` will not terminate external processes).
+    ///
+    /// ``reconnectClient(named:)`` requires config-backed initialization and returns `false` after this path.
     public func initialize(clients: [MCPClient]) async throws {
         toolCallTimeout = nil
         self.clients = clients
         serverBootCalls = []
+        remoteServers = []
+        globalEnvironment = .object([:])
         #if os(macOS) || os(Linux) || os(Windows)
         localServerProcesses = [:]
         #endif
@@ -125,10 +135,17 @@ public actor MCPManager {
         #endif
         toolCallsJson = []
         toolCallTimeout = nil
+        serverBootCalls = []
+        remoteServers = []
+        globalEnvironment = .object([:])
         state = .notReady
     }
     
     /// Dispatches a tool call to the first MCP client that handles it. Each client uses its own resolved timeout (per-server config, then root MCP config, then `orchestratorDefaultTimeout`).
+    ///
+    /// Primary unblock on timeout is ``MCPClient/callTool(_:arguments:timeoutSeconds:)`` which
+    /// disconnects the SDK client so hung JSON-RPC waiters resume. The outer
+    /// ``withToolCallTimeout`` is defense in depth (cooperative cancel).
     public func toolCall(_ toolCall: ToolCall, orchestratorDefaultTimeout: TimeInterval = 300) async throws -> [LLMResponse]? {
         for client in clients {
             let seconds = Self.resolvedToolCallTimeout(
@@ -137,7 +154,11 @@ public actor MCPManager {
                 orchestrator: orchestratorDefaultTimeout
             )
             let contents = try await withToolCallTimeout(seconds, toolName: toolCall.name) {
-                try await client.callTool(toolCall.name, arguments: toolCall.argumentsToValue())
+                try await client.callTool(
+                    toolCall.name,
+                    arguments: toolCall.argumentsToValue(),
+                    timeoutSeconds: seconds
+                )
             }
             if let contents = contents {
                 var returnResponses: [LLMResponse] = []
@@ -150,6 +171,117 @@ public actor MCPManager {
                     }
                 }
                 return returnResponses
+            }
+        }
+        return nil
+    }
+
+    /// Disconnects the named client, reconnects (local stdio re-boot or remote reconnect),
+    /// re-runs tools/list, and rebuilds tool JSON. Does **not** retry a hung tool call.
+    ///
+    /// Requires config-file initialization (``initialize(configFileURL:)``) so boot/remote
+    /// descriptors are available. After ``initialize(clients:)`` only, this returns `false`.
+    ///
+    /// - Returns: `true` on success; `false` if no client matched or reconnect failed (logged).
+    public func reconnectClient(named name: String) async -> Bool {
+        guard let index = await indexOfClient(named: name) else {
+            logger.warning(
+                "reconnectClient: no MCP client matched name",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(name)))
+            )
+            return false
+        }
+
+        let existing = clients[index]
+        await existing.shutdown()
+        clients.remove(at: index)
+
+        #if os(macOS) || os(Linux) || os(Windows)
+        if let process = localServerProcesses.removeValue(forKey: name) {
+            Shell.terminateProcess(process)
+        }
+        #endif
+
+        if let bootCall = serverBootCalls.first(where: { $0.name == name }) {
+            #if os(macOS) || os(Linux) || os(Windows)
+            let result = await Self.bootAndConnectOneLocalServer(
+                bootCall: bootCall,
+                globalEnvironment: globalEnvironment,
+                connectionTimeout: connectionTimeout,
+                serverManager: MCPServerManager()
+            )
+            switch result {
+            case .success(_, let client, let process):
+                let insertAt = min(index, clients.count)
+                clients.insert(client, at: insertAt)
+                localServerProcesses[name] = process.value
+                await buildToolsJson()
+                logger.info(
+                    "Reconnected local MCP client",
+                    metadata: SwiftAgentKitLogging.metadata(("server", .string(name)))
+                )
+                return true
+            case .failure(_, let kind, let elapsed):
+                logger.error(
+                    "reconnectClient failed for local MCP server",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(name)),
+                        ("failure", .string(kind)),
+                        ("elapsedSeconds", .stringConvertible(elapsed))
+                    )
+                )
+                return false
+            }
+            #else
+            logger.warning(
+                "reconnectClient: local stdio servers are not supported on this platform",
+                metadata: SwiftAgentKitLogging.metadata(("server", .string(name)))
+            )
+            return false
+            #endif
+        }
+
+        if let remoteConfig = remoteServers.first(where: { $0.name == name }) {
+            do {
+                let client = MCPClient(
+                    name: remoteConfig.name,
+                    version: "0.1.3",
+                    connectionTimeout: remoteConfig.connectionTimeout ?? connectionTimeout,
+                    toolCallTimeout: remoteConfig.toolCallTimeout
+                )
+                let effectiveOAuthHandler = oauthHandler ?? MCPOAuthHandler()
+                try await effectiveOAuthHandler.connectToRemoteServer(client: client, config: remoteConfig)
+                let insertAt = min(index, clients.count)
+                clients.insert(client, at: insertAt)
+                await buildToolsJson()
+                logger.info(
+                    "Reconnected remote MCP client",
+                    metadata: SwiftAgentKitLogging.metadata(("server", .string(name)))
+                )
+                return true
+            } catch {
+                logger.error(
+                    "reconnectClient failed for remote MCP server",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("server", .string(name)),
+                        ("error", .string(String(describing: error)))
+                    )
+                )
+                return false
+            }
+        }
+
+        logger.warning(
+            "reconnectClient requires config-backed initialization; no boot or remote config for server",
+            metadata: SwiftAgentKitLogging.metadata(("server", .string(name)))
+        )
+        return false
+    }
+
+    private func indexOfClient(named name: String) async -> Int? {
+        for (index, client) in clients.enumerated() {
+            if await client.name == name {
+                return index
             }
         }
         return nil
@@ -235,6 +367,8 @@ public actor MCPManager {
     private func createClients(_ config: MCPConfig) async throws {
         toolCallTimeout = config.toolCallTimeout
         serverBootCalls = config.serverBootCalls
+        remoteServers = config.remoteServers
+        globalEnvironment = config.globalEnvironment
         var failedServers: [String] = []
         
         // Create clients for local servers (stdio): boot-and-connect each server
