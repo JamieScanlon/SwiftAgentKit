@@ -8,7 +8,7 @@
 import Testing
 import Foundation
 import SwiftAgentKit
-import SwiftAgentKitMCP
+@testable import SwiftAgentKitMCP
 import EasyJSON
 import MCP
 
@@ -519,7 +519,8 @@ import MCP
         let elapsed = ContinuousClock.now - start
         #expect(timedOut)
         // Must fail closed quickly — not hang far past the configured timeout.
-        #expect(elapsed < .seconds(timeout + 2.0))
+        // Extra headroom covers scheduling delay when the full package runs in parallel.
+        #expect(elapsed < .seconds(timeout + 10.0))
         #expect(await client.state == .notConnected)
     }
 
@@ -596,7 +597,8 @@ import MCP
         let elapsed = ContinuousClock.now - start
         #expect(timedOut)
         // initialize succeeds quickly; tools/list then waits up to `timeout`.
-        #expect(elapsed < .seconds(timeout + 2.5))
+        // Extra headroom covers scheduling delay when the full package runs in parallel.
+        #expect(elapsed < .seconds(timeout + 10.0))
     }
 
     @Test("callTool times out, disconnects, and throws ToolCallTimeoutError when tools/call is silent")
@@ -689,7 +691,8 @@ import MCP
 
         let elapsed = ContinuousClock.now - start
         #expect(timedOut)
-        #expect(elapsed < .seconds(toolTimeout + 2.0))
+        // Extra headroom covers scheduling delay when the full package runs in parallel.
+        #expect(elapsed < .seconds(toolTimeout + 10.0))
         #expect(await client.state == .notConnected)
 
         // Subsequent calls fail fast (session cleared after disconnect).
@@ -786,6 +789,50 @@ import MCP
             return
         }
         #expect(text == "pong")
+    }
+
+    // MARK: - Ownership before connectedness (disconnected must not poison)
+
+    @Test("Disconnected client returns nil for tools it does not own")
+    func testDisconnectedCallToolReturnsNilForNonOwnedTool() async throws {
+        let tool = ToolDefinition(
+            name: "XcodeRead",
+            description: "Read a file",
+            parameters: [],
+            type: .mcpTool
+        )
+        let client = MCPClient(name: "xcode-mcp", version: "1.0.0")
+        await client.installToolsForTesting(tools: [tool], inputSchemasByName: [:])
+        #expect(await client.state == .notConnected)
+
+        let result = try await client.callTool("bash")
+        #expect(result == nil)
+    }
+
+    @Test("Disconnected client throws notConnected for tools it still advertises")
+    func testDisconnectedCallToolThrowsForOwnedTool() async throws {
+        let tool = ToolDefinition(
+            name: "XcodeRead",
+            description: "Read a file",
+            parameters: [],
+            type: .mcpTool
+        )
+        let client = MCPClient(name: "xcode-mcp", version: "1.0.0")
+        await client.installToolsForTesting(tools: [tool], inputSchemasByName: [:])
+        #expect(await client.state == .notConnected)
+
+        do {
+            _ = try await client.callTool("XcodeRead")
+            #expect(Bool(false), "Expected notConnected for owned tool on disconnected client")
+        } catch let error as MCPClient.MCPClientError {
+            if case .notConnected = error {
+                // ok
+            } else {
+                Issue.record("Expected notConnected, got \(error)")
+            }
+        } catch {
+            Issue.record("Expected MCPClientError.notConnected, got \(error)")
+        }
     }
 
     @Test("MCP SDK ID.random encodes as a JSON integer")

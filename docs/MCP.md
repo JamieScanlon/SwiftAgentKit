@@ -49,6 +49,8 @@ The MCP module follows a **separation of concerns** architecture:
 
 Cancellation from ``withToolCallTimeout`` is **cooperative**. For stdio MCP, **disconnect on timeout** is required to unblock hung JSON-RPC waiters. ``MCPClient.callTool`` races `tools/call` against a wall-clock timeout and calls SDK `Client.disconnect()` when the timer wins (same pattern as connect / `tools/list`), then throws ``ToolCallTimeoutError``. Hosts should treat a timed-out client as unhealthy until ``MCPManager.reconnectClient(named:)`` (or a fresh connect).
 
+After disconnect, the client's cached tool list is retained. ``MCPClient.callTool`` checks **ownership before connectedness**: it returns `nil` for tool names this client does not advertise (so dispatch can continue), and throws ``MCPClientError/notConnected`` only for tools it still lists. ``MCPManager.toolCall`` skips a disconnected client for non-owned names and only surfaces ``MCPClientError/notConnected`` when an advertising client is down and no other client handled the call — so built-ins (`bash`, `think`, …) remain reachable via the orchestrator's fallthrough to `toolManager`.
+
 ``MCPManager.toolCall`` still wraps with ``withToolCallTimeout`` as defense in depth; the client-level disconnect is the primary lever that resumes SDK waiters.
 
 ## New Architecture: Step-by-Step Usage

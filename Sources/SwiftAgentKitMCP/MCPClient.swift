@@ -474,20 +474,25 @@ public actor MCPClient {
     ///   - arguments: MCP tool arguments.
     ///   - timeoutSeconds: Maximum wait. When `nil` or non-positive, uses ``toolCallTimeout``
     ///     if set and positive; otherwise `300`.
-    /// - Returns: Tool content, or `nil` if this client does not expose `toolName`.
-    /// - Throws: ``ToolCallTimeoutError`` when the timer wins; other transport/RPC errors as thrown by the SDK.
+    /// - Returns: Tool content, or `nil` if this client does not expose `toolName`
+    ///   (including when disconnected — ownership is checked before connectedness).
+    /// - Throws: ``MCPClientError/notConnected`` when this client advertises `toolName` but
+    ///   has no live session; ``ToolCallTimeoutError`` when the timer wins; other transport/RPC
+    ///   errors as thrown by the SDK.
     public func callTool(
         _ toolName: String,
         arguments: [String: Value]? = nil,
         timeoutSeconds: TimeInterval? = nil
     ) async throws -> [Tool.Content]? {
         
-        guard let sdkClient = client else {
-            throw MCPClientError.notConnected
+        // Ownership first: a disconnected client must soft-skip tools it does not advertise
+        // so MCPManager can continue to other clients / fall through to built-ins.
+        guard tools.contains(where: { $0.name == toolName }) else {
+            return nil
         }
         
-        guard tools.map(\.name).firstIndex(of: toolName) != nil else {
-            return nil
+        guard let sdkClient = client else {
+            throw MCPClientError.notConnected
         }
 
         let seconds = Self.resolvedCallToolTimeout(
@@ -598,6 +603,10 @@ public actor MCPClient {
     }
 
     /// Clears the local session after a hard disconnect so later calls fail fast with ``MCPClientError/notConnected``.
+    ///
+    /// Cached ``tools`` (and schemas) are intentionally retained: non-owned names return `nil`
+    /// from ``callTool`` so dispatch is not poisoned, while owned names still throw
+    /// ``MCPClientError/notConnected`` (fail closed until reconnect).
     private func markDisconnectedAfterTimeout() {
         client = nil
         capabilities = nil

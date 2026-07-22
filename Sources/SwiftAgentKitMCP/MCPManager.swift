@@ -147,31 +147,49 @@ public actor MCPManager {
     /// disconnects the SDK client so hung JSON-RPC waiters resume. The outer
     /// ``withToolCallTimeout`` is defense in depth (cooperative cancel).
     public func toolCall(_ toolCall: ToolCall, orchestratorDefaultTimeout: TimeInterval = 300) async throws -> [LLMResponse]? {
+        var sawNotConnected = false
         for client in clients {
             let seconds = Self.resolvedToolCallTimeout(
                 client: client.toolCallTimeout,
                 configDefault: toolCallTimeout,
                 orchestrator: orchestratorDefaultTimeout
             )
-            let contents = try await withToolCallTimeout(seconds, toolName: toolCall.name) {
-                try await client.callTool(
-                    toolCall.name,
-                    arguments: toolCall.argumentsToValue(),
-                    timeoutSeconds: seconds
-                )
-            }
-            if let contents = contents {
-                var returnResponses: [LLMResponse] = []
-                for content in contents {
-                    switch content {
-                    case .text(let text, _, _):
-                        returnResponses.append(LLMResponse.complete(content: text))
-                    default:
-                        continue
-                    }
+            do {
+                let contents = try await withToolCallTimeout(seconds, toolName: toolCall.name) {
+                    try await client.callTool(
+                        toolCall.name,
+                        arguments: toolCall.argumentsToValue(),
+                        timeoutSeconds: seconds
+                    )
                 }
-                return returnResponses
+                if let contents = contents {
+                    var returnResponses: [LLMResponse] = []
+                    for content in contents {
+                        switch content {
+                        case .text(let text, _, _):
+                            returnResponses.append(LLMResponse.complete(content: text))
+                        default:
+                            continue
+                        }
+                    }
+                    return returnResponses
+                }
+            } catch MCPClient.MCPClientError.notConnected {
+                // Ownership-first callTool only throws notConnected for tools this client
+                // still advertises. Skip and try other clients; rethrow below if none handle it.
+                sawNotConnected = true
+                logger.warning(
+                    "Skipping disconnected MCP client",
+                    metadata: SwiftAgentKitLogging.metadata(
+                        ("client", .string(client.name)),
+                        ("tool", .string(toolCall.name))
+                    )
+                )
+                continue
             }
+        }
+        if sawNotConnected {
+            throw MCPClient.MCPClientError.notConnected
         }
         return nil
     }
