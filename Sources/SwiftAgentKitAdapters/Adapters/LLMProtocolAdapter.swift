@@ -960,12 +960,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                                 }
                             }
                             
-                            // Add tool result as a tool message
+                            // Add tool result as a tool message, with any image parts in result order
                             messages.append(Message(
                                 id: UUID(),
                                 role: .tool,
                                 content: toolResultText,
                                 timestamp: Date(),
+                                images: result.messageImages,
                                 toolCalls: [],
                                 toolCallId: toolCall.id
                             ))
@@ -1420,12 +1421,13 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
                                 }
                             }
                             
-                            // Add tool result as a tool message
+                            // Add tool result as a tool message, with any image parts in result order
                             messages.append(Message(
                                 id: UUID(),
                                 role: .tool,
                                 content: "Successfully Executed Tool: \(toolCall.name)\n-- Start Tool Result ---\n\(result.content)\n-- End Tool Result ---\n\nYou can now continue with the next step in the conversation.",
                                 timestamp: Date(),
+                                images: result.messageImages,
                                 toolCalls: [],
                                 toolCallId: toolCall.id
                             ))
@@ -1956,7 +1958,7 @@ public struct LLMProtocolAdapter: ToolAwareAdapter {
         
         for part in params.message.parts {
             switch part {
-            case .file(let data, let url):
+            case .file(let data, let url, _, _):
                 if image == nil {
                     image = data
                     if let url = url {

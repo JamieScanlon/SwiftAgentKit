@@ -327,7 +327,7 @@ func testImageGeneration() async {
                     print("    - Parts: \(artifact.parts.count)")
                     
                     for part in artifact.parts {
-                        if case .file(_, let url) = part {
+                        if case .file(_, let url, _, _) = part {
                             print("    - Image URL: \(url?.path ?? "nil")")
                         }
                     }

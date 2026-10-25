@@ -451,16 +451,17 @@ public actor A2AManager {
                 if !text.isEmpty {
                     textParts.append(text)
                 }
-            case .file(let data, let url):
+            case .file(let data, let url, let declaredMimeType, _):
                 if let imageData = data {
-                    let mimeType = detectMIMEType(from: imageData)
+                    let mimeType = declaredMimeType ?? detectMIMEType(from: imageData)
                     let name = artifactName ?? "\(baseName)-\(index + 1)"
                     if mimeType?.hasPrefix("image/") == true {
                         let image = Message.Image(
                             name: name,
                             path: url?.absoluteString,
                             imageData: imageData,
-                            thumbData: nil
+                            thumbData: nil,
+                            mediaType: mimeType
                         )
                         images.append(image)
                         logger.debug(
@@ -484,7 +485,7 @@ public actor A2AManager {
                     }
                 } else if let url = url {
                     let name = artifactName ?? "\(baseName)-\(index + 1)"
-                    files.append(LLMResponseFile(name: name, mimeType: nil, data: nil, url: url))
+                    files.append(LLMResponseFile(name: name, mimeType: declaredMimeType, data: nil, url: url))
                     logger.debug(
                         "Extracted file URL from file part",
                         metadata: SwiftAgentKitLogging.metadata(
@@ -501,7 +502,8 @@ public actor A2AManager {
                         name: name,
                         path: nil,
                         imageData: data,
-                        thumbData: nil
+                        thumbData: nil,
+                        mediaType: mimeType
                     )
                     images.append(image)
                     logger.debug(

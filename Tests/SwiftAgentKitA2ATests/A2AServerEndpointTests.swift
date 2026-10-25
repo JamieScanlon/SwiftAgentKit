@@ -407,7 +407,7 @@ struct A2AServerEndpointTests {
             #expect(Bool(false), "First part should be text")
         }
         
-        if case .file(_, let url) = rpcRequest.params.message.parts[1] {
+        if case .file(_, let url, _, _) = rpcRequest.params.message.parts[1] {
             #expect(url?.absoluteString == "https://example.com/image.png")
         } else {
             #expect(Bool(false), "Second part should be file")

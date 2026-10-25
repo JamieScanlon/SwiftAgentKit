@@ -167,7 +167,7 @@ struct A2AMessagePartTests {
         
         let part = try JSONDecoder().decode(A2AMessagePart.self, from: json)
         
-        guard case .file(let data, let url) = part else {
+        guard case .file(let data, let url, _, _) = part else {
             Issue.record("Expected .file part")
             return
         }
@@ -185,7 +185,7 @@ struct A2AMessagePartTests {
         
         let part = try JSONDecoder().decode(A2AMessagePart.self, from: json)
         
-        guard case .file(let data, let url) = part else {
+        guard case .file(let data, let url, _, _) = part else {
             Issue.record("Expected .file part")
             return
         }
@@ -203,7 +203,7 @@ struct A2AMessagePartTests {
         
         let part = try JSONDecoder().decode(A2AMessagePart.self, from: json)
         
-        guard case .file(let data, let url) = part else {
+        guard case .file(let data, let url, _, _) = part else {
             Issue.record("Expected .file part")
             return
         }
@@ -224,7 +224,7 @@ struct A2AMessagePartTests {
         
         let part = try JSONDecoder().decode(A2AMessagePart.self, from: json)
         
-        guard case .file(let data, let url) = part else {
+        guard case .file(let data, let url, _, _) = part else {
             Issue.record("Expected .file part")
             return
         }
@@ -243,7 +243,7 @@ struct A2AMessagePartTests {
         
         let part = try JSONDecoder().decode(A2AMessagePart.self, from: json)
         
-        guard case .file(let data, let url) = part else {
+        guard case .file(let data, let url, _, _) = part else {
             Issue.record("Expected .file part")
             return
         }
@@ -407,7 +407,7 @@ struct A2AMessagePartTests {
         let data = try encoder.encode(part)
         let decoded = try JSONDecoder().decode(A2AMessagePart.self, from: data)
         
-        guard case .file(let dataOut, let urlOut) = decoded else {
+        guard case .file(let dataOut, let urlOut, _, _) = decoded else {
             Issue.record("Expected .file after decode")
             return
         }

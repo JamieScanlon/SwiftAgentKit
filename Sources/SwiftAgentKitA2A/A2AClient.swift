@@ -583,7 +583,7 @@ private extension A2AClient {
             switch part {
             case .text(let text):
                 return text
-            case .file(let data, let url):
+            case .file(let data, let url, _, _):
                 if let url {
                     return "[file:url:\(url.absoluteString)]"
                 }

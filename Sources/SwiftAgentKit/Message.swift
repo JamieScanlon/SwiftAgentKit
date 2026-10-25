@@ -38,11 +38,27 @@ public struct Message: Identifiable, Codable, Sendable {
         public var base64EncodedThumb: String? {
             return thumbData?.base64EncodedString()
         }
-        public init(name: String, path: String? = nil, imageData: Data? = nil, thumbData: Data? = nil) {
+        /// IANA media type of `imageData` (e.g. `image/png`). `nil` when unknown; older payloads decode as `nil`.
+        public var mediaType: String?
+        public init(name: String, path: String? = nil, imageData: Data? = nil, thumbData: Data? = nil, mediaType: String? = nil) {
             self.name = name
             self.path = path
             self.imageData = imageData
             self.thumbData = thumbData
+            self.mediaType = mediaType
+        }
+        /// Builds a message image from a tool result image. A `url` reference becomes `path`
+        /// (the file path for `file:` URLs, otherwise the absolute string).
+        public init(toolResultImage: ToolResultImage, name: String) {
+            self.name = name
+            if let url = toolResultImage.url {
+                self.path = url.isFileURL ? url.path : url.absoluteString
+            } else {
+                self.path = nil
+            }
+            self.imageData = toolResultImage.data
+            self.thumbData = nil
+            self.mediaType = toolResultImage.mediaType
         }
         public init(from: [String: Sendable]) {
             let payloadKeys = from.keys.sorted().joined(separator: ",")
@@ -60,6 +76,7 @@ public struct Message: Identifiable, Codable, Sendable {
                 self.name = UUID().uuidString
             }
             self.path = from["path"] as? String
+            self.mediaType = from["mediaType"] as? String
             if let base64String = from["imageData"] as? String {
                 if let decoded = Data(base64Encoded: base64String) {
                     self.imageData = decoded
@@ -109,6 +126,7 @@ public struct Message: Identifiable, Codable, Sendable {
                 self.path = nil
                 self.imageData = nil
                 self.thumbData = nil
+                self.mediaType = nil
                 return
             }
             
@@ -131,6 +149,12 @@ public struct Message: Identifiable, Codable, Sendable {
                 self.path = pathStr
             } else {
                 self.path = nil
+            }
+            
+            if case .string(let mediaType) = dict["mediaType"] {
+                self.mediaType = mediaType
+            } else {
+                self.mediaType = nil
             }
             
             if case .string(let base64String) = dict["imageData"] {
@@ -175,6 +199,9 @@ public struct Message: Identifiable, Codable, Sendable {
             if let path = path {
                 returnValue["path"] = path
             }
+            if let mediaType = mediaType {
+                returnValue["mediaType"] = mediaType
+            }
             if let base64EncodedImage, includeImageData {
                 returnValue["imageData"] = base64EncodedImage
             }
@@ -189,6 +216,9 @@ public struct Message: Identifiable, Codable, Sendable {
             dict["name"] = .string(name)
             if let path = path {
                 dict["path"] = .string(path)
+            }
+            if let mediaType = mediaType {
+                dict["mediaType"] = .string(mediaType)
             }
             if let base64EncodedImage, includeImageData {
                 dict["imageData"] = .string(base64EncodedImage)
@@ -208,6 +238,10 @@ public struct Message: Identifiable, Codable, Sendable {
         role == .user
     }
     public var timestamp: Date = Date()
+    /// Images attached to this message, in order.
+    ///
+    /// On a `.tool` message these are images the tool returned, in result order; providers should
+    /// encode them inside that tool result (alongside ``content``), not as a separate user turn.
     public var images: [Image] = []
     // TODO: fileReferences: [URL] or similar for local/remote file references
     // TODO: fileAttachments: [(name: String?, mimeType: String?, data: Data)] or similar for generic binary files

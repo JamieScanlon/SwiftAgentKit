@@ -49,11 +49,13 @@ public struct MCPToolProvider: ToolProvider {
                 // Convert ToolCall arguments to MCP Value format
                 let arguments = toolCall.argumentsToValue()
                 
-                if let contents = try await client.callTool(toolCall.name, arguments: arguments) {
-                    // Extract text content
-                    let textContent = contents.compactMap { content in
-                        if case .text(let text, _, _) = content { return text } else { return nil }
-                    }.joined(separator: "\n")
+                if let contents = try await client.callTool(
+                    toolCall.name,
+                    arguments: arguments,
+                    timeoutSeconds: await client.toolCallTimeout
+                ) {
+                    // Text and image parts, in the order the tool returned them
+                    let parts = contents.toolResultParts
                     
                     // Extract resource content (file:// URIs)
                     var fileResources: [[String: JSON]] = []
@@ -126,7 +128,7 @@ public struct MCPToolProvider: ToolProvider {
                     
                     return ToolResult(
                         success: true,
-                        content: textContent,
+                        parts: parts,
                         metadata: .object(metadata),
                         toolCallId: toolCall.id
                     )

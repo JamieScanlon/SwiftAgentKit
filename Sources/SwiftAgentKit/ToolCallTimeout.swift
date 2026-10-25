@@ -1,8 +1,11 @@
 import Foundation
 
-/// Thrown when ``withToolCallTimeout(_:toolName:operation:)`` elapses before the operation completes.
+/// Thrown when ``withToolCallTimeout(_:toolName:operation:)`` elapses before the operation completes,
+/// or when ``MCPClient/callTool(_:arguments:timeoutSeconds:)`` hits its hard disconnect timeout.
 ///
-/// Cancellation is cooperative: the timed-out ``Task`` is cancelled, but blocking synchronous work may not stop immediately.
+/// Cancellation from ``withToolCallTimeout`` is cooperative: the timed-out ``Task`` is cancelled, but
+/// blocking synchronous work may not stop immediately. For MCP stdio `tools/call`, prefer the
+/// client-level disconnect-on-timeout path so hung JSON-RPC waiters resume.
 public struct ToolCallTimeoutError: Error, Sendable {
     public let timeout: TimeInterval
     public let toolName: String?

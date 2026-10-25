@@ -182,6 +182,200 @@ import SwiftAgentKitMCP
         Shell.terminateProcess(launched.process)
         #expect(!launched.process.isRunning)
     }
+
+    @Test("slow local server does not starve a peer under parallel boot-and-connect")
+    func testPeerNotStarvedBySlowLocalServer() async throws {
+        let stubURL = try Self.writeMinimalMCPServerStub()
+        defer { try? FileManager.default.removeItem(at: stubURL) }
+
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-parallel-\(UUID().uuidString).json")
+        let configObject: [String: Any] = [
+            "mcpServers": [
+                "slow-server": [
+                    "command": "sleep",
+                    "args": ["60"],
+                ],
+                "fast-server": [
+                    "command": "python3",
+                    "args": [stubURL.path],
+                ],
+            ],
+        ]
+        let configData = try JSONSerialization.data(withJSONObject: configObject, options: [.prettyPrinted])
+        try configData.write(to: configURL)
+        defer { try? FileManager.default.removeItem(at: configURL) }
+
+        let timeout: TimeInterval = 0.8
+        let manager = MCPManager(connectionTimeout: timeout)
+        let start = ContinuousClock.now
+        try await manager.initialize(configFileURL: configURL)
+        let elapsed = ContinuousClock.now - start
+
+        // Parallel bring-up must not wait on the full sleep(60). Allow headroom under
+        // suite parallelism (other MCPManagerTests also spawn python stdio stubs).
+        #expect(elapsed < .seconds(20))
+
+        let clients = await manager.clients
+        #expect(clients.count == 1)
+        #expect(await clients[0].name == "fast-server")
+        #expect(await clients[0].state == .connected)
+
+        let tools = await manager.availableTools()
+        #expect(tools.contains(where: { $0.name == "ping" }))
+
+        await manager.shutdown()
+        #expect(await manager.clients.isEmpty)
+        #expect(await manager.state == .notReady)
+    }
+
+    @Test("shutdown after mixed local boot clears connected clients")
+    func testShutdownAfterMixedLocalBoot() async throws {
+        let stubURL = try Self.writeMinimalMCPServerStub()
+        defer { try? FileManager.default.removeItem(at: stubURL) }
+
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-shutdown-\(UUID().uuidString).json")
+        let configObject: [String: Any] = [
+            "mcpServers": [
+                "dead-server": [
+                    "command": "sleep",
+                    "args": ["30"],
+                ],
+                "alive-server": [
+                    "command": "python3",
+                    "args": [stubURL.path],
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: configObject).write(to: configURL)
+        defer { try? FileManager.default.removeItem(at: configURL) }
+
+        // Generous timeout so the stub can connect even under suite parallelism.
+        let manager = MCPManager(connectionTimeout: 2.0)
+        try await manager.initialize(configFileURL: configURL)
+        let connected = await manager.clients
+        #expect(connected.count == 1)
+        #expect(await connected[0].name == "alive-server")
+
+        await manager.shutdown()
+        #expect(await manager.clients.isEmpty)
+        #expect(await manager.state == .notReady)
+    }
+
+    /// Writes a tiny stdio MCP server that answers initialize + tools/list with a `ping` tool,
+    /// and tools/call for `ping` with text `pong`.
+    private static func writeMinimalMCPServerStub() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("minimal-mcp-\(UUID().uuidString).py")
+        let script = """
+        #!/usr/bin/env python3
+        import sys, json
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                continue
+            msg = json.loads(line)
+            mid = msg.get("id")
+            method = msg.get("method")
+            if method == "initialize":
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "serverInfo": {"name": "minimal-stub", "version": "1.0.0"},
+                    },
+                }
+                print(json.dumps(out), flush=True)
+            elif method == "notifications/initialized":
+                continue
+            elif method == "tools/list":
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "result": {
+                        "tools": [{
+                            "name": "ping",
+                            "description": "ping",
+                            "inputSchema": {"type": "object", "properties": {}},
+                        }]
+                    },
+                }
+                print(json.dumps(out), flush=True)
+            elif method == "tools/call":
+                out = {
+                    "jsonrpc": "2.0",
+                    "id": mid,
+                    "result": {
+                        "content": [{"type": "text", "text": "pong"}],
+                        "isError": False,
+                    },
+                }
+                print(json.dumps(out), flush=True)
+        """
+        try script.write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: url.path
+        )
+        return url
+    }
+
+    @Test("reconnectClient restores tools/list for a local test server; unknown name returns false")
+    func testReconnectClientNamedLocalServer() async throws {
+        let stubURL = try Self.writeMinimalMCPServerStub()
+        defer { try? FileManager.default.removeItem(at: stubURL) }
+
+        let configURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("mcp-reconnect-\(UUID().uuidString).json")
+        let configObject: [String: Any] = [
+            "mcpServers": [
+                "ping-server": [
+                    "command": "python3",
+                    "args": [stubURL.path],
+                ],
+            ],
+        ]
+        try JSONSerialization.data(withJSONObject: configObject).write(to: configURL)
+        defer { try? FileManager.default.removeItem(at: configURL) }
+
+        let manager = MCPManager(connectionTimeout: 2.0)
+        try await manager.initialize(configFileURL: configURL)
+        #expect(await manager.clients.count == 1)
+        #expect(await manager.availableTools().contains(where: { $0.name == "ping" }))
+
+        let unknown = await manager.reconnectClient(named: "does-not-exist")
+        #expect(unknown == false)
+
+        // Force-disconnect the live client, then reconnect via stored boot config.
+        let client = await manager.clients[0]
+        await client.shutdown()
+        #expect(await client.state == .notConnected)
+
+        let reconnected = await manager.reconnectClient(named: "ping-server")
+        #expect(reconnected == true)
+        #expect(await manager.clients.count == 1)
+        #expect(await manager.clients[0].state == .connected)
+        #expect(await manager.availableTools().contains(where: { $0.name == "ping" }))
+
+        let call = ToolCall(name: "ping", arguments: .object([:]), id: "reconnect-ping")
+        let responses = try await manager.toolCall(call, orchestratorDefaultTimeout: 5.0)
+        #expect(responses?.first?.content == "pong")
+
+        await manager.shutdown()
+    }
+
+    @Test("reconnectClient returns false after initialize(clients:) without config boot descriptors")
+    func testReconnectClientRequiresConfigBackedInit() async throws {
+        let manager = MCPManager()
+        let orphan = MCPClient(name: "orphan", version: "1.0.0")
+        try await manager.initialize(clients: [orphan])
+        let result = await manager.reconnectClient(named: "orphan")
+        #expect(result == false)
+        await manager.shutdown()
+    }
     #endif
 
     #if !(os(macOS) || os(Linux) || os(Windows))

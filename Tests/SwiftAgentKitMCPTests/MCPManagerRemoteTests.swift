@@ -105,29 +105,41 @@ struct MCPManagerRemoteTests {
     
     @Test("MCPManager should create auth providers from environment variables")
     func testAuthProviderFromEnvironmentValidation() async throws {
-        // Set environment variables
-        setenv("TESTSERVER_TOKEN", "env-bearer-token", 1)
-        setenv("APISERVER_API_KEY", "env-api-key", 1)
-        setenv("BASICSERVER_USERNAME", "env-user", 1)
-        setenv("BASICSERVER_PASSWORD", "env-pass", 1)
-        
+        // Use unique prefixes so parallel AuthenticationFactoryTests cannot clobber these vars.
+        let bearerServer = "mcpmanagerremotesuite_bearer"
+        let apiKeyServer = "mcpmanagerremotesuite_apikey"
+        let basicServer = "mcpmanagerremotesuite_basic"
+        let bearerPrefix = "\(bearerServer.uppercased())_"
+        let apiKeyPrefix = "\(apiKeyServer.uppercased())_"
+        let basicPrefix = "\(basicServer.uppercased())_"
+
+        unsetenv("\(apiKeyPrefix)TOKEN")
+        unsetenv("\(apiKeyPrefix)BEARER_TOKEN")
+        unsetenv("\(basicPrefix)TOKEN")
+        unsetenv("\(basicPrefix)BEARER_TOKEN")
+        unsetenv("\(basicPrefix)API_KEY")
+
+        setenv("\(bearerPrefix)TOKEN", "env-bearer-token", 1)
+        setenv("\(apiKeyPrefix)API_KEY", "env-api-key", 1)
+        setenv("\(basicPrefix)USERNAME", "env-user", 1)
+        setenv("\(basicPrefix)PASSWORD", "env-pass", 1)
+
         defer {
-            unsetenv("TESTSERVER_TOKEN")
-            unsetenv("APISERVER_API_KEY")
-            unsetenv("BASICSERVER_USERNAME")
-            unsetenv("BASICSERVER_PASSWORD")
+            unsetenv("\(bearerPrefix)TOKEN")
+            unsetenv("\(apiKeyPrefix)API_KEY")
+            unsetenv("\(basicPrefix)USERNAME")
+            unsetenv("\(basicPrefix)PASSWORD")
         }
-        
-        // Test that auth providers can be created from environment
-        let bearerProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "testserver")
+
+        let bearerProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: bearerServer)
         #expect(bearerProvider != nil)
         #expect(bearerProvider?.scheme == .bearer)
-        
-        let apiKeyProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "apiserver")
+
+        let apiKeyProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: apiKeyServer)
         #expect(apiKeyProvider != nil)
         #expect(apiKeyProvider?.scheme == .apiKey)
-        
-        let basicProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: "basicserver")
+
+        let basicProvider = AuthenticationFactory.createAuthProviderFromEnvironment(serverName: basicServer)
         #expect(basicProvider != nil)
         #expect(basicProvider?.scheme == .basic)
     }
@@ -239,6 +251,153 @@ struct MCPManagerRemoteTests {
         
         let result = try await manager.toolCall(toolCall)
         #expect(result == nil)
+    }
+
+    // MARK: - Disconnected client must not poison dispatch
+
+    @Test("MCPManager toolCall returns nil for non-owned tool when a disconnected client still advertises other tools")
+    func testToolCallSkipsDisconnectedClientForNonOwnedTool() async throws {
+        let deadTool = ToolDefinition(
+            name: "XcodeRead",
+            description: "Read a file",
+            parameters: [],
+            type: .mcpTool
+        )
+        let deadClient = MCPClient(name: "xcode-mcp", version: "1.0.0")
+        await deadClient.installToolsForTesting(tools: [deadTool], inputSchemasByName: [:])
+
+        let idleClient = MCPClient(name: "other-mcp", version: "1.0.0")
+
+        let manager = MCPManager()
+        try await manager.initialize(clients: [deadClient, idleClient])
+
+        let toolCall = ToolCall(name: "bash", arguments: .object([:]))
+        let result = try await manager.toolCall(toolCall)
+        #expect(result == nil)
+    }
+
+    @Test("MCPManager toolCall throws notConnected for tool owned only by a disconnected client")
+    func testToolCallFailsClosedForOwnedToolOnDisconnectedClient() async throws {
+        let deadTool = ToolDefinition(
+            name: "XcodeRead",
+            description: "Read a file",
+            parameters: [],
+            type: .mcpTool
+        )
+        let deadClient = MCPClient(name: "xcode-mcp", version: "1.0.0")
+        await deadClient.installToolsForTesting(tools: [deadTool], inputSchemasByName: [:])
+
+        let idleClient = MCPClient(name: "other-mcp", version: "1.0.0")
+
+        let manager = MCPManager()
+        try await manager.initialize(clients: [deadClient, idleClient])
+
+        let toolCall = ToolCall(name: "XcodeRead", arguments: .object([:]))
+        do {
+            _ = try await manager.toolCall(toolCall)
+            #expect(Bool(false), "Expected notConnected for owned MCP tool on disconnected client")
+        } catch let error as MCPClient.MCPClientError {
+            if case .notConnected = error {
+                // ok
+            } else {
+                Issue.record("Expected notConnected, got \(error)")
+            }
+        } catch {
+            Issue.record("Expected MCPClientError.notConnected, got \(error)")
+        }
+    }
+
+    @Test("MCPManager toolCall reaches a healthy client after a disconnected peer")
+    func testToolCallSucceedsViaHealthyClientAfterDisconnectedPeer() async throws {
+        let deadTool = ToolDefinition(
+            name: "XcodeRead",
+            description: "Read a file",
+            parameters: [],
+            type: .mcpTool
+        )
+        let deadClient = MCPClient(name: "xcode-mcp", version: "1.0.0")
+        await deadClient.installToolsForTesting(tools: [deadTool], inputSchemasByName: [:])
+
+        let clientToServer = Pipe()
+        let serverToClient = Pipe()
+        let healthyClient = MCPClient(
+            name: "healthy-mcp",
+            version: "1.0.0",
+            connectionTimeout: 2.0
+        )
+
+        let serverTask = Task {
+            let reader = clientToServer.fileHandleForReading
+            let writer = serverToClient.fileHandleForWriting
+            var buffer = Data()
+            while !Task.isCancelled {
+                let chunk = reader.availableData
+                if chunk.isEmpty {
+                    try? await Task.sleep(for: .milliseconds(10))
+                    continue
+                }
+                buffer.append(chunk)
+                while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                    let line = buffer.subdata(in: buffer.startIndex..<newline)
+                    buffer.removeSubrange(buffer.startIndex...newline)
+                    guard
+                        let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                        let method = obj["method"] as? String,
+                        let id = obj["id"]
+                    else {
+                        continue
+                    }
+                    let result: [String: Any]
+                    switch method {
+                    case "initialize":
+                        result = [
+                            "protocolVersion": "2024-11-05",
+                            "capabilities": [String: Any](),
+                            "serverInfo": [
+                                "name": "healthy-mcp-server",
+                                "version": "1.0.0",
+                            ],
+                        ]
+                    case "tools/list":
+                        result = [
+                            "tools": [[
+                                "name": "other",
+                                "description": "other",
+                                "inputSchema": ["type": "object", "properties": [String: Any]()],
+                            ]],
+                        ]
+                    case "tools/call":
+                        result = [
+                            "content": [["type": "text", "text": "pong"]],
+                            "isError": false,
+                        ]
+                    default:
+                        continue
+                    }
+                    let response: [String: Any] = [
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": result,
+                    ]
+                    var payload = try JSONSerialization.data(withJSONObject: response)
+                    payload.append(UInt8(ascii: "\n"))
+                    try writer.write(contentsOf: payload)
+                }
+            }
+        }
+        defer { serverTask.cancel() }
+
+        try await healthyClient.connect(inPipe: clientToServer, outPipe: serverToClient)
+        #expect(await healthyClient.state == .connected)
+        #expect(await healthyClient.tools.contains(where: { $0.name == "other" }))
+
+        let manager = MCPManager()
+        try await manager.initialize(clients: [deadClient, healthyClient])
+
+        let toolCall = ToolCall(name: "other", arguments: .object([:]))
+        let responses = try await manager.toolCall(toolCall)
+        #expect(responses?.count == 1)
+        #expect(responses?.first?.content == "pong")
     }
     
     // MARK: - Configuration File Tests
