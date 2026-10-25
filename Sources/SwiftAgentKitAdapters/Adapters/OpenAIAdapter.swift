@@ -1591,7 +1591,7 @@ public struct OpenAIAdapter: ToolAwareAdapter {
         
         for part in params.message.parts {
             switch part {
-            case .file(let data, let url):
+            case .file(let data, let url, _, _):
                 if image == nil {
                     image = data
                     if let url = url {

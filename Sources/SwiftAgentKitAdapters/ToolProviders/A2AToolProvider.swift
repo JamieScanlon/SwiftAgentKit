@@ -9,6 +9,7 @@ import Foundation
 import Logging
 import SwiftAgentKit
 import SwiftAgentKitA2A
+import EasyJSON
 
 /// Direct A2A agent tool provider
 public struct A2AToolProvider: ToolProvider {
@@ -89,27 +90,11 @@ public struct A2AToolProvider: ToolProvider {
                 let result = try await client.sendMessage(params: params)
                 switch result {
                 case .message(let message):
-                    let content = message.parts.compactMap { part in
-                        if case .text(let text) = part { return text } else { return nil }
-                    }.joined(separator: " ")
-                    return .completed(ToolResult(
-                        success: true,
-                        content: content,
-                        metadata: .object(["source": .string("a2a_agent")]),
-                        toolCallId: toolCall.id
-                    ))
+                    return .completed(Self.toolResult(from: message, toolCallId: toolCall.id))
                 case .task(let task):
                     if task.status.state.isTerminal {
                         if let message = task.status.message {
-                            let content = message.parts.compactMap { part in
-                                if case .text(let text) = part { return text } else { return nil }
-                            }.joined(separator: " ")
-                            return .completed(ToolResult(
-                                success: true,
-                                content: content,
-                                metadata: .object(["source": .string("a2a_agent")]),
-                                toolCallId: toolCall.id
-                            ))
+                            return .completed(Self.toolResult(from: message, toolCallId: toolCall.id))
                         }
                     } else if let toolCallID = toolCall.id {
                         return .pending(PendingToolHandle(
@@ -118,15 +103,7 @@ public struct A2AToolProvider: ToolProvider {
                             provider: name
                         ))
                     } else if let message = task.status.message {
-                        let content = message.parts.compactMap { part in
-                            if case .text(let text) = part { return text } else { return nil }
-                        }.joined(separator: " ")
-                        return .completed(ToolResult(
-                            success: true,
-                            content: content,
-                            metadata: .object(["source": .string("a2a_agent")]),
-                            toolCallId: toolCall.id
-                        ))
+                        return .completed(Self.toolResult(from: message, toolCallId: toolCall.id))
                     }
                 default:
                     continue
@@ -150,6 +127,32 @@ public struct A2AToolProvider: ToolProvider {
             toolCallId: toolCall.id,
             error: "A2A agent not found or failed"
         ))
+    }
+
+    /// Text parts become ``ToolResult/content`` (space-joined, as before). File parts declaring an
+    /// `image/*` media type become image parts in order; other file and data parts are not carried.
+    static func toolResult(from message: A2AMessage, toolCallId: String?) -> ToolResult {
+        let metadata: JSON = .object(["source": .string("a2a_agent")])
+        var parts: [ToolResultContentPart] = []
+        var hasImage = false
+        for part in message.parts {
+            switch part {
+            case .text(let text):
+                parts.append(.text(text))
+            case .file(let data, let url, let mimeType?, _) where mimeType.lowercased().hasPrefix("image/") && (data != nil || url != nil):
+                parts.append(.image(ToolResultImage(data: data, url: data == nil ? url : nil, mediaType: mimeType)))
+                hasImage = true
+            default:
+                continue
+            }
+        }
+        guard hasImage else {
+            let content = parts.compactMap { part in
+                if case .text(let text) = part { return text } else { return nil }
+            }.joined(separator: " ")
+            return ToolResult(success: true, content: content, metadata: metadata, toolCallId: toolCallId)
+        }
+        return ToolResult(success: true, parts: parts, metadata: metadata, toolCallId: toolCallId, textSeparator: " ")
     }
 
     public func effectClass(for definition: ToolDefinition) async -> ToolEffectClass {

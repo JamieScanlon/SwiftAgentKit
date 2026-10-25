@@ -653,7 +653,7 @@ struct A2AManagerTests {
             
             // Verify file part
             let fileParts = artifact.parts.compactMap { part -> Data? in
-                if case .file(let data, _) = part {
+                if case .file(let data, _, _, _) = part {
                     return data
                 }
                 return nil
@@ -703,7 +703,7 @@ struct A2AManagerTests {
         
         let fileParts = task.artifacts?.flatMap { artifact in
             artifact.parts.compactMap { part -> Data? in
-                if case .file(let data, _) = part {
+                if case .file(let data, _, _, _) = part {
                     return data
                 }
                 return nil
@@ -745,7 +745,7 @@ struct A2AManagerTests {
         }
         
         let fileParts = artifact.parts.compactMap { part -> Data? in
-            if case .file(let data, _) = part {
+            if case .file(let data, _, _, _) = part {
                 return data
             }
             return nil
@@ -1205,7 +1205,7 @@ struct A2AManagerTests {
         
         // Verify structure
         let fileParts = artifact.parts.compactMap { part -> URL? in
-            if case .file(_, let url) = part {
+            if case .file(_, let url, _, _) = part {
                 return url
             }
             return nil

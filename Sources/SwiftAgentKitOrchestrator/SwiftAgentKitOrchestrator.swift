@@ -1231,8 +1231,20 @@ public actor SwiftAgentKitOrchestrator {
             return "\(baseError) Please try another tool or approach."
         }()
         let metadata: LLMMetadata? = {
-            guard case .object(let dict) = result.metadata, !dict.isEmpty else { return nil }
-            return LLMMetadata(modelMetadata: result.metadata)
+            guard case .object(var dict) = result.metadata else { return nil }
+            // Image parts travel as `images` (Message.Image JSON) so ``messageFromToolResponse`` puts them on the
+            // tool message. Images already in `metadata.images` (the pre-parts side channel) are kept after them;
+            // deprecated, read for one release.
+            let partImages = result.messageImages.map { $0.toEasyJSON(includeImageData: true, includeThumbData: false) }
+            if !partImages.isEmpty {
+                var legacyImages: [JSON] = []
+                if case .array(let existing)? = dict["images"] {
+                    legacyImages = existing
+                }
+                dict["images"] = .array(partImages + legacyImages)
+            }
+            guard !dict.isEmpty else { return nil }
+            return LLMMetadata(modelMetadata: .object(dict))
         }()
         return LLMResponse.complete(content: content, metadata: metadata, toolCallId: toolCallId)
     }

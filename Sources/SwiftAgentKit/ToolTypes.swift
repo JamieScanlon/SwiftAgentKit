@@ -42,13 +42,84 @@ public enum ToolDescriptorValidationMode: String, Sendable, Codable, Equatable {
     case strict
 }
 
+/// An image returned by a tool, either inline (`data`) or by reference (`url`) for the host to resolve.
+public struct ToolResultImage: Sendable, Codable, Equatable {
+    /// Inline image bytes (not base64).
+    public var data: Data?
+    /// A reference the host resolves instead of inline bytes (file, blob, or remote URL).
+    public var url: URL?
+    /// IANA media type, e.g. `image/png`, `image/jpeg`, `image/webp`, `image/gif`.
+    public var mediaType: String
+    public var width: Int?
+    public var height: Int?
+
+    public init(data: Data? = nil, url: URL? = nil, mediaType: String, width: Int? = nil, height: Int? = nil) {
+        self.data = data
+        self.url = url
+        self.mediaType = mediaType
+        self.width = width
+        self.height = height
+    }
+}
+
+/// One typed piece of a tool result, kept in the order the tool produced it.
+public enum ToolResultContentPart: Sendable, Codable, Equatable {
+    case text(String)
+    case image(ToolResultImage)
+
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case text
+        case image
+    }
+
+    private enum Kind: String, Codable {
+        case text
+        case image
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .type) {
+        case .text:
+            self = .text(try container.decode(String.self, forKey: .text))
+        case .image:
+            self = .image(try container.decode(ToolResultImage.self, forKey: .image))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .text(let text):
+            try container.encode(Kind.text, forKey: .type)
+            try container.encode(text, forKey: .text)
+        case .image(let image):
+            try container.encode(Kind.image, forKey: .type)
+            try container.encode(image, forKey: .image)
+        }
+    }
+}
+
 /// Result of a tool execution
 public struct ToolResult: Sendable, Equatable, Codable {
     public let success: Bool
+    /// Text of the result. When built from ``parts``, the text parts joined with newlines; never contains image data.
     public let content: String
     public let metadata: JSON
     public let toolCallId: String?
     public let error: String?
+    /// Ordered typed content. Empty for text-only results built with ``init(success:content:metadata:toolCallId:error:)``.
+    public let parts: [ToolResultContentPart]
+
+    private enum CodingKeys: String, CodingKey {
+        case success
+        case content
+        case metadata
+        case toolCallId
+        case error
+        case parts
+    }
     
     public init(success: Bool, content: String, metadata: JSON = .object([:]), toolCallId: String?, error: String? = nil) {
         self.success = success
@@ -56,6 +127,81 @@ public struct ToolResult: Sendable, Equatable, Codable {
         self.metadata = metadata
         self.toolCallId = toolCallId
         self.error = error
+        self.parts = []
+    }
+
+    /// Builds a result from ordered typed parts; ``content`` is the text parts joined with `textSeparator`.
+    public init(success: Bool, parts: [ToolResultContentPart], metadata: JSON = .object([:]), toolCallId: String?, error: String? = nil, textSeparator: String = "\n") {
+        self.success = success
+        self.content = parts.compactMap { part in
+            if case .text(let text) = part { return text } else { return nil }
+        }.joined(separator: textSeparator)
+        self.metadata = metadata
+        self.toolCallId = toolCallId
+        self.error = error
+        self.parts = parts
+    }
+
+    /// A successful result carrying one image, optionally preceded by a text caption.
+    public static func image(
+        _ data: Data,
+        mediaType: String,
+        caption: String? = nil,
+        width: Int? = nil,
+        height: Int? = nil,
+        metadata: JSON = .object([:]),
+        toolCallId: String?
+    ) -> ToolResult {
+        var parts: [ToolResultContentPart] = []
+        if let caption, !caption.isEmpty {
+            parts.append(.text(caption))
+        }
+        parts.append(.image(ToolResultImage(data: data, mediaType: mediaType, width: width, height: height)))
+        return ToolResult(success: true, parts: parts, metadata: metadata, toolCallId: toolCallId)
+    }
+
+    /// ``parts`` when present, otherwise ``content`` as a single text part.
+    public var contentParts: [ToolResultContentPart] {
+        parts.isEmpty ? [.text(content)] : parts
+    }
+
+    /// The image parts, in result order.
+    public var images: [ToolResultImage] {
+        parts.compactMap { part in
+            if case .image(let image) = part { return image } else { return nil }
+        }
+    }
+
+    /// The image parts as ``Message/Image`` values for a `.tool` message, in result order.
+    /// Names are `"<toolCallId or tool>-image-<n>"` so they stay unique within the message.
+    public var messageImages: [Message.Image] {
+        let prefix = toolCallId ?? "tool"
+        return images.enumerated().map { index, image in
+            Message.Image(toolResultImage: image, name: "\(prefix)-image-\(index + 1)")
+        }
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.success = try container.decode(Bool.self, forKey: .success)
+        self.content = try container.decode(String.self, forKey: .content)
+        self.metadata = try container.decode(JSON.self, forKey: .metadata)
+        self.toolCallId = try container.decodeIfPresent(String.self, forKey: .toolCallId)
+        self.error = try container.decodeIfPresent(String.self, forKey: .error)
+        self.parts = try container.decodeIfPresent([ToolResultContentPart].self, forKey: .parts) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(success, forKey: .success)
+        try container.encode(content, forKey: .content)
+        try container.encode(metadata, forKey: .metadata)
+        try container.encodeIfPresent(toolCallId, forKey: .toolCallId)
+        try container.encodeIfPresent(error, forKey: .error)
+        // Omitted when empty so text-only results encode exactly as before `parts` existed.
+        if !parts.isEmpty {
+            try container.encode(parts, forKey: .parts)
+        }
     }
 
     public static func == (lhs: ToolResult, rhs: ToolResult) -> Bool {
@@ -63,6 +209,7 @@ public struct ToolResult: Sendable, Equatable, Codable {
             && lhs.content == rhs.content
             && lhs.toolCallId == rhs.toolCallId
             && lhs.error == rhs.error
+            && lhs.parts == rhs.parts
             && String(describing: lhs.metadata) == String(describing: rhs.metadata)
     }
 }

@@ -98,7 +98,7 @@ struct OpenAIAdapterExample {
                         logger.info("  Part \(index + 1): Text - \(text)")
                     case .data(let data):
                         logger.info("  Part \(index + 1): Data (tool call) - \(data.count) bytes")
-                    case .file(let data, let url):
+                    case .file(let data, let url, _, _):
                         logger.info("  Part \(index + 1): File - URL: \(url?.absoluteString ?? "nil"), Data: \(data?.count ?? 0) bytes")
                     }
                 }
@@ -155,7 +155,7 @@ struct OpenAIAdapterExample {
                     logger.info("    - Name: \(artifact.name ?? "unnamed")")
                     logger.info("    - Description: \(artifact.description ?? "none")")
                     for part in artifact.parts {
-                        if case .file(_, let url) = part {
+                        if case .file(_, let url, _, _) = part {
                             logger.info("    - Image URL: \(url?.path ?? "nil")")
                         }
                     }

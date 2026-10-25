@@ -597,7 +597,7 @@ struct LLMProtocolAdapterTests {
             // Verify artifacts contain file parts
             if let artifact = updatedTask.artifacts?.first {
                 #expect(artifact.parts.count > 0)
-                if case .file(_, let url) = artifact.parts.first {
+                if case .file(_, let url, _, _) = artifact.parts.first {
                     #expect(url != nil)
                 } else {
                     #expect(false, "Expected file part in artifact")
@@ -647,7 +647,7 @@ struct LLMProtocolAdapterTests {
             // Verify each artifact has a file part
             for artifact in updatedTask.artifacts ?? [] {
                 #expect(artifact.parts.count == 1)
-                if case .file(_, let url) = artifact.parts.first {
+                if case .file(_, let url, _, _) = artifact.parts.first {
                     #expect(url != nil)
                 } else {
                     #expect(false, "Expected file part in artifact")
@@ -703,7 +703,7 @@ struct LLMProtocolAdapterTests {
         if let updatedTask = await store.getTask(id: task.id),
            let artifact = updatedTask.artifacts?.first {
             // Verify artifact has a file part with URL
-            if case .file(_, let url) = artifact.parts.first {
+            if case .file(_, let url, _, _) = artifact.parts.first {
                 #expect(url != nil)
                 #expect(url?.isFileURL == true, "URL should be a local file URL")
             } else {
@@ -891,7 +891,7 @@ struct LLMProtocolAdapterTests {
         let decodedPart = try decoder.decode(A2AMessagePart.self, from: jsonData)
         
         // Verify round-trip
-        if case .file(let data, let url) = decodedPart {
+        if case .file(let data, let url, _, _) = decodedPart {
             #expect(data == nil)
             #expect(url != nil)
             #expect(url?.absoluteString == testURL.absoluteString)
@@ -972,7 +972,7 @@ struct LLMProtocolAdapterTests {
                     #expect(description.contains("MCP tool"))
                 }
                 
-                if case .file(let data, _) = fileArtifact.parts.first {
+                if case .file(let data, _, _, _) = fileArtifact.parts.first {
                     #expect(data != nil)
                     #expect(data == testFileData)
                 } else {
@@ -1274,7 +1274,7 @@ struct LLMProtocolAdapterTests {
             #expect(fileArtifacts.count == 1)
             if let fa = fileArtifacts.first {
                 #expect(fa.name == "generated-image.png")
-                if case .file(let data, _) = fa.parts.first { #expect(data == imageData) }
+                if case .file(let data, _, _, _) = fa.parts.first { #expect(data == imageData) }
             }
         }
     }

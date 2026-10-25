@@ -323,7 +323,9 @@ public struct A2AMessage: Codable, Sendable {
 // Message Part Structure
 public enum A2AMessagePart: Sendable, Codable, Equatable {
     case text(text: String)
-    case file(data: Data?, url: URL?)
+    /// File content inline (`data`) or by reference (`url`). `mimeType` and `name` match the A2A `FilePart` fields;
+    /// `nil` when the sender did not provide them.
+    case file(data: Data?, url: URL?, mimeType: String? = nil, name: String? = nil)
     case data(data: Data)
     
     private enum TextKeys : String, CodingKey { case text }
@@ -335,13 +337,21 @@ public enum A2AMessagePart: Sendable, Codable, Equatable {
         switch self {
         case .text(let text):
             try container.encode(["kind": "text", "text": text])
-        case .file(let data, let url):
+        case .file(let data, let url, let mimeType, let name):
             var value = ["kind": "file"]
             if let data = data {
                 value["file"] = data.base64EncodedString()
             }
             if let url = url {
                 value["file"] = url.absoluteString
+            }
+            // Sibling keys rather than the spec's object form, so older SwiftAgentKit peers
+            // (which require `file` to be a string) still decode the part.
+            if let mimeType {
+                value["mimeType"] = mimeType
+            }
+            if let name {
+                value["name"] = name
             }
             try container.encode(value)
         case .data(let data):
@@ -386,6 +396,29 @@ public enum A2AMessagePart: Sendable, Codable, Equatable {
                 }
                 self = .text(text: text)
             case "file":
+                func optionalString(_ json: JSON?) -> String? {
+                    if case .string(let string)? = json { return string }
+                    return nil
+                }
+                // A2A spec form: "file": { "bytes" | "uri", "mimeType"?, "name"? }
+                if case .object(let fileObject)? = rawData["file"] {
+                    let mimeType = optionalString(fileObject["mimeType"])
+                    let name = optionalString(fileObject["name"])
+                    if let bytes = optionalString(fileObject["bytes"]), let data = Data(base64Encoded: bytes) {
+                        self = .file(data: data, url: nil, mimeType: mimeType, name: name)
+                        return
+                    }
+                    if let uri = optionalString(fileObject["uri"]), let url = URL(string: uri) {
+                        self = .file(data: nil, url: url, mimeType: mimeType, name: name)
+                        return
+                    }
+                    throw DecodingError.dataCorrupted(
+                        DecodingError.Context(
+                            codingPath: decoder.codingPath,
+                            debugDescription: "Invalid data"
+                        )
+                    )
+                }
                 guard let value = rawData["file"], case .string(let file) = value else {
                     throw DecodingError.dataCorrupted(
                         DecodingError.Context(
@@ -394,14 +427,16 @@ public enum A2AMessagePart: Sendable, Codable, Equatable {
                         )
                     )
                 }
+                let mimeType = optionalString(rawData["mimeType"])
+                let name = optionalString(rawData["name"])
                 // Only treat as URL when it is a valid remote (http/https) or local (file:) URL.
                 // Base64-encoded file content must be parsed into data, not stored in url.
                 if let url = URL(string: file),
                    let scheme = url.scheme?.lowercased(),
                    ["http", "https", "file"].contains(scheme) {
-                    self = .file(data: nil, url: url)
+                    self = .file(data: nil, url: url, mimeType: mimeType, name: name)
                 } else if let data = Data(base64Encoded: file) {
-                    self = .file(data: data, url: nil)
+                    self = .file(data: data, url: nil, mimeType: mimeType, name: name)
                 } else {
                     throw DecodingError.dataCorrupted(
                         DecodingError.Context(

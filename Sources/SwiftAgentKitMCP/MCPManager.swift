@@ -163,16 +163,7 @@ public actor MCPManager {
                     )
                 }
                 if let contents = contents {
-                    var returnResponses: [LLMResponse] = []
-                    for content in contents {
-                        switch content {
-                        case .text(let text, _, _):
-                            returnResponses.append(LLMResponse.complete(content: text))
-                        default:
-                            continue
-                        }
-                    }
-                    return returnResponses
+                    return Self.llmResponses(from: contents, toolCallId: toolCall.id)
                 }
             } catch MCPClient.MCPClientError.notConnected {
                 // Ownership-first callTool only throws notConnected for tools this client
@@ -192,6 +183,28 @@ public actor MCPManager {
             throw MCPClient.MCPClientError.notConnected
         }
         return nil
+    }
+
+    /// One response per text part (as before images were supported). Image parts ride on the
+    /// first response as ``Message/Image`` values with a media type, in result order; when the
+    /// tool returned no text, a single empty-content response carries them.
+    static func llmResponses(from contents: [Tool.Content], toolCallId: String?) -> [LLMResponse] {
+        let parts = contents.toolResultParts
+        var responses: [LLMResponse] = parts.compactMap { part in
+            if case .text(let text) = part { return LLMResponse.complete(content: text) }
+            return nil
+        }
+        let images = ToolResult(success: true, parts: parts, toolCallId: toolCallId).messageImages
+        guard !images.isEmpty else { return responses }
+        let metadata = LLMMetadata(modelMetadata: .object([
+            "images": .array(images.map { $0.toEasyJSON(includeImageData: true, includeThumbData: false) })
+        ]))
+        if responses.isEmpty {
+            responses.append(LLMResponse.complete(content: "", metadata: metadata))
+        } else {
+            responses[0] = responses[0].updatingMetadata(with: metadata)
+        }
+        return responses
     }
 
     /// Disconnects the named client, reconnects (local stdio re-boot or remote reconnect),
